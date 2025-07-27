@@ -5,10 +5,11 @@ import json
 import re
 from pydantic import BaseModel, ValidationError
 from datetime import datetime, timedelta, timezone
-from openai import AzureOpenAI
+from openai import OpenAI
 
 
 MAX_LLM_RETRIES = 3
+
 
 def delay_exp(e, x):
     """
@@ -21,18 +22,14 @@ def delay_exp(e, x):
     time.sleep(sleep_dur)
 
 
-class AzureLLM:
+class OpenAILLM:
     def __init__(self):
-        self.client = AzureOpenAI(
-            azure_endpoint=os.getenv("llm_service_url") + "/ldap/",
-            api_version=os.getenv("API_VERSION"),
-            azure_ad_token_provider=token_provider,
-        )
+        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
     async def a_get_response(
         self,
         messages: list[dict],
-        model: str = "gpt-4o-if-global",
+        model: str = "gpt-4.1",
         temperature: float = 0,
         response_format: BaseModel = None,
         tools: list = None,
@@ -42,7 +39,7 @@ class AzureLLM:
     def get_response(
         self,
         messages: list[dict],
-        model: str = "gpt-4.1-if-global",
+        model: str = "gpt-4.1",
         temperature: float = 0,
         response_format: BaseModel | dict = None,
         tools: list = None,
