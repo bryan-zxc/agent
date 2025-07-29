@@ -18,14 +18,26 @@ Implementation of a conversational AI agent system with real-time frontend inter
 ## Core Components
 
 ### Frontend (Next.js)
-- **Technology**: Next.js 14+ with TypeScript
+- **Technology**: Next.js 15 with App Router, TypeScript
+- **UI Framework**: shadcn/ui components with Tailwind CSS
+- **Architecture**: 
+  - Modular component design (6 focused components vs monolithic)
+  - Error boundaries for fault tolerance
+  - Mobile-first responsive design
+  - Accessibility-first approach with ARIA labels
 - **Features**: 
-  - Real-time chat interface
-  - File upload capability
+  - Real-time chat interface with semantic HTML
+  - File upload with drag-and-drop capability
   - WebSocket connection for bidirectional communication
   - Conversation history and persistence
-- **State Management**: Zustand/Redux Toolkit
-- **Styling**: TailwindCSS
+  - Auto-resizing input with keyboard shortcuts
+  - Status indicators and loading states
+- **State Management**: Zustand with TypeScript
+- **Styling**: 
+  - shadcn/ui component library
+  - Tailwind CSS with CSS variables for theming
+  - Dark/light mode support
+  - Design token system
 
 ### Backend (FastAPI Server)
 - **Technology**: FastAPI with WebSocket support
@@ -110,10 +122,19 @@ agent/
 │   └── Dockerfile
 ├── frontend/
 │   ├── src/
-│   │   ├── components/     # Chat UI components
+│   │   ├── app/            # Next.js App Router
+│   │   ├── components/     # Modular React components
+│   │   │   ├── ChatInterface.tsx    # Main orchestrator (70 lines)
+│   │   │   ├── ChatHeader.tsx       # Header with connection status
+│   │   │   ├── MessageList.tsx      # Message display and scrolling
+│   │   │   ├── MessageInput.tsx     # Input with auto-resize
+│   │   │   ├── FileAttachment.tsx   # File upload handling
+│   │   │   └── ErrorBoundary.tsx    # Error handling component
 │   │   ├── hooks/          # WebSocket and state hooks
-│   │   ├── types/          # TypeScript interfaces (auto-generated)
-│   │   └── pages/          # Next.js pages
+│   │   ├── lib/            # Utility functions (cn helper)
+│   │   └── stores/         # Zustand state management
+│   ├── components.json     # shadcn/ui configuration
+│   ├── tailwind.config.ts  # Tailwind with design tokens
 │   ├── package.json
 │   └── Dockerfile
 ├── shared/
@@ -128,6 +149,8 @@ agent/
 - Unified RouterAgent eliminates unnecessary complexity
 - Direct WebSocket integration without extra layers
 - Database-first approach for reliable persistence
+- Component-based frontend with separation of concerns
+- Error boundaries prevent cascade failures
 
 ### Scalability
 - Monorepo for coordinated development
@@ -136,11 +159,14 @@ agent/
 - Conversation-based architecture supports multi-user scenarios
 
 ### Developer Experience
-- Type safety across frontend/backend
+- Type safety across frontend/backend with shared types
 - WebSocket-native development with FastAPI
+- Component-driven development with shadcn/ui
+- Accessibility-first design patterns
 - Hot reload and development tools
 - Container-ready deployment
 - uv-based dependency management for fast builds
+- Modern React patterns (hooks, error boundaries)
 
 ## Deployment Options
 

@@ -1,25 +1,32 @@
 # Frontend - Agent Chat Interface
 
-Next.js 14+ application providing a real-time chat interface for the AI agent system.
+Next.js 15 application with shadcn/ui components providing a modern, accessible real-time chat interface for the AI agent system.
 
 ## Structure
 
 ```
 frontend/
 ├── src/
-│   ├── app/               # Next.js App Router pages
+│   ├── app/               # Next.js App Router
 │   │   ├── page.tsx      # Main chat interface page
-│   │   ├── layout.tsx    # Root layout
-│   │   └── globals.css   # Global styles
-│   ├── components/        # React components
-│   │   └── ChatInterface.tsx  # Main chat UI component
+│   │   ├── layout.tsx    # Root layout with fonts
+│   │   └── globals.css   # Global styles with CSS variables
+│   ├── components/        # Modular React components
+│   │   ├── ChatInterface.tsx    # Main orchestrator (70 lines)
+│   │   ├── ChatHeader.tsx       # Header with connection status
+│   │   ├── MessageList.tsx      # Message display and scrolling
+│   │   ├── MessageInput.tsx     # Auto-resizing input with shortcuts
+│   │   ├── FileAttachment.tsx   # File upload with drag-and-drop
+│   │   └── ErrorBoundary.tsx    # Error handling and recovery
 │   ├── hooks/            # Custom React hooks
 │   │   └── useWebSocket.ts    # WebSocket connection hook
-│   ├── stores/           # Zustand state management
-│   │   └── chatStore.ts      # Chat state and actions
-│   └── types/            # TypeScript type definitions (imports from shared/)
-├── package.json          # Node.js dependencies
-├── tailwind.config.ts    # TailwindCSS configuration
+│   ├── lib/              # Utility functions
+│   │   └── utils.ts      # cn helper for Tailwind classes
+│   └── stores/           # Zustand state management
+│       └── chatStore.ts      # Chat state and actions
+├── components.json       # shadcn/ui configuration
+├── package.json          # Node.js dependencies with shadcn/ui
+├── tailwind.config.ts    # Tailwind with design tokens
 ├── tsconfig.json         # TypeScript configuration
 └── Dockerfile           # Container configuration
 ```
@@ -27,18 +34,27 @@ frontend/
 ## Features
 
 ### Real-time Chat Interface
-- **WebSocket communication** - Instant messaging with the agent
+- **WebSocket communication** - Instant messaging with automatic reconnection
 - **File upload support** - Drag-and-drop or click to upload images, PDFs, CSVs
-- **Status indicators** - Real-time agent processing status
-- **Message history** - Persistent conversation display
-- **Auto-scroll** - Automatically scrolls to latest messages
+- **Status indicators** - Real-time agent processing status with animations
+- **Message history** - Persistent conversation display with timestamps
+- **Auto-scroll** - Automatically scrolls to latest messages with smooth behavior
 
-### User Experience
-- **Responsive design** - Works on desktop and mobile
-- **File preview** - Shows selected files before sending
-- **Connection status** - Visual indicator of WebSocket connection
-- **Error handling** - Graceful error display and recovery
-- **Typing indicators** - Shows when agent is processing
+### Modern User Experience
+- **Mobile-first responsive design** - Progressive enhancement from mobile to desktop
+- **Accessibility-first** - Screen reader support, keyboard navigation, ARIA labels
+- **File preview** - Shows selected files with removal capability
+- **Connection status** - Visual indicator with live updates
+- **Error boundaries** - Graceful error display and recovery options
+- **Auto-resizing input** - Textarea grows with content, keyboard shortcuts
+- **Loading states** - Proper loading indicators and disabled states
+- **Semantic HTML** - Header, main, footer structure with proper roles
+
+### Design System
+- **shadcn/ui components** - Modern, accessible component library
+- **CSS variables** - Consistent theming with dark/light mode support
+- **Design tokens** - Systematic color, spacing, and typography scales
+- **Component modularity** - 6 focused components vs monolithic approach
 
 ## Development Setup
 
@@ -52,6 +68,12 @@ frontend/
    ```bash
    npm install
    ```
+   
+   This installs:
+   - Next.js 15 with App Router
+   - shadcn/ui dependencies (@radix-ui/react-slot, class-variance-authority, clsx, tailwind-merge)
+   - Lucide React icons
+   - Zustand for state management
 
 2. **Set environment variables (optional):**
    Create `.env.local`:
@@ -75,28 +97,72 @@ npm run build
 npm start
 ```
 
-## Key Components
+## Component Architecture
 
-### ChatInterface.tsx
-Main chat component that handles:
-- Message display and scrolling
-- File upload and preview
-- Form submission and validation
-- WebSocket message handling
+### ChatInterface.tsx (Main Orchestrator - 70 lines)
+Coordinates all components and handles:
+- File upload processing and API calls
+- WebSocket integration via useWebSocket hook
+- Error boundary wrapping
+- Component composition and data flow
 
-### useWebSocket.ts Hook
-Custom hook that manages:
-- WebSocket connection lifecycle
+### ChatHeader.tsx (Header Component - 29 lines)
+Header with connection status display:
+- Connection indicator (green/red dot with animation)
+- Live connection status text
+- Proper ARIA labels and semantic header role
+- Responsive design with consistent spacing
+
+### MessageList.tsx (Message Display - 79 lines)
+Message display and conversation management:
+- Auto-scrolling to latest messages
+- Message bubbles with proper alignment (user/assistant)
+- Timestamp display with proper time formatting
+- File attachment indicators
+- Status indicators with loading animations
+- Semantic article structure for each message
+
+### MessageInput.tsx (Input Component - 99 lines)
+Advanced input handling:
+- Auto-resizing textarea that grows with content
+- Keyboard shortcuts (Enter to send, Shift+Enter for new line)
+- File attachment integration
+- Send button with loading states
+- Form validation and error handling
+- Accessibility labels and proper form structure
+
+### FileAttachment.tsx (File Upload - 78 lines)
+File upload and management:
+- Drag-and-drop file selection
+- Multiple file support with preview
+- File type validation (images, PDFs, CSVs)
+- Individual file removal capability
+- Accessible file input with proper labeling
+- File size and type display
+
+### ErrorBoundary.tsx (Error Handling - 69 lines)
+Comprehensive error handling:
+- Catches and displays React component errors
+- User-friendly error messages
+- Reset functionality to recover from errors
+- Development error details (stack traces)
+- Accessible error display with proper ARIA roles
+
+### useWebSocket.ts Hook (Custom Hook)
+WebSocket connection management:
+- Automatic connection lifecycle management
 - Message sending and receiving
-- Connection status tracking
-- Automatic reconnection
+- Connection status tracking with live updates
+- Automatic reconnection on disconnect
+- Error handling and status updates
 
-### chatStore.ts (Zustand)
-Global state management for:
-- Chat messages array
+### chatStore.ts (Zustand State)
+Global state management:
+- Chat messages array with proper typing
 - Agent status and processing state
-- Connection status
+- Connection status tracking
 - Model and temperature settings
+- TypeScript interfaces for type safety
 
 ## State Management
 
@@ -124,19 +190,42 @@ interface ChatStore {
 4. Agent responses received and displayed
 5. Status updates shown during processing
 
-## Styling
+## Design System
 
-### TailwindCSS
-- **Utility-first** CSS framework
-- **Responsive design** with mobile-first approach
-- **Dark mode support** (can be extended)
-- **Custom color palette** for chat bubbles and status
+### shadcn/ui + Tailwind CSS
+- **Component library**: shadcn/ui for consistent, accessible components
+- **Design tokens**: CSS variables for systematic theming
+- **Utility-first**: Tailwind CSS for rapid styling
+- **Mobile-first**: Progressive enhancement from mobile to desktop
+- **Accessibility**: WCAG-compliant components with proper ARIA support
 
-### Key Design Elements
-- **User messages**: Blue background, right-aligned
-- **Agent messages**: White background with border, left-aligned
-- **Status indicators**: Animated spinner with status text
-- **File attachments**: Small tags showing filenames
+### CSS Variable System
+```css
+:root {
+  --background: 0 0% 100%;           /* Base background */
+  --foreground: 222.2 84% 4.9%;      /* Text color */
+  --primary: 221.2 83.2% 53.3%;      /* Primary brand color */
+  --secondary: 210 40% 96%;          /* Secondary backgrounds */
+  --muted: 210 40% 96%;              /* Muted content */
+  --border: 214.3 31.8% 91.4%;      /* Border colors */
+  /* ... additional design tokens */
+}
+```
+
+### Component Styling Patterns
+- **User messages**: Primary color background, right-aligned with proper contrast
+- **Agent messages**: Card background with border, left-aligned with semantic structure
+- **Status indicators**: Animated spinner with accessible loading states
+- **File attachments**: Secondary background tags with removal buttons
+- **Interactive elements**: Focus rings, hover states, disabled states
+- **Responsive breakpoints**: sm, md, lg classes for progressive enhancement
+
+### Accessibility Features
+- **Semantic HTML**: Proper header, main, footer, article structure
+- **ARIA labels**: Screen reader support for all interactive elements
+- **Focus management**: Visible focus rings and logical tab order
+- **Color contrast**: WCAG AA compliant color combinations
+- **Keyboard navigation**: Full keyboard accessibility
 
 ## API Integration
 
@@ -174,22 +263,39 @@ fetch('/upload', { method: 'POST', body: formData });
 ## Development Workflow
 
 ### Adding New Components
-1. Create component in `src/components/`
-2. Import shared types from `../../../shared/types`
-3. Use Zustand store for state management
-4. Follow existing naming conventions
+1. Create component in `src/components/` following the pattern:
+   ```typescript
+   'use client';
+   
+   import { cn } from '@/lib/utils';
+   import { ComponentProps } from '../../../shared/types';
+   
+   export const NewComponent: React.FC<ComponentProps> = ({ className, ...props }) => {
+     return (
+       <div className={cn("base-styles", className)} {...props}>
+         {/* Component content */}
+       </div>
+     );
+   };
+   ```
+
+2. Use shadcn/ui patterns and TypeScript interfaces
+3. Implement proper accessibility (ARIA labels, semantic HTML)
+4. Follow component size guidelines (< 100 lines when possible)
 
 ### Extending Chat Features
-1. Update `ChatMessage` interface in shared types
-2. Modify `chatStore.ts` for new state
-3. Update `ChatInterface.tsx` for UI changes
-4. Test WebSocket message handling
+1. Update shared types in `../../../shared/types/index.ts`
+2. Modify `chatStore.ts` for new state management
+3. Create focused components for new features (don't extend existing ones)
+4. Add error boundaries around new functionality
+5. Test accessibility and responsive design
 
 ### Styling Guidelines
-- Use TailwindCSS utility classes
-- Follow mobile-first responsive design
-- Maintain consistent spacing (4px grid)
-- Use semantic color names
+- **Use shadcn/ui components** as foundation, extend with Tailwind utilities
+- **CSS variables**: Prefer design tokens over hardcoded colors
+- **Mobile-first**: Start with mobile styles, enhance for larger screens
+- **Accessibility**: Always include focus states, ARIA labels, semantic HTML
+- **Component patterns**: Use `cn()` helper for conditional classes
 
 ## Docker Development
 
