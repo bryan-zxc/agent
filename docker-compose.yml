@@ -1,0 +1,46 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - ./shared:/app/shared
+      - uploads:/app/uploads
+      - ./db:/app/db
+    environment:
+      - PYTHONPATH=/app/src
+      - ENVIRONMENT=development
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    restart: unless-stopped
+    command: uv run python main.py
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - ./shared:/app/shared
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_WS_URL=ws://localhost:8000
+    depends_on:
+      - backend
+    restart: unless-stopped
+    command: npm run dev
+
+volumes:
+  uploads:
+
+networks:
+  default:
+    name: agent_network
