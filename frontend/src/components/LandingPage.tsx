@@ -2,7 +2,6 @@
 
 import React from 'react';
 import { MessageInput } from './MessageInput';
-import { ChatHeader } from './ChatHeader';
 import { useChatStore } from '../stores/chatStore';
 import { cn } from '@/lib/utils';
 
@@ -24,11 +23,6 @@ export const LandingPage: React.FC<LandingPageProps> = ({
       role="application"
       aria-label="Landing Page"
     >
-      {/* Header with Bandit Profile */}
-      <ChatHeader 
-        isConnected={isConnected}
-      />
-
       {/* Main Content - Centered */}
       <div className="flex-1 flex flex-col items-center justify-center px-6 min-h-0">
         {/* Title */}

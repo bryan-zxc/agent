@@ -201,9 +201,10 @@ export const ChatInterface: React.FC = () => {
             refreshTrigger={refreshTrigger}
           />
           <SidebarInset className="h-screen">
+            <ChatHeader isConnected={wsConnected} />
             <ResizablePanelGroup direction="horizontal" className="h-full">
               {/* Landing Page Panel */}
-              <ResizablePanel defaultSize={75} minSize={50}>
+              <ResizablePanel defaultSize={80} minSize={50}>
                 <LandingPage 
                   onFirstMessage={handleFirstMessage}
                   isConnected={wsConnected}
@@ -214,7 +215,7 @@ export const ChatInterface: React.FC = () => {
               <ResizableHandle withHandle />
               
               {/* Right Panel */}
-              <ResizablePanel defaultSize={25} minSize={20} maxSize={40}>
+              <ResizablePanel defaultSize={20} minSize={20} maxSize={50}>
                 <RightPanel />
               </ResizablePanel>
             </ResizablePanelGroup>
@@ -233,18 +234,15 @@ export const ChatInterface: React.FC = () => {
           refreshTrigger={refreshTrigger}
         />
         <SidebarInset className="h-screen">
+          <ChatHeader isConnected={wsConnected} />
           <ResizablePanelGroup direction="horizontal" className="h-full">
             {/* Main Chat Panel */}
-            <ResizablePanel defaultSize={75} minSize={50}>
+            <ResizablePanel defaultSize={80} minSize={50}>
               <div 
                 className="flex flex-col h-full"
                 role="application"
                 aria-label="Chat Interface"
               >
-                <ChatHeader 
-                  isConnected={wsConnected}
-                />
-                
                 <div className="flex-1 min-h-0 overflow-hidden">
                   <MessageList 
                     messages={messages} 
@@ -267,7 +265,7 @@ export const ChatInterface: React.FC = () => {
             <ResizableHandle withHandle />
             
             {/* Right Panel */}
-            <ResizablePanel defaultSize={25} minSize={20} maxSize={40}>
+            <ResizablePanel defaultSize={20} minSize={20} maxSize={50}>
               <RightPanel />
             </ResizablePanel>
           </ResizablePanelGroup>
