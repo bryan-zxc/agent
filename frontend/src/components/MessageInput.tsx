@@ -83,14 +83,32 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       )}
       role="contentinfo"
     >
-      <form onSubmit={handleSubmit} className="space-y-3">
-        <FileAttachment
-          selectedFiles={selectedFiles}
-          onFileSelect={handleFileSelect}
-          onFileRemove={handleFileRemove}
-          disabled={isFormDisabled}
-          fileInputRef={fileInputRef}
-        />
+      <form onSubmit={handleSubmit} className={cn(selectedFiles.length > 0 ? "space-y-3" : "")}>
+        {selectedFiles.length > 0 && (
+          <FileAttachment
+            selectedFiles={selectedFiles}
+            onFileSelect={handleFileSelect}
+            onFileRemove={handleFileRemove}
+            disabled={isFormDisabled}
+            fileInputRef={fileInputRef}
+          />
+        )}
+        
+        {/* Hidden file input for when no files are selected */}
+        {selectedFiles.length === 0 && (
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            onChange={(e) => {
+              if (e.target.files) {
+                handleFileSelect(Array.from(e.target.files));
+              }
+            }}
+            className="hidden"
+            accept="image/*,.pdf,.txt,.doc,.docx,.md"
+          />
+        )}
         
         {/* Input container with both buttons inside */}
         <div className="relative">
@@ -98,7 +116,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
             Type your message
           </label>
           
-          <div className="relative flex items-end border border-input rounded-lg bg-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-0 focus-within:border-ring">
+          <div className="relative flex items-end rounded-lg bg-gray-100 dark:bg-gray-800">
             {/* Attach button (left side) */}
             <Button
               type="button"

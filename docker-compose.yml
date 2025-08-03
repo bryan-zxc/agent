@@ -3,13 +3,15 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    container_name: agent_backend
     ports:
-      - "8001:8000"
+      - "${BACKEND_PORT}:${BACKEND_PORT}"
     volumes:
       - ./backend:/app
       - ./shared:/app/shared
       - uploads:/app/uploads
       - ./db:/app/db
+      - backend_cache:/root/.cache
     environment:
       - PYTHONPATH=/app/src
       - ENVIRONMENT=development
@@ -19,17 +21,27 @@ services:
       - .env.local
     restart: unless-stopped
     command: uv run python main.py
+    networks:
+      - agent_network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8001/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+    container_name: agent_frontend
     ports:
-      - "3000:3000"
+      - "${FRONTEND_PORT}:3000"
     volumes:
       - ./frontend:/app
       - ./shared:/app/shared
       - frontend_node_modules:/app/node_modules
+      - frontend_cache:/app/.next
     environment:
       - NODE_ENV=development
       - PORT=${FRONTEND_PORT}
@@ -39,14 +51,24 @@ services:
       - .env
       - .env.local
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     restart: unless-stopped
     command: npm run dev
+    networks:
+      - agent_network
 
 volumes:
   uploads:
+    driver: local
   frontend_node_modules:
+    driver: local
+  backend_cache:
+    driver: local
+  frontend_cache:
+    driver: local
 
 networks:
-  default:
+  agent_network:
+    driver: bridge
     name: agent_network

@@ -96,7 +96,6 @@ export const useWebSocket = (url?: string) => {
         console.error('WebSocket error details:', {
           error,
           wsUrl,
-          conversationId,
           readyState: ws.current?.readyState
         });
         store.setConnecting(false);

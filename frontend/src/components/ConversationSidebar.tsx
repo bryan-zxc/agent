@@ -3,25 +3,20 @@
 import React, { useEffect, useState } from 'react';
 import { useChatStore } from '../stores/chatStore';
 import { Button } from './ui/button';
-import { cn } from '@/lib/utils';
-import { Plus, MessageSquare, X } from 'lucide-react';
+import { Sidebar, SidebarContent, SidebarHeader, SidebarMenu, SidebarMenuItem, SidebarMenuButton } from './ui/sidebar';
+import { Plus, MessageSquare } from 'lucide-react';
 
 interface ConversationSidebarProps {
-  isOpen: boolean;
-  onClose: () => void;
   onNewConversation?: () => void;
   onConversationSelect?: (conversationId: string, hasMessages: boolean) => void;
   refreshTrigger?: number; // Used to trigger refresh from parent
 }
 
 export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({
-  isOpen,
-  onClose,
   onNewConversation,
   onConversationSelect,
   refreshTrigger,
 }) => {
-  console.log('ConversationSidebar component rendered, isOpen:', isOpen);
   
   const {
     currentConversationId,
@@ -37,7 +32,7 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({
   const [isInitialLoad, setIsInitialLoad] = useState(true);
 
   const fetchConversations = async (silent: boolean = false) => {
-    console.log('fetchConversations called - isOpen:', isOpen, 'silent:', silent);
+    console.log('fetchConversations called, silent:', silent);
     
     // Only show loading for initial load or explicit non-silent calls
     if (!silent) {
@@ -78,14 +73,6 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({
   }, []); // Run only once on mount
 
   useEffect(() => {
-    // Optionally refresh conversations when sidebar opens
-    if (isOpen && !isInitialLoad) {
-      // Use silent loading to avoid flickering when opening sidebar
-      fetchConversations(true);
-    }
-  }, [isOpen]);
-
-  useEffect(() => {
     // Refresh conversations when refreshTrigger changes (e.g., new conversation created)
     if (refreshTrigger !== undefined && refreshTrigger > 0) {
       // Use silent loading to avoid flickering when new conversations are added
@@ -101,12 +88,10 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({
       // Fallback to old behavior if prop not provided
       createNewConversation();
     }
-    onClose();
   };
 
   const handleSelectConversation = async (conversationId: string) => {
     if (conversationId === currentConversationId) {
-      onClose();
       return;
     }
 
@@ -124,8 +109,6 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({
         if (onConversationSelect) {
           onConversationSelect(conversationId, hasMessages);
         }
-        
-        onClose();
       }
     } catch (error) {
       console.error('Error loading conversation:', error);
@@ -152,92 +135,61 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({
   };
 
   return (
-    <>
-      {/* Backdrop */}
-      {isOpen && (
-        <div
-          className="fixed inset-0 bg-black/50 z-40 lg:hidden"
-          onClick={onClose}
-        />
-      )}
-      
-      {/* Sidebar */}
-      <div
-        className={cn(
-          "fixed left-0 top-0 h-full w-80 bg-card border-r shadow-lg z-50 transform transition-transform duration-200 ease-in-out",
-          "flex flex-col",
-          isOpen ? "translate-x-0" : "-translate-x-full",
-          "lg:relative lg:translate-x-0 lg:shadow-none"
-        )}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b">
+    <Sidebar>
+      <SidebarHeader>
+        <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold">Conversations</h2>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onClose}
-            className="lg:hidden"
-          >
-            <X className="h-4 w-4" />
-          </Button>
         </div>
-
+        
         {/* New Conversation Button */}
-        <div className="p-4">
-          <Button
-            onClick={handleNewConversation}
-            className="w-full justify-start gap-2"
-            variant="outline"
-          >
-            <Plus className="h-4 w-4" />
-            New Conversation
-          </Button>
-        </div>
+        <Button
+          onClick={handleNewConversation}
+          className="w-full justify-start gap-2"
+          variant="outline"
+        >
+          <Plus className="h-4 w-4" />
+          New Conversation
+        </Button>
+      </SidebarHeader>
 
-        {/* Conversations List */}
-        <div className="flex-1 overflow-y-auto">
-          {loading && isInitialLoad ? (
-            <div className="p-4 text-center text-muted-foreground">
-              Loading conversations...
-            </div>
-          ) : conversations.length === 0 ? (
-            <div className="p-4 text-center text-muted-foreground">
-              No conversations yet
-            </div>
-          ) : (
-            <div className="space-y-1 p-2">
-              {conversations.map((conversation) => (
+      <SidebarContent>
+        {loading && isInitialLoad ? (
+          <div className="p-4 text-center text-gray-500 dark:text-gray-400">
+            Loading conversations...
+          </div>
+        ) : conversations.length === 0 ? (
+          <div className="p-4 text-center text-gray-500 dark:text-gray-400">
+            No conversations yet
+          </div>
+        ) : (
+          <SidebarMenu>
+            {conversations.map((conversation) => (
+              <SidebarMenuItem key={conversation.id}>
                 <Button
-                  key={conversation.id}
                   onClick={() => handleSelectConversation(conversation.id)}
                   variant={currentConversationId === conversation.id ? "secondary" : "ghost"}
-                  className={cn(
-                    "w-full justify-start text-left p-3 h-auto",
-                    currentConversationId === conversation.id && 
-                      "opacity-100 hover:opacity-100 hover:bg-muted/80 cursor-default"
-                  )}
+                  className="h-auto p-3 w-full justify-start"
                 >
-                  <div className="flex items-start gap-3">
-                    <MessageSquare className="h-4 w-4 mt-1 text-muted-foreground flex-shrink-0" />
-                    <div className="flex-1 min-w-0">
+                  <div className="flex items-start gap-3 w-full">
+                    <MessageSquare className="h-4 w-4 mt-1 text-gray-500 dark:text-gray-400 flex-shrink-0" />
+                    <div className="flex-1 min-w-0 text-left">
                       <div className="font-medium text-sm truncate">
                         {conversation.title}
                       </div>
-                      <div className="text-xs text-muted-foreground mt-1 truncate">
+                      <div className="text-xs text-gray-500 dark:text-gray-400 mt-1 truncate">
                         {conversation.preview}
                       </div>
-                      <div className="text-xs text-muted-foreground mt-1">
+                      <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                         {formatTimestamp(conversation.timestamp)}
                       </div>
                     </div>
                   </div>
                 </Button>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-    </>
+              </SidebarMenuItem>
+            ))}
+          </SidebarMenu>
+        )}
+      </SidebarContent>
+    </Sidebar>
   );
 };

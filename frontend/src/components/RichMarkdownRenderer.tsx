@@ -7,7 +7,7 @@ import remarkMath from 'remark-math';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeKatex from 'rehype-katex';
 
-interface RichMarkdownRendererWorkingProps {
+interface RichMarkdownRendererProps {
   content: string;
   className?: string;
 }
@@ -64,8 +64,8 @@ const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
 
   if (!svg) {
     return (
-      <div className="my-4 p-4 bg-muted rounded-lg">
-        <div className="animate-pulse text-sm text-muted-foreground">Rendering diagram...</div>
+      <div className="my-4 p-4 bg-gray-100 dark:bg-gray-800 rounded-lg">
+        <div className="animate-pulse text-sm text-gray-500 dark:text-gray-400">Rendering diagram...</div>
       </div>
     );
   }
@@ -78,12 +78,12 @@ const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
   );
 };
 
-export const RichMarkdownRendererWorking: React.FC<RichMarkdownRendererWorkingProps> = ({ 
+export const RichMarkdownRenderer: React.FC<RichMarkdownRendererProps> = ({ 
   content, 
   className = '' 
 }) => {
   return (
-    <div className={`prose prose-sm dark:prose-invert max-w-none ${className}`}>
+    <div className={`prose dark:prose-invert max-w-none text-sm leading-relaxed ${className}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeHighlight, rehypeKatex]}
@@ -108,7 +108,7 @@ export const RichMarkdownRendererWorking: React.FC<RichMarkdownRendererWorkingPr
             
             if (inline) {
               return (
-                <code className="bg-muted px-1 py-0.5 rounded text-sm font-mono" {...props}>
+                <code className="bg-gray-100 dark:bg-gray-800 px-1 py-0.5 rounded text-sm font-mono" {...props}>
                   {children}
                 </code>
               );
@@ -124,7 +124,7 @@ export const RichMarkdownRendererWorking: React.FC<RichMarkdownRendererWorkingPr
           // Enhanced blockquotes
           blockquote({ children }) {
             return (
-              <blockquote className="border-l-4 border-primary/30 pl-4 italic text-muted-foreground my-4 bg-muted/30 py-2 rounded-r">
+              <blockquote className="border-l-4 border-primary/30 pl-4 italic text-gray-500 dark:text-gray-400 my-4 bg-gray-100 dark:bg-gray-800/30 py-2 rounded-r">
                 {children}
               </blockquote>
             );
@@ -143,7 +143,7 @@ export const RichMarkdownRendererWorking: React.FC<RichMarkdownRendererWorkingPr
           
           thead({ children }) {
             return (
-              <thead className="bg-muted">
+              <thead className="bg-gray-100 dark:bg-gray-800">
                 {children}
               </thead>
             );

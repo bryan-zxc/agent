@@ -59,7 +59,7 @@ export const FileAttachment: React.FC<FileAttachmentProps> = ({
           {selectedFiles.map((file, index) => (
             <div
               key={index}
-              className="inline-flex items-center gap-2 bg-muted text-muted-foreground text-xs px-3 py-2 rounded-lg border border-border hover:bg-muted/80 transition-colors"
+              className="inline-flex items-center gap-2 bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 text-xs px-3 py-2 rounded-lg border border-border hover:bg-gray-100 dark:bg-gray-800/80 transition-colors"
               role="listitem"
             >
               {getFileIcon(file.name)}

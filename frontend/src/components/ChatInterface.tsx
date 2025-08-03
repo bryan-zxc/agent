@@ -9,13 +9,15 @@ import { MessageInput } from './MessageInput';
 import { ConversationSidebar } from './ConversationSidebar';
 import { LandingPage } from './LandingPage';
 import { ErrorBoundary } from './ErrorBoundary';
+import { RightPanel } from './RightPanel';
+import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from './ui/resizable';
+import { SidebarProvider, SidebarInset } from './ui/sidebar';
 import { cn } from '@/lib/utils';
 import { ChatMessage } from '../../../shared/types';
 
 export const ChatInterface: React.FC = () => {
   const { messages, status, currentConversationId, createNewConversationInBackend, createNewConversation, setCurrentConversation, addMessage } = useChatStore();
   console.log('ChatInterface render - currentConversationId:', currentConversationId);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [conversationStarted, setConversationStarted] = useState(false);
   const [pendingConversationId, setPendingConversationId] = useState<string | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
@@ -192,70 +194,85 @@ export const ChatInterface: React.FC = () => {
   if (!conversationStarted) {
     return (
       <ErrorBoundary>
-        <div className="flex h-screen bg-background">
-          {/* Sidebar */}
+        <SidebarProvider defaultOpen={true}>
           <ConversationSidebar 
-            isOpen={sidebarOpen} 
-            onClose={() => setSidebarOpen(false)}
             onNewConversation={handleNewConversation}
             onConversationSelect={handleConversationSelect}
             refreshTrigger={refreshTrigger}
           />
-          
-          {/* Landing Page */}
-          <LandingPage 
-            onFirstMessage={handleFirstMessage}
-            isConnected={wsConnected}
-            onMenuClick={() => setSidebarOpen(true)}
-          />
-        </div>
+          <SidebarInset className="h-screen">
+            <ResizablePanelGroup direction="horizontal" className="h-full">
+              {/* Landing Page Panel */}
+              <ResizablePanel defaultSize={75} minSize={50}>
+                <LandingPage 
+                  onFirstMessage={handleFirstMessage}
+                  isConnected={wsConnected}
+                />
+              </ResizablePanel>
+              
+              {/* Resizable Handle */}
+              <ResizableHandle withHandle />
+              
+              {/* Right Panel */}
+              <ResizablePanel defaultSize={25} minSize={20} maxSize={40}>
+                <RightPanel />
+              </ResizablePanel>
+            </ResizablePanelGroup>
+          </SidebarInset>
+        </SidebarProvider>
       </ErrorBoundary>
     );
   }
 
   return (
     <ErrorBoundary>
-      <div className="flex h-screen bg-background">
-        {/* Sidebar */}
+      <SidebarProvider defaultOpen={true}>
         <ConversationSidebar 
-          isOpen={sidebarOpen} 
-          onClose={() => setSidebarOpen(false)}
           onNewConversation={handleNewConversation}
           onConversationSelect={handleConversationSelect}
           refreshTrigger={refreshTrigger}
         />
-        
-        {/* Main Chat Area */}
-        <div 
-          className={cn(
-            "flex flex-col flex-1 min-w-0",
-            "max-w-4xl mx-auto w-full"
-          )}
-          role="application"
-          aria-label="Chat Interface"
-        >
-          <ChatHeader 
-            isConnected={wsConnected} 
-            onMenuClick={() => setSidebarOpen(true)}
-          />
-          
-          <div className="flex-1 overflow-hidden">
-            <MessageList 
-              messages={messages} 
-              status={status}
-              className="h-full"
-            />
-          </div>
+        <SidebarInset className="h-screen">
+          <ResizablePanelGroup direction="horizontal" className="h-full">
+            {/* Main Chat Panel */}
+            <ResizablePanel defaultSize={75} minSize={50}>
+              <div 
+                className="flex flex-col h-full"
+                role="application"
+                aria-label="Chat Interface"
+              >
+                <ChatHeader 
+                  isConnected={wsConnected}
+                />
+                
+                <div className="flex-1 min-h-0 overflow-hidden">
+                  <MessageList 
+                    messages={messages} 
+                    status={status}
+                    className="h-full"
+                  />
+                </div>
 
-          <div className="border-t bg-card/50 backdrop-blur-sm">
-            <MessageInput 
-              onSubmit={handleMessageSubmit}
-              disabled={!wsConnected}
-              className="border-0 bg-transparent"
-            />
-          </div>
-        </div>
-      </div>
+                <div className="flex-shrink-0 bg-background/95 backdrop-blur-sm border-t">
+                  <MessageInput 
+                    onSubmit={handleMessageSubmit}
+                    disabled={!wsConnected}
+                    className="border-0 bg-transparent"
+                  />
+                </div>
+              </div>
+            </ResizablePanel>
+            
+            {/* Resizable Handle */}
+            <ResizableHandle withHandle />
+            
+            {/* Right Panel */}
+            <ResizablePanel defaultSize={25} minSize={20} maxSize={40}>
+              <RightPanel />
+            </ResizablePanel>
+          </ResizablePanelGroup>
+        </SidebarInset>
+      </SidebarProvider>
     </ErrorBoundary>
   );
 };

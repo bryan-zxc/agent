@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y \
     make \
     libffi-dev \
     libssl-dev \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv for fast Python package management

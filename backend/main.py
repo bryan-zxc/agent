@@ -284,6 +284,58 @@ async def update_conversation_title(conversation_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/usage")
+async def get_usage_stats():
+    """Get LLM usage statistics by time periods"""
+    try:
+        from datetime import datetime, timedelta
+        from sqlalchemy import create_engine, func
+        from sqlalchemy.orm import sessionmaker
+        from src.agent.services.llm_service import LLMUsage, Base
+        
+        # Database setup
+        db_path = Path("/app/db/llm_usage.db")
+        engine = create_engine(f"sqlite:///{db_path}")
+        Base.metadata.create_all(engine)
+        Session = sessionmaker(bind=engine)
+        
+        with Session() as session:
+            now = datetime.now()
+            
+            # Calculate time boundaries
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            week_start = today_start - timedelta(days=today_start.weekday())
+            month_start = today_start.replace(day=1)
+            
+            # Today's usage
+            today_cost = session.query(func.sum(LLMUsage.cost)).filter(
+                LLMUsage.timestamp >= today_start
+            ).scalar() or 0.0
+            
+            # This week's usage
+            week_cost = session.query(func.sum(LLMUsage.cost)).filter(
+                LLMUsage.timestamp >= week_start
+            ).scalar() or 0.0
+            
+            # This month's usage
+            month_cost = session.query(func.sum(LLMUsage.cost)).filter(
+                LLMUsage.timestamp >= month_start
+            ).scalar() or 0.0
+            
+            # Total usage
+            total_cost = session.query(func.sum(LLMUsage.cost)).scalar() or 0.0
+            
+            return {
+                "today": round(today_cost, 4),
+                "week": round(week_cost, 4),
+                "month": round(month_cost, 4),
+                "total": round(total_cost, 4)
+            }
+    except Exception as e:
+        logger.error(f"Error fetching usage stats: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 def main():
     """Main entry point"""
     port = int(os.environ["PORT"])

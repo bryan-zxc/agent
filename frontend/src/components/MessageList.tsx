@@ -8,7 +8,7 @@ import { Skeleton } from './ui/skeleton';
 import { ThinkingDots } from './ui/thinking-dots';
 import { User } from 'lucide-react';
 import Image from 'next/image';
-import { RichMarkdownRendererWorking } from './RichMarkdownRendererWorking';
+import { RichMarkdownRenderer } from './RichMarkdownRenderer';
 
 interface MessageListProps {
   messages: ChatMessage[];
@@ -22,9 +22,12 @@ export const MessageList: React.FC<MessageListProps> = ({
   className 
 }) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLElement>(null);
 
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (containerRef.current) {
+      containerRef.current.scrollTop = containerRef.current.scrollHeight;
+    }
   };
 
   useEffect(() => {
@@ -33,8 +36,9 @@ export const MessageList: React.FC<MessageListProps> = ({
 
   return (
     <main 
+      ref={containerRef}
       className={cn(
-        "flex-1 overflow-y-auto p-4 space-y-4",
+        "h-full overflow-y-auto p-4 space-y-4",
         className
       )}
       role="main"
@@ -69,12 +73,12 @@ export const MessageList: React.FC<MessageListProps> = ({
               className={cn(
                 "flex-1 px-4 py-3 transition-all duration-200",
                 message.sender === 'user'
-                  ? 'bg-card text-card-foreground border border-border rounded-lg shadow-sm hover:shadow-md'
+                  ? 'bg-card text-card-foreground rounded-lg shadow-sm hover:shadow-md'
                   : 'bg-transparent'
               )}
             >
               {message.sender === 'assistant' ? (
-                <RichMarkdownRendererWorking content={message.message} />
+                <RichMarkdownRenderer content={message.message} />
               ) : (
                 <div className="whitespace-pre-wrap text-sm leading-relaxed">
                   {message.message}
@@ -117,22 +121,22 @@ export const MessageList: React.FC<MessageListProps> = ({
               />
             </div>
             
-            <div className="bg-card text-card-foreground border border-border px-4 py-3 rounded-xl rounded-bl-md shadow-sm max-w-md">
+            <div className="bg-card text-card-foreground px-4 py-3 rounded-xl rounded-bl-md shadow-sm max-w-md">
               <div className="flex items-center space-x-2">
                 <div 
                   className="animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent"
                   aria-hidden="true"
                 />
-                <span className="text-sm text-muted-foreground">
+                <span className="text-sm text-gray-500 dark:text-gray-400">
                   {status.message || 'Thinking'}<ThinkingDots />
                 </span>
               </div>
               
               {/* Typing dots animation */}
               <div className="flex space-x-1 mt-2">
-                <div className="w-1.5 h-1.5 bg-muted-foreground rounded-full animate-bounce [animation-delay:-0.3s]"></div>
-                <div className="w-1.5 h-1.5 bg-muted-foreground rounded-full animate-bounce [animation-delay:-0.15s]"></div>
-                <div className="w-1.5 h-1.5 bg-muted-foreground rounded-full animate-bounce"></div>
+                <div className="w-1.5 h-1.5 bg-gray-500 dark:bg-gray-400 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
+                <div className="w-1.5 h-1.5 bg-gray-500 dark:bg-gray-400 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
+                <div className="w-1.5 h-1.5 bg-gray-500 dark:bg-gray-400 rounded-full animate-bounce"></div>
               </div>
             </div>
           </article>

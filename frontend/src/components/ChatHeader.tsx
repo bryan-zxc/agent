@@ -1,60 +1,58 @@
 'use client';
 
 import { cn } from '@/lib/utils';
-import { Wifi, WifiOff, Menu, Loader2 } from 'lucide-react';
+import { Wifi, WifiOff, Loader2 } from 'lucide-react';
 import Image from 'next/image';
-import { Button } from './ui/button';
+import { SidebarTrigger } from './ui/sidebar';
+import { Separator } from './ui/separator';
 import { useChatStore } from '../stores/chatStore';
 
 interface ChatHeaderProps {
   isConnected: boolean;
   className?: string;
-  onMenuClick?: () => void;
 }
 
 export const ChatHeader: React.FC<ChatHeaderProps> = ({ 
   isConnected, 
   className,
-  onMenuClick
 }) => {
   const { isConnecting } = useChatStore();
   return (
     <header 
       className={cn(
-        "bg-card/95 backdrop-blur-sm shadow-sm border-b p-4 sticky top-0 z-10",
+        "bg-gray-100/90 dark:bg-gray-800/90 backdrop-blur-lg shadow-lg px-4 py-3 sticky top-0 z-10 rounded-b-xl",
         className
       )}
       role="banner"
     >
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onMenuClick}
-            className="lg:hidden"
-          >
-            <Menu className="h-4 w-4" />
-          </Button>
-          <div className="w-10 h-10 rounded-xl overflow-hidden shadow-sm">
-            <Image
-              src="/bandit-heeler.png"
-              alt="Bandit Heeler"
-              width={40}
-              height={40}
-              className="w-full h-full object-cover object-top"
-            />
-          </div>
-          <div>
-            <h1 
-              className="text-lg font-semibold text-card-foreground"
-              id="chat-title"
-            >
-              Bandit Heeler
-            </h1>
-            <p className="text-xs text-muted-foreground">
-              Good friend (or maybe Dora&apos;s good friend&apos;s dad)
-            </p>
+        <div className="flex items-center gap-1">
+          <SidebarTrigger className="-ml-1" />
+          <Separator
+            orientation="vertical"
+            className="mx-1 h-4"
+          />
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl overflow-hidden shadow-sm">
+              <Image
+                src="/bandit-heeler.png"
+                alt="Bandit Heeler"
+                width={40}
+                height={40}
+                className="w-full h-full object-cover object-top"
+              />
+            </div>
+            <div>
+              <h1 
+                className="text-lg font-semibold text-card-foreground"
+                id="chat-title"
+              >
+                Bandit Heeler
+              </h1>
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                Good friend (or maybe Dora&apos;s good friend&apos;s dad)
+              </p>
+            </div>
           </div>
         </div>
         

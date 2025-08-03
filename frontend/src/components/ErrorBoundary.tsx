@@ -54,16 +54,16 @@ export class ErrorBoundary extends Component<Props, State> {
             Something went wrong
           </h2>
           
-          <p className="text-sm text-muted-foreground mb-4 max-w-md">
+          <p className="text-sm text-gray-500 dark:text-gray-400 mb-4 max-w-md">
             An unexpected error occurred. Please try refreshing the page or contact support if the problem persists.
           </p>
 
           {process.env.NODE_ENV === 'development' && this.state.error && (
-            <details className="mt-4 p-3 bg-muted rounded text-left max-w-lg overflow-auto">
-              <summary className="cursor-pointer text-sm font-mono text-muted-foreground">
+            <details className="mt-4 p-3 bg-gray-100 dark:bg-gray-800 rounded text-left max-w-lg overflow-auto">
+              <summary className="cursor-pointer text-sm font-mono text-gray-500 dark:text-gray-400">
                 Error Details (Development Only)
               </summary>
-              <pre className="mt-2 text-xs text-muted-foreground whitespace-pre-wrap">
+              <pre className="mt-2 text-xs text-gray-500 dark:text-gray-400 whitespace-pre-wrap">
                 {this.state.error.stack}
               </pre>
             </details>
