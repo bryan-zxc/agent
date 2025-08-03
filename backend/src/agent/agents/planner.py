@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Union
 from PIL import Image
 from ..core.base import BaseAgent
+from ..config.settings import settings
 from .worker import WorkerAgent, WorkerAgentSQL
 from ..utils.tools import encode_image
 from ..models import (
@@ -132,7 +133,7 @@ class PlannerAgent(BaseAgent):
         files: list[File] = None,
         model: str = "gemini-2.5-pro",
         temperature: float = 0,
-        failed_task_limit: int = 3,
+        failed_task_limit: int = settings.failed_task_limit,
     ):
         super().__init__(agent_type="planner")
         self.add_message(

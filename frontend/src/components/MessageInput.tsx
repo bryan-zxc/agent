@@ -3,23 +3,28 @@
 import { useState, useRef, KeyboardEvent } from 'react';
 import { cn } from '@/lib/utils';
 import { FileAttachment } from './FileAttachment';
-import { Send } from 'lucide-react';
+import { Button } from './ui/button';
+import { Textarea } from './ui/textarea';
+import { Send, Paperclip } from 'lucide-react';
 
 interface MessageInputProps {
   onSubmit: (message: string, files: File[]) => Promise<void>;
   disabled?: boolean;
   className?: string;
+  placeholder?: string;
 }
 
 export const MessageInput: React.FC<MessageInputProps> = ({
   onSubmit,
   disabled = false,
-  className
+  className,
+  placeholder = "Type your message... (Enter to send, Shift+Enter for new line)"
 }) => {
   const [inputMessage, setInputMessage] = useState('');
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -84,53 +89,58 @@ export const MessageInput: React.FC<MessageInputProps> = ({
           onFileSelect={handleFileSelect}
           onFileRemove={handleFileRemove}
           disabled={isFormDisabled}
+          fileInputRef={fileInputRef}
         />
         
-        <div className="flex gap-2 items-end">
-          <div className="flex-1 min-w-0">
-            <label htmlFor="message-input" className="sr-only">
-              Type your message
-            </label>
-            <textarea
+        {/* Input container with both buttons inside */}
+        <div className="relative">
+          <label htmlFor="message-input" className="sr-only">
+            Type your message
+          </label>
+          
+          <div className="relative flex items-end border border-input rounded-lg bg-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-0 focus-within:border-ring">
+            {/* Attach button (left side) */}
+            <Button
+              type="button"
+              variant="ghost-subtle"
+              size="icon-sm"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isFormDisabled}
+              className="m-1.5 flex-shrink-0"
+              aria-label="Attach files"
+            >
+              <Paperclip className="h-4 w-4" />
+            </Button>
+
+            <Textarea
               id="message-input"
               ref={textareaRef}
               value={inputMessage}
               onChange={handleInputChange}
               onKeyDown={handleKeyDown}
-              placeholder="Type your message... (Enter to send, Shift+Enter for new line)"
-              className={cn(
-                "flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm",
-                "placeholder:text-muted-foreground resize-none min-h-[44px] max-h-[120px]",
-                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-                "disabled:cursor-not-allowed disabled:opacity-50"
-              )}
+              placeholder={placeholder}
+              className="flex-1 resize-none min-h-[44px] max-h-[120px] border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0 px-2 py-2 pr-12"
               disabled={isFormDisabled}
               rows={1}
               style={{ height: 'auto' }}
             />
+
+            {/* Send button (right side) */}
+            <Button
+              type="submit"
+              disabled={!canSubmit}
+              variant={canSubmit ? "icon-filled" : "icon-outline"}
+              size="icon-sm"
+              className="m-1.5 flex-shrink-0"
+              aria-label="Send message"
+            >
+              {isSubmitting ? (
+                <div className="animate-spin rounded-full h-3.5 w-3.5 border-2 border-current border-t-transparent" />
+              ) : (
+                <Send className="h-4 w-4" />
+              )}
+            </Button>
           </div>
-          
-          <button
-            type="submit"
-            disabled={!canSubmit}
-            className={cn(
-              "inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors",
-              "h-11 px-4 py-2 bg-primary text-primary-foreground hover:bg-primary/90",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-              "disabled:pointer-events-none disabled:opacity-50",
-              !canSubmit && "cursor-not-allowed"
-            )}
-            aria-label="Send message"
-          >
-            {isSubmitting ? (
-              <div className="animate-spin rounded-full h-4 w-4 border-2 border-primary-foreground border-t-transparent" />
-            ) : (
-              <Send className="h-4 w-4" />
-            )}
-            <span className="ml-2 hidden sm:inline">
-              {isSubmitting ? 'Sending...' : 'Send'}
-            </span>
-          </button>
         </div>
       </form>
     </footer>

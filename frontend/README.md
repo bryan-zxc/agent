@@ -230,7 +230,7 @@ interface ChatStore {
 ## API Integration
 
 ### WebSocket Messages
-Sends JSON to `ws://localhost:8000/ws`:
+Sends JSON to `ws://localhost:8000/chat`:
 ```typescript
 {
   message: string;

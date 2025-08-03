@@ -2,11 +2,14 @@ import io
 import base64
 import json
 import string
+import logging
 from pathlib import Path
 from typing import Union, Literal
 from pydantic import BaseModel, Field
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from ..services.llm_service import LLM
+
+logger = logging.getLogger(__name__)
 
 
 def encode_image(image: Union[str, Path, Image.Image]):
@@ -222,7 +225,7 @@ def identify_relevant_slices(
     # slices_dict = {}
 
     # Initialize the Azure LLM service for image analysis
-    llm = LLM()
+    llm = LLM(caller="tools")
     new_messages = messages[:2].copy()
     base64_orig = encode_image(original_image)
     reverse_vertical_or_horizontal = (
@@ -255,7 +258,7 @@ def identify_relevant_slices(
         ],
         model="gemini-2.5-pro",
     ).content
-    print(required_slices_description, flush=True)
+    logger.debug(f"Required slices description: {required_slices_description}")
 
     relevant_slices = []
     relevant_slice_ids = []
@@ -606,7 +609,7 @@ def legacy_get_text_and_table_json_from_image(image: Union[Image.Image, str]) ->
     slice_height = 300  # Height of each slice in pixels
     overlap = 30  # Overlap between slices in pixels to maintain context
     width, height = image.size
-    llm = LLM()  # Initialize Azure OpenAI LLM service
+    llm = LLM(caller="tools")  # Initialize Azure OpenAI LLM service
 
     if height < slice_height * 1.5:
         return llm.get_response(
@@ -761,7 +764,7 @@ def get_text_and_table_json_from_image(image: Union[Image.Image, str]) -> str:
         )
 
     # Initialize LLM service
-    llm = LLM()
+    llm = LLM(caller="tools")
 
     # Request JSON extraction directly from the LLM
     response = llm.get_response(
@@ -842,7 +845,7 @@ def get_chart_readings_from_image(image: Union[Image.Image, str]) -> str:
         )
 
     # Initialize the Azure LLM service for image analysis
-    llm = LLM()
+    llm = LLM(caller="tools")
 
     # Send the image to the LLM with instructions to extract chart readings as Q&A pairs
     response = llm.get_response(
@@ -887,7 +890,7 @@ def get_images_from_doc(doc):
 
 
 def get_img_breakdown(base64_image: str):
-    llm = LLM()
+    llm = LLM(caller="tools")
     messages = [
         {
             "role": "user",
@@ -1011,7 +1014,7 @@ def search_doc(question: str, criteria, doc):
         },
         {"role": "user", "content": question},
     ]
-    llm = LLM()
+    llm = LLM(caller="tools")
 
     class QnA(BaseModel):
         question: str = Field(

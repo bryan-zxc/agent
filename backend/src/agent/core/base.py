@@ -14,29 +14,30 @@ logger = logging.getLogger(__name__)
 
 class BaseAgent:
     def __init__(self, id: str = None, agent_type: AgentType = None):
-        self.llm = LLM()
+        # Use the class name as the caller for LLM usage tracking
+        self.llm = LLM(caller=self.__class__.__name__)
         if id:
             self.id = id
         else:
             self.id = uuid.uuid4().hex
-        
+
         self.agent_type = agent_type
         self._message_db = MessageDatabase()
-        
+
         # Initialize messages property to use database
         self._messages_cache = None
-    
+
     @property
     def messages(self) -> List[Dict[str, Any]]:
         """Get messages from database for this agent"""
         if self.agent_type is None:
             # Fallback to in-memory for agents without specified type
-            if not hasattr(self, '_fallback_messages'):
+            if not hasattr(self, "_fallback_messages"):
                 self._fallback_messages = []
             return self._fallback_messages
-        
+
         return self._message_db.get_messages(self.agent_type, self.id)
-    
+
     @messages.setter
     def messages(self, value: List[Dict[str, Any]]):
         """Set messages (for backward compatibility, though we prefer database storage)"""
@@ -46,7 +47,9 @@ class BaseAgent:
             # Clear existing messages and add new ones
             self._message_db.clear_messages(self.agent_type, self.id)
             for msg in value:
-                self._message_db.add_message(self.agent_type, self.id, msg["role"], msg["content"])
+                self._message_db.add_message(
+                    self.agent_type, self.id, msg["role"], msg["content"]
+                )
 
     def add_message(
         self,
@@ -109,7 +112,7 @@ class BaseAgent:
 
         if self.agent_type is None:
             # Fallback to in-memory storage
-            if not hasattr(self, '_fallback_messages'):
+            if not hasattr(self, "_fallback_messages"):
                 self._fallback_messages = []
             self._fallback_messages.append({"role": role, "content": content})
         else:

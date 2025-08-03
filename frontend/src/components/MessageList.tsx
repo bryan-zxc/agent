@@ -4,6 +4,11 @@ import { useEffect, useRef } from 'react';
 import { cn } from '@/lib/utils';
 import { ChatMessage } from '../../../shared/types';
 import { AgentStatus } from '../../../shared/types';
+import { Skeleton } from './ui/skeleton';
+import { ThinkingDots } from './ui/thinking-dots';
+import { User } from 'lucide-react';
+import Image from 'next/image';
+import { RichMarkdownRendererWorking } from './RichMarkdownRendererWorking';
 
 interface MessageListProps {
   messages: ChatMessage[];
@@ -36,59 +41,101 @@ export const MessageList: React.FC<MessageListProps> = ({
       aria-labelledby="chat-title"
       aria-live="polite"
     >
-      <div className="space-y-4">
+      <div className="space-y-6">
         {messages.map((message) => (
           <article
             key={message.id}
-            className={cn(
-              "flex",
-              message.sender === 'user' ? 'justify-end' : 'justify-start'
-            )}
+            className="flex gap-3 w-full"
             role="article"
             aria-label={`Message from ${message.sender}`}
           >
+            <div className="flex-shrink-0 w-8 h-8 rounded-full overflow-hidden shadow-sm">
+              {message.sender === 'assistant' ? (
+                <Image
+                  src="/bandit-heeler.png"
+                  alt="Bandit Heeler"
+                  width={32}
+                  height={32}
+                  className="w-full h-full object-cover object-top"
+                />
+              ) : (
+                <div className="w-full h-full bg-secondary rounded-full flex items-center justify-center">
+                  <User className="w-4 h-4 text-secondary-foreground" />
+                </div>
+              )}
+            </div>
+            
             <div
               className={cn(
-                "max-w-xs sm:max-w-md md:max-w-lg px-4 py-3 rounded-lg shadow-sm transition-colors",
+                "flex-1 px-4 py-3 transition-all duration-200",
                 message.sender === 'user'
-                  ? 'bg-primary text-primary-foreground'
-                  : 'bg-card text-card-foreground border border-border'
+                  ? 'bg-card text-card-foreground border border-border rounded-lg shadow-sm hover:shadow-md'
+                  : 'bg-transparent'
               )}
             >
-              <div className="whitespace-pre-wrap text-sm leading-relaxed">
-                {message.message}
-              </div>
+              {message.sender === 'assistant' ? (
+                <RichMarkdownRendererWorking content={message.message} />
+              ) : (
+                <div className="whitespace-pre-wrap text-sm leading-relaxed">
+                  {message.message}
+                </div>
+              )}
               {message.files && message.files.length > 0 && (
-                <div className="mt-2 text-xs opacity-75">
-                  <span className="font-medium">Files:</span>{' '}
-                  {message.files.map(f => f.split('/').pop()).join(', ')}
+                <div className="mt-3 p-2 rounded-lg bg-black/5 dark:bg-white/5">
+                  <div className="text-xs font-medium opacity-75 mb-1">Attachments:</div>
+                  <div className="text-xs opacity-60 space-y-1">
+                    {message.files.map((file, index) => (
+                      <div key={index} className="flex items-center gap-1">
+                        <div className="w-1 h-1 rounded-full bg-current opacity-50" />
+                        {file.split('/').pop()}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
               <time 
-                className="block text-xs mt-2 opacity-60"
+                className="block text-xs mt-2 opacity-50"
                 dateTime={message.timestamp.toISOString()}
               >
                 {message.timestamp.toLocaleTimeString()}
               </time>
             </div>
+
           </article>
         ))}
         
-        {/* Status indicator */}
+        {/* Status indicator with typing animation */}
         {status.status !== 'idle' && (
-          <div className="flex justify-start" role="status" aria-live="polite">
-            <div className="bg-muted text-muted-foreground px-4 py-3 rounded-lg max-w-md border border-border">
+          <article className="flex gap-3 justify-start" role="status" aria-live="polite">
+            <div className="flex-shrink-0 w-8 h-8 rounded-full overflow-hidden shadow-sm">
+              <Image
+                src="/bandit-heeler.png"
+                alt="Bandit Heeler"
+                width={32}
+                height={32}
+                className="w-full h-full object-cover object-top"
+              />
+            </div>
+            
+            <div className="bg-card text-card-foreground border border-border px-4 py-3 rounded-xl rounded-bl-md shadow-sm max-w-md">
               <div className="flex items-center space-x-2">
                 <div 
-                  className="animate-spin rounded-full h-4 w-4 border-2 border-muted-foreground border-t-transparent"
+                  className="animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent"
                   aria-hidden="true"
                 />
-                <span className="text-sm">
-                  {status.message || 'Processing...'}
+                <span className="text-sm text-muted-foreground">
+                  {status.message || 'Thinking'}<ThinkingDots />
                 </span>
               </div>
+              
+              {/* Typing dots animation */}
+              <div className="flex space-x-1 mt-2">
+                <div className="w-1.5 h-1.5 bg-muted-foreground rounded-full animate-bounce [animation-delay:-0.3s]"></div>
+                <div className="w-1.5 h-1.5 bg-muted-foreground rounded-full animate-bounce [animation-delay:-0.15s]"></div>
+                <div className="w-1.5 h-1.5 bg-muted-foreground rounded-full animate-bounce"></div>
+              </div>
             </div>
-          </div>
+          </article>
         )}
         
         <div ref={messagesEndRef} aria-hidden="true" />

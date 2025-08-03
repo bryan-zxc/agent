@@ -1,3 +1,6 @@
 *.pyc
 db/
 *.db
+.env.local
+*.egg-info/
+*.log

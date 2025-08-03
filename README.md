@@ -122,7 +122,7 @@ agent/
 ## API Endpoints
 
 ### WebSocket
-- `ws://localhost:8000/ws` - Real-time chat communication
+- `ws://localhost:8000/chat` - Real-time chat communication
 
 ### HTTP
 - `POST /upload` - File upload endpoint

@@ -3,6 +3,7 @@ import duckdb
 from PIL import Image
 from pydantic import BaseModel, Field
 from ..core.base import BaseAgent
+from ..config.settings import settings
 from ..utils.sandbox import CodeSandbox
 from ..utils.tools import encode_image, decode_image, is_serialisable
 from ..models import (
@@ -59,7 +60,7 @@ class WorkerAgent(BaseWorkerAgent):
     def __init__(
         self,
         task: FullTask,
-        max_retry: int = 5,
+        max_retry: int = settings.max_retry_tasks,
         model: str = "sonnet-4",
         temperature: float = 0,
     ):
@@ -327,7 +328,7 @@ class WorkerAgentSQL(BaseWorkerAgent):
         self,
         task: FullTask,
         duck_conn: duckdb.DuckDBPyConnection,
-        max_retry: int = 5,
+        max_retry: int = settings.max_retry_tasks,
         model: str = "sonnet-4",
         temperature: float = 0,
     ):

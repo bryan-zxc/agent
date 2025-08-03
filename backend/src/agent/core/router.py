@@ -1,7 +1,10 @@
 from pathlib import Path
 from fastapi import WebSocket
 from ..core.base import BaseAgent
+import asyncio
+import logging
 from ..agents.planner import PlannerAgent
+from ..config.settings import settings
 from ..models import (
     PDFType,
     PDFFull,
@@ -13,6 +16,8 @@ from ..services.document_service import (
 )
 from ..services.image_service import process_image_file
 import uuid
+
+logger = logging.getLogger(__name__)
 
 INSTRUCTION_LIBRARY = {
     "data": {
@@ -55,15 +60,64 @@ class RouterAgent(BaseAgent):
         self.websocket = None
         self.model = "gpt-4.1-nano"
         self.temperature = 0.0
+
+    async def activate_conversation(self, user_message: str, files: list = None):
+        """Activate a new conversation with system message and process first user message"""
+        # Create default title (truncated if over 30 chars) and preview
+        title = user_message[:30] if len(user_message) > 30 else user_message
+        preview = user_message[:37] + "..." if len(user_message) > 40 else user_message
+
+        # Create conversation with default title and preview in database first
+        self._message_db.create_conversation_with_details(self.id, title, preview)
+
+        # Add system message to database
         self.add_message(
             role="system",
             content="Your name is Bandit Heeler, your main role is to have a conversation with the user and for complex requests activate agents."
             "Otherwise, you are a fictional character from the show Bluey.",
         )
 
+        # Prepare message data for processing
+        message_data = {"message": user_message, "files": files or []}
+
+        # Process the main message
+        await self.handle_message(message_data)
+
+    async def generate_and_update_title(self):
+        """Generate LLM title using existing message chain and update database"""
+        try:
+            # Get the first user message to check length
+            user_messages = [msg for msg in self.messages if msg.get("role") == "user"]
+            if not user_messages or len(user_messages[0]["content"]) <= 30:
+                return
+            
+            # Use the entire conversation to generate a title
+            title_messages = self.messages + [
+                {
+                    "role": "user",
+                    "content": "Create a succinct title for this conversation. "
+                    "In the response, only provide the title and nothing else. "
+                    "Keep the title under 30 characters.",
+                }
+            ]
+            
+            response = await self.llm.a_get_response(
+                messages=title_messages,
+                model=self.model,
+                temperature=self.temperature,
+            )
+            llm_title = response.content.strip()
+            
+            # Update title in database
+            self._message_db.update_conversation_title(self.id, llm_title)
+            logger.info(f"Updated title for conversation {self.id}: {llm_title}")
+            
+        except Exception as e:
+            # Log error but don't fail
+            logger.error(f"Failed to generate LLM title for {self.id}: {e}")
+
     async def connect_websocket(self, websocket: WebSocket):
         """Connect WebSocket for real-time communication"""
-        await websocket.accept()
         self.websocket = websocket
 
         # Send conversation history to frontend
@@ -114,6 +168,7 @@ class RouterAgent(BaseAgent):
             files=processed_files,
             model=self.model,
             temperature=self.temperature,
+            failed_task_limit=settings.failed_task_limit,
         )
 
         await planner.invoke()
@@ -213,10 +268,14 @@ class RouterAgent(BaseAgent):
     async def send_conversation_history(self):
         """Send conversation history to frontend on connect"""
         if self.websocket:
+            # Only send history if there are actual messages (excluding system messages)
+            conversation_messages = [
+                msg for msg in self.messages if msg.get("role") != "system"
+            ]
             await self.websocket.send_json(
                 {
                     "type": "conversation_history",
-                    "messages": self.messages,
+                    "messages": conversation_messages,
                     "conversation_id": self.conversation_id,
                 }
             )

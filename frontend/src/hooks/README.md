@@ -31,7 +31,7 @@ const useWebSocket = (url?: string) => {
 ```
 
 #### Parameters
-- `url` (optional): WebSocket URL (defaults to `ws://localhost:8000/ws`)
+- `url` (optional): WebSocket URL (defaults to `ws://localhost:8000/chat`)
 
 #### Return Values
 - `sendMessage`: Function to send messages to the agent
@@ -212,7 +212,7 @@ export const useNewHook = (param: string) => {
 ```typescript
 // Good: Object parameter for multiple options
 const useWebSocket = ({ 
-  url = 'ws://localhost:8000/ws',
+  url = 'ws://localhost:8000/chat',
   reconnectDelay = 3000,
   maxReconnectAttempts = 5 
 } = {}) => { ... }

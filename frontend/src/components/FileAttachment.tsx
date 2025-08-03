@@ -2,7 +2,8 @@
 
 import { useRef } from 'react';
 import { cn } from '@/lib/utils';
-import { Paperclip, X } from 'lucide-react';
+import { Button } from './ui/button';
+import { Paperclip, X, File, Image } from 'lucide-react';
 
 interface FileAttachmentProps {
   selectedFiles: File[];
@@ -10,6 +11,7 @@ interface FileAttachmentProps {
   onFileRemove: (index: number) => void;
   disabled?: boolean;
   className?: string;
+  fileInputRef?: React.RefObject<HTMLInputElement | null>;
 }
 
 export const FileAttachment: React.FC<FileAttachmentProps> = ({
@@ -17,14 +19,32 @@ export const FileAttachment: React.FC<FileAttachmentProps> = ({
   onFileSelect,
   onFileRemove,
   disabled = false,
-  className
+  className,
+  fileInputRef: externalFileInputRef
 }) => {
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const internalFileInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = externalFileInputRef || internalFileInputRef;
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
       onFileSelect(Array.from(e.target.files));
     }
+  };
+
+  const getFileIcon = (fileName: string) => {
+    const extension = fileName.split('.').pop()?.toLowerCase();
+    if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(extension || '')) {
+      return <Image className="h-3 w-3" />;
+    }
+    return <File className="h-3 w-3" />;
+  };
+
+  const formatFileSize = (bytes: number) => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
   return (
@@ -39,21 +59,29 @@ export const FileAttachment: React.FC<FileAttachmentProps> = ({
           {selectedFiles.map((file, index) => (
             <div
               key={index}
-              className="inline-flex items-center gap-2 bg-secondary text-secondary-foreground text-sm px-3 py-1 rounded-md border"
+              className="inline-flex items-center gap-2 bg-muted text-muted-foreground text-xs px-3 py-2 rounded-lg border border-border hover:bg-muted/80 transition-colors"
               role="listitem"
             >
-              <span className="truncate max-w-[200px]" title={file.name}>
-                {file.name}
-              </span>
-              <button
+              {getFileIcon(file.name)}
+              <div className="flex flex-col gap-0.5">
+                <span className="truncate max-w-[180px] font-medium" title={file.name}>
+                  {file.name}
+                </span>
+                <span className="text-xs opacity-60">
+                  {formatFileSize(file.size)}
+                </span>
+              </div>
+              <Button
                 type="button"
+                variant="ghost"
+                size="icon"
                 onClick={() => onFileRemove(index)}
-                className="text-muted-foreground hover:text-foreground transition-colors p-0.5"
+                className="h-6 w-6 hover:bg-destructive/10 hover:text-destructive"
                 aria-label={`Remove ${file.name}`}
                 disabled={disabled}
               >
                 <X className="h-3 w-3" />
-              </button>
+              </Button>
             </div>
           ))}
         </div>
@@ -71,22 +99,6 @@ export const FileAttachment: React.FC<FileAttachmentProps> = ({
         aria-label="Select files to attach"
       />
       
-      {/* File selection button */}
-      <button
-        type="button"
-        onClick={() => fileInputRef.current?.click()}
-        disabled={disabled}
-        className={cn(
-          "inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors",
-          "h-10 w-10 bg-secondary text-secondary-foreground hover:bg-secondary/80",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-          "disabled:pointer-events-none disabled:opacity-50",
-          disabled && "cursor-not-allowed"
-        )}
-        aria-label="Attach files"
-      >
-        <Paperclip className="h-4 w-4" />
-      </button>
     </div>
   );
 };

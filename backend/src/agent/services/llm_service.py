@@ -23,6 +23,8 @@ from sqlalchemy import (
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
+from ..config.settings import AgentSettings
+
 logger = logging.getLogger(__name__)
 
 
@@ -35,11 +37,17 @@ MODEL_MAPPING = {
     "gemini-2.5-pro": "gemini-2.5-pro",
 }
 
-# Pricing per 1K tokens (input, output) in USD
+# Pricing per 1M tokens (input, output) in USD
 PRICING = {
-    "claude-sonnet-4-20250514": {"input": 0.003, "output": 0.015},
-    "gpt-4.1-nano-2025-04-14": {"input": 0.0015, "output": 0.006},
-    "gemini-2.5-pro": {"input": 0.001, "output": 0.005},
+    "claude-sonnet-4-20250514": {"input": 3.0, "output": 15.0},
+    "gpt-4.1-nano-2025-04-14": {"input": 0.1, "output": 0.4},
+    "gemini-2.5-pro": {
+        "input_low": 1.25,  # ≤200k tokens
+        "output_low": 10.0,  # ≤200k tokens  
+        "input_high": 2.50,  # >200k tokens
+        "output_high": 15.0,  # >200k tokens
+        "threshold": 200000  # 200k token threshold
+    },
 }
 
 # SQLAlchemy setup
@@ -52,9 +60,6 @@ class RequestType(enum.Enum):
     STRUCTURED = "structured"
 
 
-class Purpose(enum.Enum):
-    GENERAL = "general"
-    AGENT = "agent"
 
 
 class LLMUsage(Base):
@@ -67,7 +72,7 @@ class LLMUsage(Base):
     output_tokens = Column(Integer, nullable=False)
     cost = Column(Float, nullable=False)
     request_type = Column(Enum(RequestType), nullable=False)
-    purpose = Column(Enum(Purpose), nullable=False)
+    caller = Column(String(100), nullable=False)
 
 
 def delay_exp(e, x):
@@ -82,18 +87,25 @@ def delay_exp(e, x):
 
 
 class LLM:
-    def __init__(self, db_path: str | Path = Path("/app/db/llm_usage.db")):
-        self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    def __init__(self, db_path: str | Path = Path("/app/db/llm_usage.db"), caller: str = "general"):
+        # Load settings which automatically loads .env and .env.local
+        settings = AgentSettings()
+
+        # Initialize clients with API keys from settings
+        self.openai_client = OpenAI(api_key=settings.openai_api_key)
         self.gemini_client = OpenAI(
-            api_key=os.getenv("GEMINI_API_KEY"),
+            api_key=settings.gemini_api_key,
             base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
         )
         self.anthropic_openai_client = OpenAI(
-            api_key=os.getenv("ANTHROPIC_API_KEY"),
+            api_key=settings.anthropic_api_key,
             base_url="https://api.anthropic.com/v1/",
         )
-        self.anthropic_client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+        self.anthropic_client = Anthropic(api_key=settings.anthropic_api_key)
 
+        # Store caller for usage tracking
+        self.caller = caller
+        
         # SQLAlchemy setup
         self.engine = create_engine(f"sqlite:///{db_path}")
         Base.metadata.create_all(self.engine)
@@ -104,9 +116,24 @@ class LLM:
     ) -> float:
         """Calculate cost based on model pricing."""
         pricing = PRICING.get(model, {"input": 0, "output": 0})
+        
+        # Handle Gemini's tiered pricing based on input tokens only
+        if model == "gemini-2.5-pro" and "threshold" in pricing:
+            if input_tokens <= pricing["threshold"]:
+                # Use low-tier pricing
+                input_rate = pricing["input_low"]
+                output_rate = pricing["output_low"]
+            else:
+                # Use high-tier pricing
+                input_rate = pricing["input_high"]
+                output_rate = pricing["output_high"]
+            
+            return (input_tokens * input_rate + output_tokens * output_rate) / 1000000
+        
+        # Standard pricing for other models
         return (
             input_tokens * pricing["input"] + output_tokens * pricing["output"]
-        ) / 1000
+        ) / 1000000
 
     def _track_usage(
         self,
@@ -114,7 +141,6 @@ class LLM:
         input_tokens: int,
         output_tokens: int,
         request_type: str = "text",
-        purpose: str = "general",
     ):
         """Track usage to SQLite database using SQLAlchemy."""
         cost = self._calculate_cost(model, input_tokens, output_tokens)
@@ -127,7 +153,7 @@ class LLM:
                 output_tokens=output_tokens,
                 cost=cost,
                 request_type=request_type,
-                purpose=purpose,
+                caller=self.caller,
             )
             session.add(usage_record)
             session.commit()
@@ -188,7 +214,6 @@ class LLM:
                     input_tokens=response.usage.input_tokens,
                     output_tokens=response.usage.output_tokens,
                     request_type="structured",
-                    purpose="general",
                 )
 
                 # Parse JSON and validate with Pydantic
@@ -270,7 +295,6 @@ class LLM:
             input_tokens=response.usage.prompt_tokens,
             output_tokens=response.usage.completion_tokens,
             request_type="text",
-            purpose="general",
         )
 
         return response.choices[0].message
@@ -289,7 +313,6 @@ class LLM:
             input_tokens=response.usage.prompt_tokens,
             output_tokens=response.usage.completion_tokens,
             request_type="tools",
-            purpose="general",
         )
 
         return response.choices[0].message
@@ -318,7 +341,6 @@ class LLM:
                     input_tokens=response.usage.prompt_tokens,
                     output_tokens=response.usage.completion_tokens,
                     request_type="structured",
-                    purpose="general",
                 )
 
                 return response.choices[0].message.parsed
@@ -355,7 +377,6 @@ class LLM:
                             input_tokens=response.usage.input_tokens,
                             output_tokens=response.usage.output_tokens,
                             request_type="json_object",
-                            purpose="general",
                         )
                 else:
                     # Use OpenAI-compatible client
@@ -374,7 +395,6 @@ class LLM:
                             input_tokens=response.usage.prompt_tokens,
                             output_tokens=response.usage.completion_tokens,
                             request_type="json_object",
-                            purpose="general",
                         )
 
                 try:
@@ -411,7 +431,6 @@ class LLM:
                 input_tokens=response.usage.prompt_tokens,
                 output_tokens=response.usage.completion_tokens,
                 request_type="unknown",
-                purpose="general",
             )
 
             return response.choices[0].message.content

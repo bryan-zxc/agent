@@ -31,7 +31,7 @@ components/
 ```typescript
 export const ChatInterface: React.FC = () => {
   const { messages, status, isConnected } = useChatStore();
-  const { sendMessage } = useWebSocket('default');
+  const { sendMessage } = useWebSocket();
 
   const handleSubmit = async (message: string, files: File[]) => {
     // File upload logic

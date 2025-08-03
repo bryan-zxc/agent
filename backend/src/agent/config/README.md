@@ -42,18 +42,16 @@ Application settings management using Pydantic BaseSettings.
 
 **Configuration Sections:**
 
-**LLM Configuration**
-- `default_model`: Default language model ("gpt-4.1-if-global")
-- `default_temperature`: Default temperature for LLM calls (0.0)
-- `router_model`: Model used for routing decisions
+**API Keys**
+- `openai_api_key`: OpenAI API key (loaded from environment)
+- `gemini_api_key`: Gemini API key (loaded from environment)
+- `anthropic_api_key`: Anthropic API key (loaded from environment)
 
 **Task Configuration**
 - `max_retry_attempts`: Maximum retry attempts for failed tasks (5)
 - `failed_task_limit`: Maximum failed tasks before termination (3)
 
 **Processing Configuration**
-- `image_slice_height`: Height of image slices for processing (300px)
-- `image_slice_overlap`: Overlap between image slices (30px)
 - `min_image_tokens`: Minimum tokens for image processing (64)
 
 **Environment**
@@ -64,8 +62,8 @@ Application settings management using Pydantic BaseSettings.
 
 **`settings`**
 - Global settings instance available throughout the application
-- Automatically loads from environment variables with `AGENT_` prefix
-- Falls back to `.env` file if available
+- Automatically loads from environment variables
+- Falls back to `.env` and `.env.local` files
 
 ## Usage
 
@@ -73,12 +71,15 @@ Application settings management using Pydantic BaseSettings.
 ```python
 from agent.config.settings import settings
 
-# Get LLM configuration
-model = settings.default_model
-temperature = settings.default_temperature
+# Get API keys
+api_key = settings.openai_api_key
 
-# Get processing configuration  
+# Get task configuration  
 max_retries = settings.max_retry_attempts
+task_limit = settings.failed_task_limit
+
+# Get processing configuration
+min_tokens = settings.min_image_tokens
 ```
 
 ### Using Constants
@@ -96,9 +97,11 @@ timeout = MAX_CODE_EXECUTION_TIME
 ### Environment Variables
 Configure settings via environment variables:
 ```bash
-export AGENT_DEFAULT_MODEL="gemini-2.5-pro"
-export AGENT_DEFAULT_TEMPERATURE=0.1
-export AGENT_DEBUG_MODE=true
+export OPENAI_API_KEY="your-openai-api-key"
+export GEMINI_API_KEY="your-gemini-api-key"
+export ANTHROPIC_API_KEY="your-anthropic-api-key"
+export DEBUG_MODE=true
+export ENVIRONMENT="production"
 ```
 
 ## Best Practices

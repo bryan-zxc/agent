@@ -49,6 +49,8 @@ class Conversation(Base):
     __tablename__ = 'conversations'
     
     id = Column(String(32), primary_key=True)
+    title = Column(String(255), nullable=False, default="New Conversation")
+    preview = Column(String(255), nullable=False, default="")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -73,7 +75,7 @@ class RouterMessage(Base):
 class MessageDatabase:
     """Database service for managing agent messages"""
     
-    def __init__(self, database_path: str = "/app/db/agent_messages.db"):
+    def __init__(self, database_path: str = "./db/agent_messages.db"):
         # Ensure directory exists
         Path(database_path).parent.mkdir(parents=True, exist_ok=True)
         
@@ -101,15 +103,7 @@ class MessageDatabase:
                 )
             else:  # router
                 # For router, agent_id is the conversation_id
-                # Ensure conversation exists
-                conversation = session.query(Conversation).filter(
-                    Conversation.id == agent_id
-                ).first()
-                
-                if not conversation:
-                    conversation = Conversation(id=agent_id)
-                    session.add(conversation)
-                    session.flush()  # Ensure conversation is created before adding message
+                # Conversation should already exist (created via activate_conversation)
                 
                 message = RouterMessage(
                     conversation_id=agent_id,
@@ -119,6 +113,28 @@ class MessageDatabase:
             
             session.add(message)
             session.commit()
+    
+    def create_conversation_with_details(self, conversation_id: str, title: str, preview: str) -> None:
+        """Create a conversation with title and preview"""
+        with self.SessionLocal() as session:
+            conversation = Conversation(
+                id=conversation_id,
+                title=title,
+                preview=preview
+            )
+            session.add(conversation)
+            session.commit()
+    
+    def update_conversation_title(self, conversation_id: str, title: str) -> None:
+        """Update the title of an existing conversation"""
+        with self.SessionLocal() as session:
+            conversation = session.query(Conversation).filter(
+                Conversation.id == conversation_id
+            ).first()
+            if conversation:
+                conversation.title = title
+                conversation.updated_at = datetime.utcnow()
+                session.commit()
     
     def get_messages(self, agent_type: AgentType, agent_id: str) -> List[Dict[str, Any]]:
         """Retrieve all messages for an agent"""
