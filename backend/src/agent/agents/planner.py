@@ -131,7 +131,7 @@ class PlannerAgent(BaseAgent):
         user_question: str,
         instruction: str = None,
         files: list[File] = None,
-        model: str = "gemini-2.5-pro",
+        model: str = settings.planner_model,
         temperature: float = 0,
         failed_task_limit: int = settings.failed_task_limit,
     ):
@@ -274,7 +274,7 @@ class PlannerAgent(BaseAgent):
             if request_validation.user_request_fulfilled:
                 self.user_response = await self.llm.a_get_response(
                     messages=self.messages[self.context_message_len :],
-                    model="gpt-4o-mini-if-global",  # intentionally hardcoded
+                    model=self.model,  # intentionally hardcoded
                     temperature=0,  # intentionally hardcoded
                     response_format=RequestResponse,
                 )

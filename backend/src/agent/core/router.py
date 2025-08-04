@@ -5,16 +5,10 @@ import asyncio
 import logging
 from ..agents.planner import PlannerAgent
 from ..config.settings import settings
-from ..models import (
-    PDFType,
-    PDFFull,
-    File,
-)
-from ..services.document_service import (
-    extract_document_content,
-    create_document_meta_summary,
-)
-from ..services.image_service import process_image_file
+from ..models import File
+from ..models.responses import RequireAgent
+from ..models.schemas import SinglevsMultiRequest
+from ..services.image_service import process_image_file, is_image
 import uuid
 
 logger = logging.getLogger(__name__)
@@ -27,28 +21,25 @@ INSTRUCTION_LIBRARY = {
         "If you don't know, use intermediate queries to get the information you need. "
     },
     "image": {
-        "chart": "Breakdown the task as follows:\n"
-        "  1. If the image has 3 or more elements such as charts, tables, diagrams, text blocks (any combination of 3 such as 3 charts or two charts and a table), then crop the image to isolate the chart(s) of relevance. "
-        "Otherwise, skip this step.\n"
-        "  2. Use the provided tool get_chart_readings_from_image to extract the chart readings as text. This must be a standalone task.\n"
-        "  3. If the user's question is a composite question requiring multiple pieces of information to be read from the chart, split the questions into atomic questions that can be answered by a single fact. "
-        "Answer each question that is aiming to extract facts from the chart individually, and ignore analytical questions.\n"
-        "  4. Compose a comprehensive answer to address the user's question.\n",
-        "table": "Breakdown the task as follows:\n"
-        "  1. Using the provided tool get_text_and_table_json_from_image, read the table contents as a JSON string. This must be the first standalone task.\n"
-        "  2. If the user's question is a composite question requiring multiple pieces of information to be read from the table, split the questions into atomic questions that can be answered by a single fact. "
-        "Answer each question that is aiming to extract facts from the table individually, and ignore analytical questions.\n"
-        "  3. Compose a comprehensive answer to address the user's question.",
-        "diagram": "Breakdown the task as follows:\n"
-        "  1. Read the diagram and its contents as mermaid code."
-        "  2. If the user's question is a composite question requiring multiple pieces of information to be read from the diagram, split the questions into atomic questions that can be answered by a single fact. "
-        "Answer each question that is aiming to extract facts from the diagram individually, and ignore analytical questions."
-        "  3. Compose a comprehensive answer to address the user's question.",
-        "text": "Breakdown the task as follows:\n"
-        "  1. Using the provided tool get_text_and_table_json_from_image, read the table contents as a JSON string. This must be the first standalone task.\n"
-        "  2. If the user's question is a composite question requiring multiple pieces of information to be read from the text, split the questions into atomic questions that can be answered by a single fact. "
-        "Answer each question that is aiming to extract facts from the text individually, and ignore analytical questions.\n"
-        "  3. Compose a comprehensive answer to address the user's question.",
+        "chart": "You must use the provided tool get_chart_readings_from_image to extract the chart readings as text first before performing further actions. "
+        "This must be a standalone task.",
+        "table": "You must use the provided tool get_text_and_table_json_from_image, read the table contents as a JSON string first before performing further actions. "
+        "This must be a standalone task.",
+        "diagram": "You must convert the diagram into mermaid code first before performing further actions.",
+        "text": "You must use the provided tool get_text_and_table_json_from_image, read the text content as a JSON string first before performing further actions. "
+        "This must be a standalone task.",
+    },
+    "document": {
+        "pdf": "You must first use the provided tool get_facts_from_pdf to extract relevant facts in the form of question answer pairs from each document until there are no longer any unanswered questions (ie missing facts to answer the user's original question). "
+        "Extracting from each file must be a standalone task.\n"
+        "When compiling the final response, you must aggressively use in-line citations, and your answer should be in markdown format."
+    },
+    "non_file": {
+        "company_query": "You must first use search_web_pdf tool to find annual report and sustainability report, as most questions can be answered by these documents."
+        "If pdf documents are found, you must use the get_facts_from_pdf tool to extract relevant facts in the form of question answer pairs from each document until either there are no longer any unanswered questions (ie missing facts to answer the user's original question), or if there are no more documents. "
+        "Questions that are still open can be searched on the web using the search_web_general tool.",
+        "web_search": "You must use the search_web_general tool or the search_web_pdf tool to search the web for information that can answer the user's question. "
+        "If pdf documents are found, you must use the get_facts_from_pdf tool to extract relevant facts in the form of question answer pairs from each document until either there are no longer any unanswered questions (ie missing facts to answer the user's original question), or if there are no more documents. ",
     },
 }
 
@@ -58,7 +49,7 @@ class RouterAgent(BaseAgent):
         super().__init__(id=conversation_id or uuid.uuid4().hex, agent_type="router")
         self.conversation_id = self.id
         self.websocket = None
-        self.model = "gpt-4.1-nano"
+        self.model = settings.router_model
         self.temperature = 0.0
 
     async def activate_conversation(self, user_message: str, files: list = None):
@@ -90,7 +81,7 @@ class RouterAgent(BaseAgent):
             user_messages = [msg for msg in self.messages if msg.get("role") == "user"]
             if not user_messages or len(user_messages[0]["content"]) <= 30:
                 return
-            
+
             # Use the entire conversation to generate a title
             title_messages = self.messages + [
                 {
@@ -100,18 +91,18 @@ class RouterAgent(BaseAgent):
                     "Keep the title under 30 characters.",
                 }
             ]
-            
+
             response = await self.llm.a_get_response(
                 messages=title_messages,
                 model=self.model,
                 temperature=self.temperature,
             )
             llm_title = response.content.strip()
-            
+
             # Update title in database
             self._message_db.update_conversation_title(self.id, llm_title)
             logger.info(f"Updated title for conversation {self.id}: {llm_title}")
-            
+
         except Exception as e:
             # Log error but don't fail
             logger.error(f"Failed to generate LLM title for {self.id}: {e}")
@@ -133,13 +124,31 @@ class RouterAgent(BaseAgent):
 
         try:
             # Send processing status
-            await self.send_status("Processing...")
+            await self.send_status("Thinking...")
 
             # Determine response type
-            if files or self.needs_planner(user_message):
-                response = await self.handle_complex_request(user_message, files)
+            if files:
+                response = await self.handle_complex_request(files=files)
             else:
-                response = await self.handle_simple_chat(user_message)
+                # Run assessment and simple chat concurrently to reduce wait time
+                async with asyncio.TaskGroup() as tg:
+                    assessment_task = tg.create_task(self.assess_agent_requirements())
+                    simple_chat_task = tg.create_task(self.handle_simple_chat())
+                
+                agent_requirements = assessment_task.result()
+                
+                # Check if agent is needed
+                if any([
+                    agent_requirements.calculation_required,
+                    agent_requirements.web_search_required,
+                    agent_requirements.company_query,
+                    agent_requirements.complex_question,
+                ]):
+                    # We need complex handling - simple chat result is discarded
+                    response = await self.handle_complex_request(agent_requirements=agent_requirements)
+                else:
+                    # Use the already completed simple chat response
+                    response = simple_chat_task.result()
 
             # Store and send response
             self.add_message("assistant", response)
@@ -148,23 +157,93 @@ class RouterAgent(BaseAgent):
         except Exception as e:
             await self.send_error(f"Error: {str(e)}")
 
-    async def handle_simple_chat(self, user_message: str) -> str:
+    async def handle_simple_chat(self) -> str:
         """Handle simple conversational messages"""
-        conversation_messages = self.messages  # From database via BaseAgent
         response = await self.llm.a_get_response(
-            messages=conversation_messages,
+            messages=self.messages,
             model=self.model,
             temperature=self.temperature,
         )
         return response.content
 
-    async def handle_complex_request(self, user_message: str, files: list) -> str:
+    async def assess_agent_requirements(self) -> RequireAgent:
+        """Use LLM to assess what type of agent assistance is needed based on conversation history"""
+        assessment_messages = self.messages + [
+            {
+                "role": "user",
+                "content": "Based on the conversation, what type of assistance is needed? Return RequireAgent with appropriate flags.",
+            }
+        ]
+
+        response = await self.llm.a_get_response(
+            messages=assessment_messages,
+            model=self.model,
+            temperature=0.0,
+            response_format=RequireAgent,
+        )
+
+        return response.parsed
+
+    async def handle_complex_request(
+        self, files: list = None, agent_requirements: RequireAgent = None
+    ) -> str:
         """Handle complex requests requiring planner"""
-        processed_files = await self.process_files(files)
+        # Validate that either files or agent requirements exist
+        if not files and not agent_requirements:
+            raise ValueError(
+                "Either files must be provided or agent requirements must be specified"
+            )
+
+        # Determine user question and generate instructions
+        instructions = []
+        if agent_requirements:
+            # Generate non-file instructions based on agent requirements
+            if agent_requirements.company_query:
+                instructions.append(
+                    f"# Instructions for company query:\n\n{INSTRUCTION_LIBRARY.get('non_file').get('company_query', '')}"
+                )
+            if agent_requirements.web_search_required:
+                instructions.append(
+                    f"# Instructions for web search:\n\n{INSTRUCTION_LIBRARY.get('non_file').get('web_search', '')}"
+                )
+            user_question = agent_requirements.context_rich_agent_request
+        else:
+            response = await self.llm.a_get_response(
+                messages=self.messages
+                + [
+                    {
+                        "role": "developer",
+                        "content": "Summarise the conversation into a context-rich request for the agent.",
+                    }
+                ],
+                model=self.model,
+                temperature=self.temperature,
+            )
+            user_question = response.content
+
+        # Check if files list is not empty before processing
+        if files:
+            # Determine question type
+            question_type = await self.determine_question_type(user_question, files)
+            
+            if question_type == "multiple":
+                # Process each file separately
+                responses = []
+                for file in files:
+                    response = await self._invoke_single([file], user_question, instructions)
+                    responses.append(f"**File: {file}**\n\n{response}")
+                return "\n\n---\n\n".join(responses)
+            else:
+                # Process all files together
+                return await self._invoke_single(files, user_question, instructions)
+
+        else:
+            processed_files = None
 
         # Create planner with processed files
         planner = PlannerAgent(
-            user_question=user_message,
+            user_question=user_question,
+            instruction="\n\n---\n\n".join(instructions),
             files=processed_files,
             model=self.model,
             temperature=self.temperature,
@@ -174,22 +253,13 @@ class RouterAgent(BaseAgent):
         await planner.invoke()
         return await planner.get_response_to_user()
 
-    def needs_planner(self, message: str) -> bool:
-        """Check if message requires planner activation"""
-        triggers = [
-            "analyze",
-            "process",
-            "generate",
-            "report",
-            "chart",
-            "table",
-            "data",
-        ]
-        return any(trigger in message.lower() for trigger in triggers)
-
-    async def process_files(self, file_paths: list) -> list:
-        """Process uploaded files into File objects"""
+    async def process_files(self, file_paths: list) -> tuple[list, list]:
+        """Process uploaded files into File objects and return (processed_files, errors)"""
         processed_files = []
+        errors = []
+        image_types = []
+        data_types = []
+        document_types = []
 
         for file_path in file_paths:
             file_obj = Path(file_path)
@@ -198,32 +268,16 @@ class RouterAgent(BaseAgent):
                 processed_files.append(
                     File(filepath=file_path, file_type="data", data_context="csv")
                 )
+                data_types.append("csv")
             elif file_obj.suffix == ".pdf":
                 # Process PDF
-                content = extract_document_content(file_path)
-                meta = create_document_meta_summary(content)
-                is_image_pdf = await self.llm.a_get_response(
-                    messages=[
-                        {
-                            "role": "developer",
-                            "content": f"Based on the following document metadata, is the document likely an image based pdf?\n\n```json\n{meta.model_dump_json(indent=2)}\n```",
-                        }
-                    ],
-                    response_format=PDFType,
-                )
                 processed_files.append(
                     File(
-                        filepath=file_path,
-                        file_type="document",
-                        document_context=PDFFull(
-                            filename=file_obj.stem,
-                            is_image_based=is_image_pdf.is_image_based,
-                            content=content,
-                            meta=meta,
-                        ),
+                        filepath=file_path, file_type="document", document_context="pdf"
                     )
                 )
-            elif file_obj.suffix.lower() in [".png", ".jpg", ".jpeg"]:
+                document_types.append("pdf")
+            elif is_image(file_path)[0]:
                 # Process image
                 breakdown, error = process_image_file(file_path)
                 if not error:
@@ -234,8 +288,98 @@ class RouterAgent(BaseAgent):
                             image_context=breakdown.elements,
                         )
                     )
+                    image_types.extend(
+                        [element.element_type for element in breakdown.elements]
+                    )
+                else:
+                    errors.append(f"Error processing image '{file_obj.name}': {error}")
+            else:
+                # Unsupported file type
+                errors.append(
+                    f"Unsupported file type '{file_obj.suffix}' for file '{file_obj.name}'"
+                )
+        # Remove duplicates
+        image_types = list(set(image_types))
+        data_types = list(set(data_types))
+        document_types = list(set(document_types))
 
-        return processed_files
+        instructions = []
+
+        # Add image instructions
+        if image_types:
+            instructions.extend(
+                [
+                    f"# Instructions for handling - {element_type} image:\n\n{INSTRUCTION_LIBRARY.get('image').get(element_type, '')}"
+                    for element_type in image_types
+                ]
+            )
+
+        # Add data instructions
+        if data_types:
+            instructions.extend(
+                [
+                    f"# Instructions for handling - {data_type} data:\n\n{INSTRUCTION_LIBRARY.get('data').get(data_type, '')}"
+                    for data_type in data_types
+                ]
+            )
+
+        # Add document instructions
+        if document_types:
+            instructions.extend(
+                [
+                    f"# Instructions for handling - {doc_type} document:\n\n{INSTRUCTION_LIBRARY.get('document').get(doc_type, '')}"
+                    for doc_type in document_types
+                ]
+            )
+
+        return processed_files, errors, instructions
+
+    async def determine_question_type(self, user_question: str, files: list) -> str:
+        """Determine if user wants single response or multiple responses for files"""
+        if len(files) == 1:
+            return "single"
+        else:
+            response = await self.llm.a_get_response(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": f"{user_question}\n\nFiles: {','.join(files)}",
+                    },
+                    {
+                        "role": "developer",
+                        "content": "Is the user looking for a single response or multiple responses - one for each file?",
+                    },
+                ],
+                model=self.model,
+                temperature=0.0,
+                response_format=SinglevsMultiRequest,
+            )
+            return response.parsed.request_type
+
+    async def _invoke_single(self, files: list, user_question: str, instructions: list) -> str:
+        """Invoke planner for single file or combined processing"""
+        processed_files, errors, file_instructions = await self.process_files(files)
+        
+        if not processed_files:
+            return "Unable to process any files. Errors encountered:\n" + "\n".join(
+                f"• {error}" for error in errors
+            )
+        
+        # Combine instructions
+        all_instructions = instructions + file_instructions
+        
+        # Create planner with processed files
+        planner = PlannerAgent(
+            user_question=user_question,
+            instruction="\n\n---\n\n".join(all_instructions),
+            files=processed_files,
+            model=self.model,
+            temperature=self.temperature,
+            failed_task_limit=settings.failed_task_limit,
+        )
+
+        await planner.invoke()
+        return await planner.get_response_to_user()
 
     # WebSocket communication methods
     async def send_message(self, role: str, content: str):

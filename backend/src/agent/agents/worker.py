@@ -61,7 +61,7 @@ class WorkerAgent(BaseWorkerAgent):
         self,
         task: FullTask,
         max_retry: int = settings.max_retry_tasks,
-        model: str = "sonnet-4",
+        model: str = settings.worker_model,
         temperature: float = 0,
     ):
         super().__init__(id=task.task_id, agent_type="worker")
@@ -329,7 +329,7 @@ class WorkerAgentSQL(BaseWorkerAgent):
         task: FullTask,
         duck_conn: duckdb.DuckDBPyConnection,
         max_retry: int = settings.max_retry_tasks,
-        model: str = "sonnet-4",
+        model: str = settings.worker_model,
         temperature: float = 0,
     ):
         super().__init__(id=task.task_id, agent_type="worker")

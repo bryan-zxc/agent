@@ -15,10 +15,6 @@ def is_image(file_path: str) -> tuple[bool, str]:
 
 def process_image_file(filepath: str):
     """Process an image file and return image breakdown."""
-    is_image_bool, error_message = is_image(filepath)
-    if not is_image_bool:
-        return None, error_message
-    
     image_breakdown = get_img_breakdown(base64_image=encode_image(filepath))
     if image_breakdown.unreadable:
         return None, f"The image {filepath} cannot be read.\n\n{image_breakdown.image_quality}"

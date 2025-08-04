@@ -10,7 +10,10 @@ from datetime import datetime
 from pydantic import BaseModel, ValidationError
 from openai import OpenAI
 from anthropic import Anthropic
-from typing import Literal
+from google import genai
+from google.genai import types
+import httpx
+from typing import Literal, Optional, Union, Type
 from sqlalchemy import (
     create_engine,
     Column,
@@ -102,6 +105,7 @@ class LLM:
             base_url="https://api.anthropic.com/v1/",
         )
         self.anthropic_client = Anthropic(api_key=settings.anthropic_api_key)
+        self.google_client = genai.Client(api_key=settings.gemini_api_key)
 
         # Store caller for usage tracking
         self.caller = caller
@@ -434,3 +438,165 @@ class LLM:
             )
 
             return response.choices[0].message.content
+
+    def get_response_pdf(
+        self,
+        pdf_source: Union[str, Path],
+        prompt: str,
+        temperature: float = 0,
+        response_format: Optional[Type[BaseModel]] = None,
+    ) -> Union[str, BaseModel]:
+        """
+        Get response from Google Gemini with inline PDF support.
+        
+        Args:
+            pdf_source: Path to local PDF file or URL to web PDF
+            prompt: Text prompt to send along with the PDF
+            temperature: Temperature for response generation
+            response_format: Optional Pydantic model for structured response
+            
+        Returns:
+            String response or Pydantic model instance
+        """
+        # Use the single Google model from MODEL_MAPPING
+        model = "gemini-2.5-pro"
+        
+        # Determine if source is URL or local file
+        if isinstance(pdf_source, str) and (pdf_source.startswith('http://') or pdf_source.startswith('https://')):
+            # Web URL
+            try:
+                pdf_data = httpx.get(pdf_source).content
+            except Exception as e:
+                raise ValueError(f"Failed to fetch PDF from URL {pdf_source}: {e}")
+        else:
+            # Local file
+            pdf_path = Path(pdf_source)
+            if not pdf_path.exists():
+                raise FileNotFoundError(f"PDF file not found: {pdf_path}")
+            pdf_data = pdf_path.read_bytes()
+        
+        # Create PDF part using inline bytes
+        pdf_part = types.Part.from_bytes(
+            data=pdf_data,
+            mime_type='application/pdf',
+        )
+        
+        # Prepare the content
+        contents = [pdf_part, prompt]
+        
+        # Configure the request
+        config = {
+            "temperature": temperature,
+        }
+        
+        # Add structured output configuration if response_format is provided
+        if response_format:
+            config["response_mime_type"] = "application/json"
+            config["response_schema"] = response_format
+        
+        try:
+            # Make the request
+            response = self.google_client.models.generate_content(
+                model=model,
+                contents=contents,
+                config=config,
+            )
+            
+            # Track usage using usage_metadata
+            if hasattr(response, 'usage_metadata'):
+                input_tokens = response.usage_metadata.prompt_token_count
+                output_tokens = response.usage_metadata.candidates_token_count
+                
+                self._track_usage(
+                    model=model,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    request_type="pdf_processing",
+                )
+            else:
+                logger.warning(f"Google Gemini response missing usage_metadata for PDF processing")
+                self._track_usage(
+                    model=model,
+                    input_tokens=0,
+                    output_tokens=0,
+                    request_type="pdf_processing",
+                )
+            
+            # Handle structured response
+            if response_format:
+                return response.parsed
+            
+            return response.text
+            
+        except Exception as e:
+            logger.error(f"Error in get_response_pdf: {e}")
+            raise
+
+    def search_web(self, query: str, temperature: float = 0, response_format: Optional[Type[BaseModel]] = None) -> Union[str, BaseModel]:
+        """
+        Perform web search using Google's grounding tool.
+        
+        Args:
+            query: The search query
+            temperature: Temperature for response generation
+            response_format: Optional Pydantic model for structured response
+            
+        Returns:
+            String response or Pydantic model instance with grounded web search results
+        """
+        # Define the grounding tool
+        grounding_tool = types.Tool(
+            google_search=types.GoogleSearch()
+        )
+        
+        # Configure generation settings
+        config = types.GenerateContentConfig(
+            tools=[grounding_tool],
+            temperature=temperature,
+        )
+        
+        # Add structured output configuration if response_format is provided
+        if response_format:
+            config.response_mime_type = "application/json"
+            config.response_schema = response_format
+        
+        # Use fixed model for web search
+        model = "gemini-2.5-pro"
+        
+        try:
+            # Make the request
+            response = self.google_client.models.generate_content(
+                model=model,
+                contents=query,
+                config=config,
+            )
+            
+            # Track usage if available
+            if hasattr(response, 'usage_metadata'):
+                input_tokens = response.usage_metadata.prompt_token_count
+                output_tokens = response.usage_metadata.candidates_token_count
+                
+                self._track_usage(
+                    model=model,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    request_type="web_search",
+                )
+            else:
+                logger.warning(f"Google Gemini response missing usage_metadata for web search")
+                self._track_usage(
+                    model=model,
+                    input_tokens=0,
+                    output_tokens=0,
+                    request_type="web_search",
+                )
+            
+            # Handle structured response
+            if response_format:
+                return response.parsed
+            
+            return response.text
+            
+        except Exception as e:
+            logger.error(f"Error in search_web: {e}")
+            raise

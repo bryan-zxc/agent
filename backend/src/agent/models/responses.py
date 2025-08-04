@@ -2,6 +2,26 @@ from pydantic import BaseModel, Field
 from typing import Literal
 
 
+class RequireAgent(BaseModel):
+    calculation_required: bool
+    web_search_required: bool
+    company_query: bool = Field(
+        description="Is it a question about finance / strategy / risk / ESG for a company?"
+    )
+    complex_question: bool = Field(
+        description="Is it a complex question that requires multiple steps to answer? "
+    )
+    context_rich_agent_request: str = Field(
+        "",
+        description="If any of the above is true, summarise the conversation into a context-rich request for the agent. "
+        "Otherwise, leave this field empty. ",
+    )
+    # Temporarily not supporting this yet
+    # action_needed: bool = Field(
+    #     description="Does the question require an action to be taken, such as setting reminder, sending email, etc.? "
+    # )
+
+
 class RequestValidation(BaseModel):
     user_request_fulfilled: bool = Field(
         description="Based on the executed tasks, has the user request been fulfilled, and all user questions completely answered? "
@@ -43,5 +63,6 @@ class RequestResponse(BaseModel):
         "This must be simply a rephrase of the outcome of the final task completed. "
         "Do not include the workings as that is already stated in the workings section "
         "(unless the answer format specifically needs information from the workings, then compile what ever is required). "
-        "No new information is allowed to be introduced at this point."
+        "No new information is allowed to be introduced at this point. "
+        "Where citations are available, you must aggressively use inline citations where possible."
     )

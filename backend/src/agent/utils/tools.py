@@ -860,7 +860,7 @@ def get_chart_readings_from_image(image: Union[Image.Image, str]) -> str:
                     },
                     {
                         "type": "image_url",
-                        "image_url": {"url": f"data:image/pgn;base64,{base64_image}"},
+                        "image_url": {"url": f"data:image/png;base64,{base64_image}"},
                     },
                 ],
             }
@@ -911,6 +911,52 @@ def get_img_breakdown(base64_image: str):
         response_format=ImageBreakdown,
     )
     return image_breakdown
+
+
+class QnA(BaseModel):
+    question: str = Field(
+        description="The question should enquire about one fact that will help answer the user's question. "
+        "It must not ask for calculations or analysis, but simple to provide a single fact."
+    )
+    answer: str = Field(
+        "",
+        description="The answer should be a single fact that comes directly from the context. "
+        "The answer must not extend on facts from the context by performing calculations or analysis. "
+        "The answer must not create facts that does not exist in the context. ",
+    )
+    citation: str = Field(
+        description="The citation must include filename andpage number where the fact was found. "
+        "If the source is from a labelled table/chart/diagram/etc, then also extend the citation with the label. "
+        "The citation must be succinct and clear for example 'santos_annual_report.pdf Table 4.1, page 12' or 'sustainability.pdf Page 36'. "
+        "Avoid unclear citation such as '7'. "
+    )
+
+
+class QnAList(BaseModel):
+    thought: str = Field(
+        description="Think through the steps that needs to be taken to answer the user's question. "
+        "Think about all information required to answer the question comprehensively even if it is not in the provided context "
+        "(note we may be able to search other parts of the document to find it). "
+        "Create a comprehensieve list of questions to represent the information required. "
+        "Those whose answer is already present in the context will appear as a question and answer pair. "
+        "The questions pending answers will also be listed."
+    )
+    answer_template: str = Field(
+        description="Pretend you cannot see the context, create a comprehensive template to answer the user's question. "
+        "It must include everything mentioned in the thought field. "
+        "The template must be comprehensive, but does not need any facts filled in. "
+        "Just leave placeholders for facts to be filled in."
+    )
+    question_answer: list[QnA] = Field(
+        description="The list of questions where the answers can already be extracted from the context. "
+        "This must completely cover every answerable component of the answer template."
+    )
+    unanswered_questions: list[str] = Field(
+        "",
+        description="The list of questions that cannot be answered by the context but is required to fill in the answer template. "
+        "This must fill in all remaining gaps from the answer template."
+        "If the answer template can be completed with the provided context, leave this field blank.",
+    )
 
 
 def search_doc(question: str, criteria, doc):
@@ -1016,49 +1062,6 @@ def search_doc(question: str, criteria, doc):
     ]
     llm = LLM(caller="tools")
 
-    class QnA(BaseModel):
-        question: str = Field(
-            description="The question should enquire about one fact that will help answer the user's question. "
-            "It must not ask for calculations or analysis, but simple to provide a single fact."
-        )
-        answer: str = Field(
-            "",
-            description="The answer should be a single fact that comes directly from the context. "
-            "The answer must not extend on facts from the context by performing calculations or analysis. "
-            "The answer must not create facts that does not exist in the context. ",
-        )
-        citation: str = Field(
-            description="The citation must include page number where the fact was found. "
-            "If the source is from a labelled table/chart/diagram/etc, then also extend the citation with the label. "
-            "The citation must be succinct and clear for example 'Table 4.1, page 12' or 'Page 36'. Avoid unclear citation such as '7'. "
-        )
-
-    class QnAList(BaseModel):
-        thought: str = Field(
-            description="Think through the steps that needs to be taken to answer the user's question. "
-            "Think about all information required to answer the question comprehensively even if it is not in the provided context "
-            "(note we may be able to search other parts of the document to find it). "
-            "Create a comprehensieve list of questions to represent the information required. "
-            "Those whose answer is already present in the context will appear as a question and answer pair. "
-            "The questions pending answers will also be listed."
-        )
-        answer_template: str = Field(
-            description="Pretend you cannot see the context, create a comprehensive template to answer the user's question. "
-            "It must include everything mentioned in the thought field. "
-            "The template must be comprehensive, but does not need any facts filled in. "
-            "Just leave placeholders for facts to be filled in."
-        )
-        question_answer: list[QnA] = Field(
-            description="The list of questions where the answers can already be extracted from the context. "
-            "This must completely cover every answerable component of the answer template."
-        )
-        unanswered_questions: list[str] = Field(
-            "",
-            description="The list of questions that cannot be answered by the context but is required to fill in the answer template. "
-            "This must fill in all remaining gaps from the answer template."
-            "If the answer template can be completed with the provided context, leave this field blank.",
-        )
-
     response = llm.get_response(
         messages=messages + extension_messages,
         model="gemini-2.5-pro",
@@ -1136,3 +1139,98 @@ def search_doc(question: str, criteria, doc):
     #     messages=messages + extension_messages, model="gemini-2.5-pro"
     # ).content
     # return response
+
+
+def get_facts_from_pdf(question: str, pdf_source: Union[str, Path]) -> str:
+    """
+    Extract facts from a PDF document to answer a specific question.
+
+    This function takes a user's question and a PDF source (local path or URL),
+    then uses LLM to extract relevant facts from the PDF in the form of
+    question-answer pairs and identifies any unanswered questions.
+
+    Parameters:
+    ----------
+    question : str
+        The user's question to be answered using the PDF content.
+    pdf_source : Union[str, Path]
+        Path to local PDF file or URL to web PDF.
+
+    Returns:
+    -------
+    str
+        A JSON string containing question-answer pairs and unanswered questions.
+    """
+    # Initialize the LLM service
+    llm = LLM(caller="tools")
+
+    # Create the prompt with the user's question on a new line with backticks
+    prompt = (
+        "Based completely on the above context, extract all the facts useful for providing a comprehensive answer to the user's question:\n"
+        f"`{question}`\n"
+        "The facts will be presented as question answer pairs."
+    )
+
+    # Get the response from the PDF using the LLM service
+    response = llm.get_response_pdf(
+        pdf_source=pdf_source, prompt=prompt, response_format=QnAList
+    )
+
+    # Return only question_answer and unanswered_questions fields
+    return response.model_dump_json(
+        include={"question_answer", "unanswered_questions"}, indent=2
+    )
+
+
+def search_web_general(query: str) -> str:
+    """
+    Searches the web using Google Search.
+    Do not use this function for document search, use `search_web_pdf` instead.
+
+    Parameters:
+    ----------
+    query : str
+        The search query or question to be answered using web search results.
+
+    Returns:
+    -------
+    str
+        Web search results.
+    """
+    llm = LLM(caller="tools")
+    return llm.search_web(query=query)
+
+
+def search_web_pdf(query: str) -> str:
+    """
+    Search for PDF documents online using Google Search.
+
+    Parameters:
+    ----------
+    query : str
+        The search query or topic to find relevant PDF documents for.
+
+    Returns:
+    -------
+    str
+        A JSON string containing structured data with PDF document information, including
+        descriptions and hyperlinks for each found document.
+    """
+
+    class PDFResult(BaseModel):
+        description: str = Field(description="Description of the PDF document")
+        hyperlink: str = Field(description="URL/hyperlink to the PDF document")
+
+    class PDFSearchResults(BaseModel):
+        requested_pdfs: list[PDFResult] = Field(
+            [],
+            description="List of PDF documents requested. If none found, leave empty.",
+        )
+        complementary_pdfs: list[PDFResult] = Field(
+            [],
+            description="If there are non-requested PDF documents that may help address the query, list them here, otherwise leave empty.",
+        )
+
+    llm = LLM(caller="tools")
+    response = llm.search_web(query=query, response_format=PDFSearchResults)
+    return response.model_dump_json(indent=2)
