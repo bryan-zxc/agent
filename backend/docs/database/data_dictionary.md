@@ -1,0 +1,202 @@
+# Data Dictionary
+
+## Table Definitions and Field Specifications
+
+### conversations
+
+Original message persistence table, now linked to router agents.
+
+| Field | Type | Constraints | Description | Business Rules |
+|-------|------|-------------|-------------|----------------|
+| id | VARCHAR(32) | PRIMARY KEY | UUID hex string | Router uses same ID for 1:1 relationship |
+| title | TEXT | | Conversation display title | Auto-generated from first user message |
+| preview | TEXT | | Short conversation summary | Truncated first message content |
+| created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Record creation time | Immutable after creation |
+| updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Last modification time | Auto-updated on changes |
+
+---
+
+### routers
+
+Router agent state and configuration persistence.
+
+| Field | Type | Constraints | Description | Business Rules |
+|-------|------|-------------|-------------|----------------|
+| router_id | VARCHAR(32) | PRIMARY KEY | UUID hex string | Matches conversation.id for 1:1 relationship |
+| status | VARCHAR(50) | NOT NULL | Router execution state | Values: active, completed, failed, archived |
+| model | VARCHAR(100) | | LLM model identifier | e.g., "gpt-4", "claude-3-sonnet" |
+| temperature | FLOAT | | LLM temperature setting | Range: 0.0-2.0, default varies by model |
+| metadata | JSON | | Extensible router attributes | Future-proofing for new router features |
+| schema_version | INTEGER | DEFAULT 1 | Table schema version | Enables migration tracking |
+| created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Record creation time | Immutable after creation |
+| updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Last modification time | Auto-updated via property setters |
+
+**Status Values:**
+- `active`: Router currently processing conversation
+- `completed`: Conversation completed successfully  
+- `failed`: Router encountered unrecoverable error
+- `archived`: Historical record, no longer active
+
+---
+
+### planners
+
+Planner agent execution plans and state management.
+
+| Field | Type | Constraints | Description | Business Rules |
+|-------|------|-------------|-------------|----------------|
+| planner_id | VARCHAR(32) | PRIMARY KEY | UUID hex string | Unique planner identifier |
+| user_question | TEXT | NOT NULL | Original user request | Immutable source of truth |
+| instruction | TEXT | | Processing instructions | Additional context for task planning |
+| execution_plan | TEXT | | Generated execution strategy | LLM-generated markdown plan |
+| model | VARCHAR(100) | | LLM model identifier | Can differ from router model |
+| temperature | FLOAT | | LLM temperature setting | Task-specific temperature |
+| failed_task_limit | INTEGER | | Max allowed task failures | Prevents infinite retry loops |
+| status | VARCHAR(50) | NOT NULL | Planner execution state | Values: planning, executing, completed, failed |
+| metadata | JSON | | Extensible planner attributes | Future enhancements |
+| schema_version | INTEGER | DEFAULT 1 | Table schema version | Migration support |
+| created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Record creation time | Immutable |
+| updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Last modification time | Auto-sync via properties |
+
+**Status Values:**
+- `planning`: Generating task breakdown
+- `executing`: Running tasks sequentially
+- `completed`: All tasks completed successfully
+- `failed`: Exceeded failure limit or unrecoverable error
+
+---
+
+### workers
+
+Task/worker execution details and lifecycle management.
+
+| Field | Type | Constraints | Description | Business Rules |
+|-------|------|-------------|-------------|----------------|
+| worker_id | VARCHAR(32) | PRIMARY KEY | UUID hex string | Links to worker_messages.agent_id |
+| planner_id | VARCHAR(32) | NOT NULL, FK | Parent planner ID | FOREIGN KEY to planners.planner_id |
+| task_status | VARCHAR(50) | NOT NULL | Task execution state | Values: pending, in_progress, completed, failed_validation, recorded |
+| task_description | TEXT | | Detailed task description | Human-readable task definition |
+| acceptance_criteria | JSON | | Success criteria list | Array of validation requirements |
+| task_context | JSON | | TaskContext pydantic model | Structured context including user_request, context, previous_outputs |
+| task_result | TEXT | | Execution outcome | Detailed result description |
+| querying_data_file | BOOLEAN | DEFAULT FALSE | Data file query flag | Determines WorkerAgent vs WorkerAgentSQL |
+| image_keys | JSON | | Relevant image identifiers | Array of image keys from planner |
+| variable_keys | JSON | | Relevant variable identifiers | Array of variable keys from planner |
+| tools | JSON | | Required tools list | Array of tool names for execution |
+| input_images | JSON | | Input image data | Key-value pairs of image identifiers and data |
+| input_variables | JSON | | Input variables | Key-value pairs of variable names and values |
+| output_images | JSON | | Generated image outputs | Key-value pairs from task execution |
+| output_variables | JSON | | Generated variable outputs | Key-value pairs from task execution |
+| tables | JSON | | TableMeta objects | Array of table metadata for data tasks |
+| metadata | JSON | | Extensible task attributes | Future enhancements |
+| schema_version | INTEGER | DEFAULT 1 | Table schema version | Migration support |
+| created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Record creation time | Immutable |
+| updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Last modification time | Auto-updated during execution |
+
+**Task Status Values:**
+- `pending`: Queued for execution (was 'new' in FullTask model)
+- `in_progress`: Currently executing
+- `completed`: Successfully completed, awaiting processing
+- `failed_validation`: Execution failed validation
+- `recorded`: Processed by planner, ready for cleanup
+
+**JSON Field Structures:**
+
+```json
+// task_context example
+{
+  "user_request": "Analyse the sales data",
+  "context": "Previous analysis showed declining Q3 trends",
+  "previous_outputs": "CSV data loaded as sales_table"
+}
+
+// acceptance_criteria example
+[
+  "Generate quarterly sales summary",
+  "Identify top 3 declining products", 
+  "Create visualisation of trends"
+]
+
+// tables example
+[
+  {
+    "table_name": "sales_data",
+    "row_count": 1500,
+    "columns": [...]
+  }
+]
+```
+
+---
+
+### router_planner_links
+
+Many-to-many relationship tracking between routers and planners.
+
+| Field | Type | Constraints | Description | Business Rules |
+|-------|------|-------------|-------------|----------------|
+| link_id | INTEGER | PRIMARY KEY AUTOINCREMENT | Unique link identifier | Auto-generated |
+| router_id | VARCHAR(32) | NOT NULL, FK | Router identifier | FOREIGN KEY to routers.router_id |
+| planner_id | VARCHAR(32) | NOT NULL, FK | Planner identifier | FOREIGN KEY to planners.planner_id |
+| relationship_type | VARCHAR(50) | NOT NULL | Link relationship type | Values: initiated, continued, forked |
+| created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Link creation time | Immutable |
+
+**Unique Constraint:** `UNIQUE(router_id, planner_id)` prevents duplicate links.
+
+**Relationship Types:**
+- `initiated`: Router created new planner
+- `continued`: Router resumed existing planner
+- `forked`: Router created planner branch
+
+---
+
+### Message Tables
+
+All message tables share identical structure for different agent types.
+
+#### router_messages, planner_messages, worker_messages
+
+| Field | Type | Constraints | Description | Business Rules |
+|-------|------|-------------|-------------|----------------|
+| message_id | INTEGER | PRIMARY KEY AUTOINCREMENT | Unique message identifier | Auto-generated |
+| agent_id | VARCHAR(32) | NOT NULL | Agent identifier | FK to respective agent table |
+| role | VARCHAR(20) | NOT NULL | Message role | Values: system, user, assistant, developer |
+| content | TEXT | | Message content | Main message text |
+| image | TEXT | | Image data/path | Base64 or file path |
+| timestamp | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Message timestamp | Chronological ordering |
+
+**Role Values:**
+- `system`: System instructions and setup
+- `user`: User input messages  
+- `assistant`: LLM responses
+- `developer`: Internal agent communication
+
+---
+
+## Field Validation Rules
+
+### ID Standards
+- All agent IDs: 32-character lowercase hexadecimal UUID
+- Generated via `uuid.uuid4().hex`
+- No hyphens, consistent format
+
+### JSON Field Validation
+- All JSON fields accept `null` values
+- Empty arrays/objects represented as `[]`/`{}`
+- Complex objects serialised via pydantic models
+
+### Timestamp Standards
+- All timestamps in UTC
+- ISO format: `YYYY-MM-DD HH:MM:SS`
+- Automatic timezone handling in application layer
+
+### Status Enumerations
+Defined in application code, enforced via business logic:
+- Router status: `['active', 'completed', 'failed', 'archived']`
+- Planner status: `['planning', 'executing', 'completed', 'failed']`  
+- Worker task_status: `['pending', 'in_progress', 'completed', 'failed_validation', 'recorded']`
+
+---
+
+**Schema Version**: 1.0  
+**Last Updated**: 2025-08-06

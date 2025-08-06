@@ -129,16 +129,21 @@ async def handle_websocket_message(websocket: WebSocket, data: dict):
                 router = RouterAgent(conversation_id=conversation_id)
                 await router.connect_websocket(websocket)
                 active_connections[conversation_id] = router
+                
+                # For new conversations, use activate_conversation
+                user_message = data.get("message", "")
+                files = data.get("files", [])
+                await router.activate_conversation(user_message, files)
             else:
                 router = active_connections[conversation_id]
                 # Update websocket connection for existing router
                 router.websocket = websocket
 
-            # Update current conversation for this session
-            user_connections[websocket]["current_conversation"] = conversation_id
+                # Update current conversation for this session
+                user_connections[websocket]["current_conversation"] = conversation_id
 
-            # Handle the message
-            await router.handle_message(data)
+                # Handle the message for existing conversations
+                await router.handle_message(data)
 
     except Exception as e:
         logger.error(f"Error handling WebSocket message: {str(e)}")

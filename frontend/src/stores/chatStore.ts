@@ -17,6 +17,7 @@ interface ChatStore {
   temperature: number;
   currentConversationId: string;
   conversations: Conversation[];
+  lockedConversations: Set<string>;
   
   // Actions
   addMessage: (message: ChatMessage) => void;
@@ -31,13 +32,16 @@ interface ChatStore {
   createNewConversation: () => Promise<string>;
   createNewConversationInBackend: () => Promise<string>;
   loadConversation: (conversationId: string, messages: ChatMessage[]) => void;
+  lockConversation: (conversationId: string) => void;
+  unlockConversation: (conversationId: string) => void;
+  isConversationLocked: (conversationId: string) => boolean;
 }
 
 const generateConversationId = () => {
   return Date.now().toString(36) + Math.random().toString(36).substr(2);
 };
 
-export const useChatStore = create<ChatStore>((set) => ({
+export const useChatStore = create<ChatStore>((set, get) => ({
   messages: [],
   status: { status: 'idle' },
   isConnected: false,
@@ -46,6 +50,7 @@ export const useChatStore = create<ChatStore>((set) => ({
   temperature: 0.7,
   currentConversationId: generateConversationId(),
   conversations: [],
+  lockedConversations: new Set(),
   
   addMessage: (message) =>
     set((state) => ({
@@ -129,4 +134,19 @@ export const useChatStore = create<ChatStore>((set) => ({
       currentConversationId: conversationId,
       messages 
     }),
+    
+  lockConversation: (conversationId) =>
+    set((state) => ({
+      lockedConversations: new Set(state.lockedConversations).add(conversationId),
+    })),
+    
+  unlockConversation: (conversationId) =>
+    set((state) => {
+      const newLockedConversations = new Set(state.lockedConversations);
+      newLockedConversations.delete(conversationId);
+      return { lockedConversations: newLockedConversations };
+    }),
+    
+  isConversationLocked: (conversationId) =>
+    get().lockedConversations.has(conversationId),
 }));

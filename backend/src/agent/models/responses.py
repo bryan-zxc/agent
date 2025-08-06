@@ -5,12 +5,10 @@ from typing import Literal
 class RequireAgent(BaseModel):
     calculation_required: bool
     web_search_required: bool
-    company_query: bool = Field(
-        description="Is it a question about finance / strategy / risk / ESG for a company?"
-    )
     complex_question: bool = Field(
         description="Is it a complex question that requires multiple steps to answer? "
     )
+    chilli_request: bool = Field(description="If help from Chilli is required")
     context_rich_agent_request: str = Field(
         "",
         description="If any of the above is true, summarise the conversation into a context-rich request for the agent. "
@@ -23,13 +21,19 @@ class RequireAgent(BaseModel):
 
 
 class RequestValidation(BaseModel):
+    acceptance_criteria_satisfied: str = Field(
+        description="List the acceptance criteria that has been satisfied and why."
+    )
+    acceptance_criteria_not_satisfied: str = Field(
+        description="List the acceptance criteria that has not been satisfied and why."
+    )
     user_request_fulfilled: bool = Field(
-        description="Based on the executed tasks, has the user request been fulfilled, and all user questions completely answered? "
-        "Only use True if we are ready to provide a finalised response to the user. "
+        description="Based on the executed tasks, has the acceptance criteria all completely been satisfied such that the user request is fulfilled, and user question is completely answered? "
+        "Only use True if all acceptance criteria are a pass and we are ready to provide a finalised response to the user. "
         "If a task was completed due to repeated failure with no change in process, then immediately set this field to True which will end the process to avoid being stuck in an infinite loop of failure."
     )
     progress_summary: str = Field(
-        description="Provide a summary of the tasks that has been completed, and describe the next task in line with the instructions. "
+        description="Provide a summary of the tasks that has been completed, and describe which acceptance criteria have not been met, and should therefore be the focus of the next steps. "
         "This field should only be populated if user_request_fulfilled is False."
     )
 

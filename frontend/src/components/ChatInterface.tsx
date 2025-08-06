@@ -16,7 +16,7 @@ import { cn } from '@/lib/utils';
 import { ChatMessage } from '../../../shared/types';
 
 export const ChatInterface: React.FC = () => {
-  const { messages, status, currentConversationId, createNewConversationInBackend, createNewConversation, setCurrentConversation, addMessage } = useChatStore();
+  const { messages, status, currentConversationId, createNewConversationInBackend, createNewConversation, setCurrentConversation, addMessage, isConversationLocked } = useChatStore();
   console.log('ChatInterface render - currentConversationId:', currentConversationId);
   const [conversationStarted, setConversationStarted] = useState(false);
   const [pendingConversationId, setPendingConversationId] = useState<string | null>(null);
@@ -82,56 +82,23 @@ export const ChatInterface: React.FC = () => {
         }
       }
 
-      // Activate conversation with first message
-      console.log('Activating conversation...');
-      const activateResponse = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/conversations/${newConversationId}/activate`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          message: message,
-          files: filePaths,
-        }),
-      });
+      // Wait for WebSocket connection before sending message
+      console.log('Waiting for WebSocket connection...');
+      await waitForWebSocketConnection();
+      console.log('WebSocket connection ready!');
 
-      if (!activateResponse.ok) {
-        throw new Error('Failed to activate conversation');
-      }
-
-      const activateResult = await activateResponse.json();
+      // Send first message via WebSocket instead of REST API
+      console.log('Sending first message via WebSocket...');
+      sendMessage(message, filePaths, newConversationId);
       
-      // Add the user's message to the UI
-      const userMessage: ChatMessage = {
-        id: Date.now().toString(),
-        message: message,
-        sender: 'user',
-        timestamp: new Date(),
-      };
-      addMessage(userMessage);
-
-      // Add the assistant's response to the UI
-      if (activateResult.response) {
-        const assistantMessage: ChatMessage = {
-          id: (Date.now() + 1).toString(),
-          message: activateResult.response,
-          sender: 'assistant',
-          timestamp: new Date(),
-        };
-        addMessage(assistantMessage);
-        
-        // Trigger title update asynchronously (fire and forget)
+      // Trigger title update asynchronously (fire and forget)
+      setTimeout(() => {
         fetch(`${process.env.NEXT_PUBLIC_API_URL}/conversations/${newConversationId}/update-title`, {
           method: 'POST',
         }).catch(error => {
           console.warn('Failed to update conversation title:', error);
         });
-      }
-
-      // Wait for WebSocket connection
-      console.log('Waiting for WebSocket connection...');
-      await waitForWebSocketConnection();
-      console.log('WebSocket connection ready!');
+      }, 2000); // Wait 2 seconds for the conversation to be established
       
       // Trigger sidebar refresh to show new conversation
       setRefreshTrigger(prev => prev + 1);
@@ -254,8 +221,9 @@ export const ChatInterface: React.FC = () => {
                 <div className="flex-shrink-0 bg-background/95 backdrop-blur-sm border-t">
                   <MessageInput 
                     onSubmit={handleMessageSubmit}
-                    disabled={!wsConnected}
+                    disabled={!wsConnected || isConversationLocked(currentConversationId)}
                     className="border-0 bg-transparent"
+                    placeholder={isConversationLocked(currentConversationId) ? "Processing... Please wait" : "Type your message... (Enter to send, Shift+Enter for new line)"}
                   />
                 </div>
               </div>

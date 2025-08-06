@@ -35,8 +35,8 @@ RUN mkdir -p uploads
 # Set Python path
 ENV PYTHONPATH=/app/src
 
-# Expose port
-EXPOSE 8000
+# Expose ports
+EXPOSE 8000 8888
 
 # Run the application
 CMD ["uv", "run", "python", "main.py"]

@@ -3,9 +3,10 @@ import uuid
 from pathlib import Path
 from typing import Union, List, Dict, Any
 from PIL import Image
+from datetime import datetime, timezone
 from ..services.llm_service import LLM
 from ..utils.tools import encode_image, decode_image
-from ..models.message_db import MessageDatabase, AgentType
+from ..models.agent_database import AgentDatabase, AgentType, Router, Planner, Worker
 
 
 # Set up logging
@@ -16,16 +17,39 @@ class BaseAgent:
     def __init__(self, id: str = None, agent_type: AgentType = None):
         # Use the class name as the caller for LLM usage tracking
         self.llm = LLM(caller=self.__class__.__name__)
+        
         if id:
             self.id = id
+            self._init_by_id = True
         else:
             self.id = uuid.uuid4().hex
+            self._init_by_id = False
 
         self.agent_type = agent_type
-        self._message_db = MessageDatabase()
+        self._agent_db = AgentDatabase()
 
         # Initialize messages property to use database
         self._messages_cache = None
+    
+    # Common agent properties with database sync
+    
+    @property
+    def model(self):
+        return getattr(self, '_model', None)
+    
+    @model.setter
+    def model(self, value):
+        self._model = value
+        self.update_agent_state(model=value)
+    
+    @property  
+    def temperature(self):
+        return getattr(self, '_temperature', None)
+    
+    @temperature.setter
+    def temperature(self, value):
+        self._temperature = value
+        self.update_agent_state(temperature=value)
 
     @property
     def messages(self) -> List[Dict[str, Any]]:
@@ -36,7 +60,7 @@ class BaseAgent:
                 self._fallback_messages = []
             return self._fallback_messages
 
-        return self._message_db.get_messages(self.agent_type, self.id)
+        return self._agent_db.get_messages(self.agent_type, self.id)
 
     @messages.setter
     def messages(self, value: List[Dict[str, Any]]):
@@ -45,9 +69,9 @@ class BaseAgent:
             self._fallback_messages = value
         else:
             # Clear existing messages and add new ones
-            self._message_db.clear_messages(self.agent_type, self.id)
+            self._agent_db.clear_messages(self.agent_type, self.id)
             for msg in value:
-                self._message_db.add_message(
+                self._agent_db.add_message(
                     self.agent_type, self.id, msg["role"], msg["content"]
                 )
 
@@ -117,4 +141,42 @@ class BaseAgent:
             self._fallback_messages.append({"role": role, "content": content})
         else:
             # Store in database
-            self._message_db.add_message(self.agent_type, self.id, role, content)
+            self._agent_db.add_message(self.agent_type, self.id, role, content)
+    
+    # Agent State Management
+    
+    def update_agent_state(self, **kwargs):
+        """Update any agent state fields dynamically"""
+        if not kwargs or not self.agent_type:
+            return
+            
+        # Always update the updated_at timestamp
+        kwargs['updated_at'] = datetime.now(timezone.utc)
+        
+        # Build dynamic update query
+        with self._agent_db.SessionLocal() as session:
+            # Get the appropriate model class and ID field
+            model_mapping = {
+                "router": (Router, 'router_id'),
+                "planner": (Planner, 'planner_id'),
+                "worker": (Worker, 'worker_id')
+            }
+            
+            if self.agent_type not in model_mapping:
+                return
+                
+            model_class, id_field = model_mapping[self.agent_type]
+            
+            # Get the existing record
+            record = session.query(model_class).filter(
+                getattr(model_class, id_field) == self.id
+            ).first()
+            
+            if record:
+                # Update all provided fields
+                for field, value in kwargs.items():
+                    if hasattr(record, field):
+                        setattr(record, field, value)
+                
+                session.commit()
+    

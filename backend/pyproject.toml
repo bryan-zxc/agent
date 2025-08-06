@@ -33,3 +33,12 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 agent = ["*.json", "*.yaml", "*.yml"]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=6.30.0",
+    "jupyter>=1.1.1",
+    "jupyterlab>=4.0.0",
+    "notebook>=7.0.0",
+    "pyzmq>=27.0.0",
+]

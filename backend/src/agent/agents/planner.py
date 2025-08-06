@@ -3,8 +3,9 @@ import logging
 import duckdb
 import re
 from pathlib import Path
-from typing import Union
+from typing import Union, Optional
 from PIL import Image
+from datetime import datetime
 from ..core.base import BaseAgent
 from ..config.settings import settings
 from .worker import WorkerAgent, WorkerAgentSQL
@@ -19,6 +20,8 @@ from ..models import (
     TableMeta,
     ColumnMeta,
 )
+
+
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -91,64 +94,146 @@ def clean_column_name(input_string: str, i: int, all_cols: list[str]):
         return f"{cleaned}_"
 
 
-class TaskQueue:
-    def __init__(self):
-        self.planned_tasks = []
-        self.loaded_tasks = []
-        self.completed_tasks = []
-        self.workers = {}
-
-    async def load_plan(
-        self, tasks: list[FullTask], duck_conn: duckdb.DuckDBPyConnection
-    ):
-        self.duck_conn = duck_conn
-        self.planned_tasks = tasks
-        await self.load_task(tasks[0])
-        # TODO: add ability to catch already completed tasks and not load
-
-    async def load_task(self, task: FullTask):
-        self.loaded_tasks.append(task)
-        await self.execute_task(task)
-
-    async def execute_task(self, task: FullTask):
-        # initiate worker
-        worker = (
-            WorkerAgentSQL(task=task, duck_conn=self.duck_conn)
-            if task.querying_data_file
-            else WorkerAgent(task=task)
+class TaskManager:
+    def __init__(self, planner_id: str, agent_db):
+        self.planner_id = planner_id
+        self.agent_db = agent_db
+    
+    async def queue_single_task(self, task) -> str:
+        """Queue a single FullTask to database and return worker_id"""
+        # task is already a FullTask, use it directly
+        worker_id = task.task_id
+        
+        # Create worker record in database
+        self.agent_db.create_worker(
+            worker_id=worker_id,
+            planner_id=self.planner_id,
+            task_data=task
         )
-        self.workers[task.task_id] = worker
-        await worker.invoke()
-        # Move completed task to completed_tasks list
-        self.completed_tasks.append(task)
-        # Remove from loaded_tasks
-        self.loaded_tasks = [t for t in self.loaded_tasks if t.task_id != task.task_id]
+        
+        logger.info(f"Queued task {worker_id} for planner {self.planner_id}")
+        return worker_id
+    
+    async def get_current_task(self) -> Optional[str]:
+        """Get worker_id of current pending task"""
+        workers = self.agent_db.get_workers_by_planner(self.planner_id)
+        for worker in workers:
+            if worker['task_status'] == 'pending':
+                return worker['worker_id']
+        return None
+    
+    async def execute_current_task(self, duck_conn=None) -> bool:
+        """Execute the current pending task and return success status"""
+        current_task_id = await self.get_current_task()
+        if not current_task_id:
+            return False
+        
+        # Update task status to in_progress
+        self.agent_db.update_worker_status(current_task_id, "in_progress")
+        
+        # Get task data from database
+        worker_data = self.agent_db.get_worker(current_task_id)
+        if not worker_data:
+            logger.error(f"Could not find worker data for {current_task_id}")
+            return False
+        
+        try:
+            # Create appropriate worker
+            if worker_data['querying_data_file']:
+                worker = WorkerAgentSQL(
+                    id=current_task_id,
+                    planner_id=self.planner_id,
+                    duck_conn=duck_conn
+                )
+            else:
+                worker = WorkerAgent(
+                    id=current_task_id,
+                    planner_id=self.planner_id
+                )
+            
+            # Execute the worker
+            await worker.invoke()
+            
+            # Worker will update its own status during execution
+            logger.info(f"Task {current_task_id} execution completed")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Task {current_task_id} execution failed: {e}")
+            self.agent_db.update_worker_status(current_task_id, "failed_validation")
+            return False
+    
+    async def get_completed_task(self) -> Optional[FullTask]:
+        """Get a completed task that needs recording"""
+        workers = self.agent_db.get_workers_by_planner(self.planner_id)
+        
+        for worker in workers:
+            if worker['task_status'] in ['completed', 'failed_validation']:
+                # Convert from database format back to FullTask
+                return FullTask(
+                    task_id=worker['worker_id'],
+                    task_status=worker['task_status'],
+                    task_description=worker['task_description'],
+                    acceptance_criteria=worker['acceptance_criteria'],
+                    task_context=worker['task_context'],
+                    task_result=worker['task_result'],
+                    querying_data_file=worker['querying_data_file'],
+                    image_keys=worker['image_keys'],
+                    variable_keys=worker['variable_keys'],
+                    tools=worker['tools'],
+                    input_images=worker['input_images'],
+                    input_variables=worker['input_variables'],
+                    output_images=worker['output_images'],
+                    output_variables=worker['output_variables'],
+                    tables=worker['tables']
+                )
+        return None
+    
+    async def mark_task_recorded(self, task_id: str):
+        """Mark task as recorded after planner processes it"""
+        self.agent_db.update_worker_status(task_id, "recorded")
+    
+    async def has_pending_tasks(self) -> bool:
+        """Check if there are any pending tasks"""
+        return await self.get_current_task() is not None
+    
+    async def recover_from_restart(self) -> Optional[str]:
+        """Recover any in-progress task from previous session"""
+        workers = self.agent_db.get_workers_by_planner(self.planner_id)
+        for worker in workers:
+            if worker['task_status'] == 'in_progress':
+                logger.info(f"Found interrupted task {worker['worker_id']}, marking as pending for retry")
+                # Reset to pending for retry
+                self.agent_db.update_worker_status(worker['worker_id'], "pending")
+                return worker['worker_id']
+        return None
 
 
 class PlannerAgent(BaseAgent):
     def __init__(
         self,
-        user_question: str,
+        id: str = None,
+        user_question: str = None,
         instruction: str = None,
         files: list[File] = None,
         model: str = settings.planner_model,
         temperature: float = 0,
         failed_task_limit: int = settings.failed_task_limit,
     ):
-        super().__init__(agent_type="planner")
-        self.add_message(
-            role="system",
-            content="You are an expert planner. Your objective is to break down the user's instruction into a list of tasks that can be individually executed.",
-        )
-        self.task_queue = TaskQueue()
-        self.model = model
-        self.temperature = temperature
-        self.instruction = instruction
+        super().__init__(id=id, agent_type="planner")
+        
+        state = self._agent_db.get_planner(self.id) if self._init_by_id else None
+        if state:
+            self._load_existing_state(state)
+        else:
+            self._create_new_planner(user_question, instruction, model, temperature, failed_task_limit)
+        
+        # Initialize planner-specific attributes (both new and existing)
+        self.task_manager = TaskManager(planner_id=self.id, agent_db=self._agent_db)
         self.files = files
         self.images = {}
         self.variables = {}
         self.failed_task = []
-        self.failed_task_limit = failed_task_limit
         self.user_response = RequestResponse(workings=[], markdown_response="")
         self.duck_conn = None
         self.tables = []
@@ -180,94 +265,183 @@ class PlannerAgent(BaseAgent):
                     pass
 
         self.context_message_len = len(self.messages)
-        self.add_message(role="user", content=user_question)
-
+        if not state:
+            self.add_message(role="user", content=user_question)
+        logger.debug(f"Planner {self.id}\nuser question: {self.user_question}")
+        logger.debug(f"Planner {self.id}\ninstruction: {self.instruction}")
+    def _load_existing_state(self, state):
+        """Load planner-specific state from database"""
+        self._user_question = state['user_question']
+        self._instruction = state['instruction']
+        self._model = state['model']
+        self._temperature = state['temperature']
+        self._failed_task_limit = state['failed_task_limit']
+        self._status = state['status']
+        self._execution_plan = state['execution_plan'] or ""
+    
+    def _create_new_planner(self, user_question, instruction, model, temperature, failed_task_limit):
+        """Create new planner with database record and initial setup"""
+        # Create database record first
+        self._agent_db.create_planner(
+            planner_id=self.id,
+            user_question=user_question or "",
+            instruction=instruction or "",
+            model=model,
+            temperature=temperature,
+            failed_task_limit=failed_task_limit,
+            status="planning"
+        )
+        # Set private attributes
+        self._user_question = user_question or ""
+        self._instruction = instruction or ""
+        self._model = model
+        self._temperature = temperature
+        self._failed_task_limit = failed_task_limit
+        self._status = "planning"
+        self._execution_plan = ""
+        
+        # Add system message for new planners only
+        self.add_message(
+            role="system",
+            content="You are an expert planner. Your objective is to break down the user's instruction into a list of tasks that can be individually executed.",
+        )
+    
+    # Planner-specific properties with auto-sync
+    
+    @property
+    def user_question(self):
+        return getattr(self, '_user_question', '')
+    
+    @user_question.setter
+    def user_question(self, value):
+        self._user_question = value
+        self.update_agent_state(user_question=value)
+    
+    @property
+    def instruction(self):
+        return getattr(self, '_instruction', '')
+    
+    @instruction.setter
+    def instruction(self, value):
+        self._instruction = value
+        self.update_agent_state(instruction=value)
+    
+    @property
+    def status(self):
+        return getattr(self, '_status', 'planning')
+    
+    @status.setter
+    def status(self, value):
+        self._status = value
+        self.update_agent_state(status=value)
+    
+    @property
+    def execution_plan(self):
+        return getattr(self, '_execution_plan', '')
+    
+    @execution_plan.setter
+    def execution_plan(self, value):
+        self._execution_plan = value
+        self.update_agent_state(execution_plan=value)
+    
+    @property
+    def failed_task_limit(self):
+        return getattr(self, '_failed_task_limit', settings.failed_task_limit)
+    
+    @failed_task_limit.setter
+    def failed_task_limit(self, value):
+        self._failed_task_limit = value
+        self.update_agent_state(failed_task_limit=value)
+    
     async def invoke(self):
+        # Step 1: Check for restart recovery first
+        await self.task_manager.recover_from_restart()
+        
         while True:
-            tools_text = "\n\n---\n\n".join(
-                [f"# {name}\n{tool.__doc__}" for name, tool in TOOLS.items()]
-            )
-            appending_msgs = [
-                {
-                    "role": "developer",
-                    "content": f"You can use the following tools:\n\n{tools_text}",
-                }
-            ]
-            if self.images:
-                appending_msgs.append(
-                    {
-                        "role": "developer",
-                        "content": f"The following image keys are available for use: {list(self.images.keys())}",
-                    }
+            # Step 2: Check if we have pending/in-progress work from restart
+            if await self.task_manager.has_pending_tasks():
+                logger.info("Found pending task, resuming execution")
+            else:
+                # Step 3: Generate new tasks from LLM
+                tools_text = "\n\n---\n\n".join(
+                    [f"# {name}\n{tool.__doc__}" for name, tool in TOOLS.items()]
                 )
-            if self.variables:
-                appending_msgs.append(
+                appending_msgs = [
                     {
                         "role": "developer",
-                        "content": f"The following variable keys are available for use: {list(self.variables.keys())}",
+                        "content": f"You can use the following tools:\n\n{tools_text}",
                     }
-                )
-            if self.instruction:
+                ]
+                if self.images:
+                    appending_msgs.append(
+                        {
+                            "role": "developer",
+                            "content": f"The following image keys are available for use: {list(self.images.keys())}",
+                        }
+                    )
+                if self.variables:
+                    appending_msgs.append(
+                        {
+                            "role": "developer",
+                            "content": f"The following variable keys are available for use: {list(self.variables.keys())}",
+                        }
+                    )
+                if self.instruction:
+                    appending_msgs.append(
+                        {
+                            "role": "developer",
+                            "content": f"Here is the instruction:\n\n{self.instruction}\n\n"
+                            "Some parts of the instructions may have already been performed, "
+                            "just ignore them and produce a list of subsequent tasks to proceed with.",
+                        }
+                    )
+
+                # Add today's date
+                today_date = datetime.now().strftime("%d %b %Y")
                 appending_msgs.append(
                     {
                         "role": "developer",
-                        "content": f"Here is the instruction:\n\n{self.instruction}\n\n"
-                        "Some parts of the instructions may have already been performed, "
-                        "just ignore them and produce a list of subsequent tasks to proceed with.",
+                        "content": f"Today's date is {today_date}.",
                     }
                 )
 
-            tasks = await self.llm.a_get_response(
-                messages=self.messages + appending_msgs,
-                model=self.model,
-                temperature=self.temperature,
-                response_format=Tasks,
-            )
-            # plan_validation = await self.llm.a_get_response(
-            #     messages=self.messages
-            #     + [
-            #         {
-            #             "role": "system",
-            #             "content": f"The following image keys are available for use: {self.images.keys()}",
-            #         },
-            #         {
-            #             "role": "assistant",
-            #             "content": f"Assess the following task:\n{tasks.tasks[0].model_dump_json()}",
-            #         },
-            #     ],
-            #     model=self.model,
-            #     temperature=self.temperature,
-            #     response_format=PlanValidation,
-            # )
-            # if (
-            #     not plan_validation.is_context_sufficient
-            #     or not plan_validation.is_acceptance_criteria_complete
-            # ):
-            #     # Update the task with the additional context and criteria
-            #     tasks.tasks[0] = plan_validation.updated_task
-            # print(tasks.model_dump_json(indent=2), flush=True)
-            logger.info(f"Tasks: {tasks.model_dump_json(indent=2)}")
-            fulltasks = [
-                FullTask(
-                    **task.model_dump(),
+                tasks = await self.llm.a_get_response(
+                    messages=self.messages + appending_msgs,
+                    model=self.model,
+                    temperature=self.temperature,
+                    response_format=Tasks,
+                )
+                
+                logger.info(f"Tasks: {tasks.model_dump_json(indent=2)}")
+                
+                # Step 4: Queue ONLY the first task
+                first_task = tasks.tasks[0]
+                fulltask = FullTask(
+                    **first_task.model_dump(),
                     task_id=uuid.uuid4().hex,
                     input_images={
                         image_key: self.images.get(image_key)
-                        for image_key in task.image_keys
+                        for image_key in first_task.image_keys
                         if self.images.get(image_key)
                     },
                     input_variables={
                         variable_key: self.variables.get(variable_key)
-                        for variable_key in task.variable_keys
+                        for variable_key in first_task.variable_keys
                         if self.variables.get(variable_key)
                     },
                     tables=self.tables,
                 )
-                for task in tasks.tasks
-            ]
-            await self.task_queue.load_plan(tasks=fulltasks, duck_conn=self.duck_conn)
+                
+                await self.task_manager.queue_single_task(fulltask)
+            
+            # Step 5: Execute current task (whether from restart or newly created)
+            success = await self.task_manager.execute_current_task(duck_conn=self.duck_conn)
+            if not success:
+                logger.error("Task execution failed, breaking loop")
+                break
+            
+            # Step 6: assess_completion handles task processing and marking as recorded
             request_validation = await self.assess_completion()
-            # print(request_validation.model_dump_json(indent=2))
             logger.debug(
                 f"Request validation: {request_validation.model_dump_json(indent=2)}"
             )
@@ -302,25 +476,31 @@ class PlannerAgent(BaseAgent):
             raise ValueError("Either image or encoded_image must be provided.")
 
     async def assess_completion(self):
-        for t in self.task_queue.completed_tasks:
-            if t.task_status != "recorded":
-                if t.task_status == "completed":
-                    # Add a message to the conversation history about the completed task
-                    self.add_message(
-                        role="system",
-                        content=f"Task {t.task_id} has been completed:\n"
-                        f"Task context:\n{t.task_context.context}\n\n"
-                        f"Task description:\n{t.task_description}\n\n"
-                        f"Acceptance criteria:\n{t.acceptance_criteria}\n\n"
-                        f"Task result:\n{t.task_result}",
-                    )
-                    t.task_status = "recorded"
-                    for image_key, image in t.output_images.items():
-                        self.load_image(encoded_image=image, image_name=image_key)
-                    for variable_key, variable in t.output_variables.items():
-                        self.variables[variable_key] = variable
-                if t.task_status == "failed validation":
-                    self._process_failed_task(t)
+        # Get completed tasks from database that need recording
+        result = await self.task_manager.get_completed_task()
+        if result:
+            if result.task_status == "completed":
+                # Add a message to the conversation history about the completed task
+                self.add_message(
+                    role="developer",
+                    content=f"Task {result.task_id} has been completed:\n"
+                    f"Task context:\n{result.task_context.context}\n\n"
+                    f"Task description:\n{result.task_description}\n\n"
+                    f"Acceptance criteria:\n{result.acceptance_criteria}\n\n"
+                    f"Task result:\n{result.task_result}",
+                )
+                
+                # Process output images and variables
+                for image_key, image in result.output_images.items():
+                    self.load_image(encoded_image=image, image_name=image_key)
+                for variable_key, variable in result.output_variables.items():
+                    self.variables[variable_key] = variable
+                    
+            elif result.task_status == "failed_validation":
+                await self._process_failed_task(result)
+            
+            # Mark task as recorded in database
+            await self.task_manager.mark_task_recorded(result.task_id)
 
         if len(self.failed_task) >= self.failed_task_limit:
             self.add_message(
@@ -340,26 +520,29 @@ class PlannerAgent(BaseAgent):
             + [
                 {
                     "role": "developer",
-                    "content": f"For context, the full set of instructions are:\n\n{self.instruction}",
+                    "content": f"For context, the full set of instructions are:\n\n{self.instruction}\n\n"
+                    "Determine if the user request has been fulfilled based on the original request and instructions.",
                 }
             ],
             model=self.model,
             temperature=self.temperature,
             response_format=RequestValidation,
         )
+        logger.debug(
+            f"Planner {self.id} request validation:\n\n{request_validation.model_dump_json(indent=2)}"
+        )
         return request_validation
 
     async def _process_failed_task(self, t: FullTask):
         # Add a message to the conversation history about the failed task
         self.add_message(
-            role="system",
+            role="developer",
             content=f"Task {t.task_id} was actioned but did not pass validation:\n"
             f"Task context:\n{t.task_context.context}\n\n"
             f"Task description:\n{t.task_description}\n\n"
             f"Acceptance criteria:\n{t.acceptance_criteria}\n\n"
             f"Task result:\n{t.task_result}",
         )
-        t.task_status = "recorded"
         self.failed_task.append(t.task_description)
 
     def get_table_metadata(self, table_name: str) -> TableMeta:
@@ -377,7 +560,6 @@ class PlannerAgent(BaseAgent):
 
         # Get column names and types
         columns_info = self.duck_conn.sql(f"DESCRIBE {table_name}").fetchall()
-        columns_orig = [col[0] for col in columns_info]
         columns_new = []
         column_metas = []
         for i, col in enumerate(columns_info):

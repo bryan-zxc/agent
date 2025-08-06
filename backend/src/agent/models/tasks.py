@@ -35,6 +35,14 @@ class TaskContext(BaseModel):
 
 
 class Task(BaseModel):
+    image_keys: list[str] = Field(
+        [],
+        description="List of images keys that can be used to identify images relevant to the task.",
+    )
+    variable_keys: list[str] = Field(
+        [],
+        description="List of variable keys that can be used to identify variables relevant to the task.",
+    )
     task_context: TaskContext
     task_description: str = Field(
         description="A detailed description of the action that needs to be performed."
@@ -44,15 +52,8 @@ class Task(BaseModel):
         "Note: never save anything to file, for example if images need to be produced, they should be outputed as variables."
     )
     querying_data_file: bool = Field(
-        description="Does the task require querying a data file (for example csv file)?"
-    )
-    image_keys: list[str] = Field(
-        [],
-        description="List of images keys that can be used to identify images relevant to the task.",
-    )
-    variable_keys: list[str] = Field(
-        [],
-        description="List of variable keys that can be used to identify variables relevant to the task.",
+        description="Does the task require querying a data file (for example csv file)? "
+        "Files like pdf and word documents are not considered data files, they are considered documents."
     )
     tools: list[tools_type] = Field(
         [],
@@ -62,7 +63,7 @@ class Task(BaseModel):
 
 class FullTask(Task):
     task_id: str
-    task_status: Literal["new", "completed", "failed validation", "recorded"] = "new"
+    task_status: Literal["pending", "in_progress", "completed", "failed_validation", "recorded"] = "pending"
     task_result: str = ""
     input_images: dict = {}
     input_variables: dict = {}

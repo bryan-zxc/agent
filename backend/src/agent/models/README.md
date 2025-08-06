@@ -4,8 +4,8 @@ Pydantic data models and schemas that define the structure of data throughout th
 
 ## Modules
 
-### `message_db.py`
-Database models and service for agent message persistence.
+### `agent_database.py`
+Database models and service for agent message persistence and state management.
 
 #### Database Models
 
@@ -45,8 +45,8 @@ Database models and service for agent message persistence.
 
 #### Service Class
 
-**`MessageDatabase`**
-- Unified database service for all agent types
+**`AgentDatabase`**
+- Unified database service for all agent types and state management
 - **Methods:**
   - `add_message(agent_type, agent_id, role, content)`: Store message
   - `get_messages(agent_type, agent_id)`: Retrieve conversation history
@@ -246,9 +246,9 @@ Task definition and execution models.
 
 ### Database Operations
 ```python
-from agent.models.message_db import MessageDatabase
+from agent.models.agent_database import AgentDatabase
 
-db = MessageDatabase()
+db = AgentDatabase()
 
 # Store conversation message
 db.add_message("router", "conversation-123", "user", "Hello!")

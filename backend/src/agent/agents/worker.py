@@ -25,6 +25,124 @@ def convert_result_to_str(result: TaskResult) -> str:
 
 
 class BaseWorkerAgent(BaseAgent):
+    def __init__(
+        self,
+        task: FullTask = None,
+        id: str = None,
+        planner_id: str = None,
+        max_retry: int = settings.max_retry_tasks,
+        model: str = settings.worker_model,
+        temperature: float = 0,
+    ):
+        # Use task.task_id as ID if task provided, otherwise use provided ID
+        worker_id = task.task_id if task else id
+        super().__init__(id=worker_id, agent_type="worker")
+        
+        # Initialize or load worker state
+        state = self._agent_db.get_worker(self.id) if self._init_by_id else None
+        if state:
+            self._load_existing_state(state)
+        else:
+            self._create_new_worker(task, planner_id, max_retry, model, temperature)
+        
+        # Only set up messages for new workers
+        if not state:
+            self._setup_worker_messages()
+    
+    def _load_existing_state(self, state):
+        """Load worker-specific state from database"""
+        # Reconstruct FullTask from database state
+        self.task = FullTask(
+            task_id=state['worker_id'],
+            task_status=state['task_status'],
+            task_description=state['task_description'],
+            acceptance_criteria=state['acceptance_criteria'],
+            task_context=state['task_context'],
+            task_result=state['task_result'],
+            querying_data_file=state['querying_data_file'],
+            image_keys=state['image_keys'] or [],
+            variable_keys=state['variable_keys'] or [],
+            tools=state['tools'] or [],
+            input_images=state['input_images'] or {},
+            input_variables=state['input_variables'] or {},
+            output_images=state['output_images'] or {},
+            output_variables=state['output_variables'] or {},
+            tables=state['tables'] or []
+        )
+        self._max_retry = state.get('max_retry', settings.max_retry_tasks)
+        self._model = state.get('model', settings.worker_model)
+        self._temperature = state.get('temperature', 0.0)
+        self._planner_id = state['planner_id']
+    
+    def _create_new_worker(self, task, planner_id, max_retry, model, temperature):
+        """Create new worker with database record and initial setup"""
+        if not task:
+            raise ValueError("Task must be provided for new workers")
+        if not planner_id:
+            raise ValueError("Planner ID must be provided for new workers")
+            
+        # Store task as instance variable
+        self.task = task
+        
+        # Create database record first - pass FullTask directly
+        self._agent_db.create_worker(
+            worker_id=self.id,
+            planner_id=planner_id,
+            task_data=task
+        )
+        
+        # Set private attributes
+        self._max_retry = max_retry
+        self._model = model
+        self._temperature = temperature
+        self._planner_id = planner_id
+    
+    def _setup_worker_messages(self):
+        """Set up initial messages for worker - to be overridden by subclasses"""
+        pass
+    
+    # Worker-specific properties with auto-sync
+    
+    @property
+    def max_retry(self):
+        return getattr(self, '_max_retry', settings.max_retry_tasks)
+    
+    @max_retry.setter
+    def max_retry(self, value):
+        self._max_retry = value
+        self.update_agent_state(max_retry=value)
+    
+    @property
+    def planner_id(self):
+        return getattr(self, '_planner_id', None)
+    
+    @planner_id.setter  
+    def planner_id(self, value):
+        self._planner_id = value
+        self.update_agent_state(planner_id=value)
+    
+    def sync_task_to_db(self):
+        """Sync all FullTask attributes to database"""
+        if not hasattr(self, 'task') or not self.task:
+            return
+            
+        self.update_agent_state(
+            task_status=self.task.task_status,
+            task_description=self.task.task_description,
+            acceptance_criteria=self.task.acceptance_criteria,
+            task_context=self.task.task_context,
+            task_result=self.task.task_result,
+            querying_data_file=self.task.querying_data_file,
+            image_keys=self.task.image_keys,
+            variable_keys=self.task.variable_keys,
+            tools=self.task.tools,
+            input_images=self.task.input_images,
+            input_variables=self.task.input_variables,
+            output_images=self.task.output_images,
+            output_variables=self.task.output_variables,
+            tables=self.task.tables
+        )
+
     async def _validate_result(self):
         self.add_message(
             role="developer",
@@ -48,46 +166,48 @@ class BaseWorkerAgent(BaseAgent):
                 f"Task {self.task.task_id} completed successfully. Final result:\n{self.task.task_result}"
             )
             self.task.task_status = "completed"
+            self.sync_task_to_db()
             return True
         else:
             self.task.task_result = f"{validation.validated_result.result}\n\nFailed criteria: {validation.failed_criteria}"
             self.add_message(role="assistant", content=self.task.task_result)
-            self.task.task_status = "failed validation"
             return False
 
 
 class WorkerAgent(BaseWorkerAgent):
     def __init__(
         self,
-        task: FullTask,
+        task: FullTask = None,
+        id: str = None,
+        planner_id: str = None,
         max_retry: int = settings.max_retry_tasks,
         model: str = settings.worker_model,
         temperature: float = 0,
     ):
-        super().__init__(id=task.task_id, agent_type="worker")
-        self.task = task
-        self.max_retry = max_retry
-        self.model = model
-        self.temperature = temperature
+        super().__init__(task, id, planner_id, max_retry, model, temperature)
+        
+        # Initialize WorkerAgent-specific attributes (both new and existing)
         self.output_variables = []
         self.image_descriptions = ImageDescriptions(descriptions=[])
-
+        
+    def _setup_worker_messages(self):
+        """Set up initial messages for new worker"""
         self.add_message(
-            role="developer",
-            content=f"Your goal is to perform the following task:\n{task.task_description}",
+            role="user",
+            content=f"Perform the following task:\n{self.task.task_description}",
             verbose=False,
         )
         self.add_message(
             role="developer",
-            content=f"# Context\n{task.task_context.context}\n\n"
-            f"# Previous outputs\n{task.task_context.previous_outputs}\n\n"
-            f"# Original user request\n{task.task_context.user_request}\n\n"
+            content=f"# Context\n{self.task.task_context.context}\n\n"
+            f"# Previous outputs\n{self.task.task_context.previous_outputs}\n\n"
+            f"# Original user request\n{self.task.task_context.user_request}\n\n"
             "Unless the original user request is necessary to perform the task at hand, "
             "DO NOT change the actions to be performed based on the knowledge of the original request.",
             verbose=False,
         )
-        if task.input_images:
-            for image_key, image in task.input_images.items():
+        if self.task.input_images:
+            for image_key, image in self.task.input_images.items():
                 content = [
                     {
                         "type": "image_url",
@@ -108,10 +228,12 @@ class WorkerAgent(BaseWorkerAgent):
                 )
                 self.add_message(role="user", content=content, verbose=False)
         if self.task.input_variables:
-            for variable_name, variable in task.input_variables.items():
+            for variable_name, variable in self.task.input_variables.items():
                 self.add_message(
                     role="developer",
-                    content=f"# {variable_name}\nType: {type(variable)}\n\n```\n{variable}\n```",
+                    content=f"# {variable_name}\nType: {type(variable)}\n\n"
+                    f"Length of variable: {len(str(variable))}\n\n"
+                    f"Variable content (first 10000 characters)```\n{str(variable)[:10000]}\n```",
                     verbose=False,
                 )
         if self.task.tools:
@@ -148,7 +270,6 @@ class WorkerAgent(BaseWorkerAgent):
             }
         )
         for n in range(self.max_retry):
-            # print(f"Worker {self.task.task_id} - Attempt {n + 1}", flush=True)
             logger.info(f"Worker {self.task.task_id} - Attempt {n + 1}")
             task_result = await self.llm.a_get_response(
                 messages=self.messages + appending_msgs,
@@ -156,7 +277,6 @@ class WorkerAgent(BaseWorkerAgent):
                 temperature=self.temperature,
                 response_format=TaskArtefact,
             )
-            # print(f"Task result: {task_result.model_dump_json(indent=2)}", flush=True)
             logger.debug(f"Task result: {task_result.model_dump_json(indent=2)}")
             if task_result.python_code:
                 if task_result.is_malicious:
@@ -165,7 +285,6 @@ class WorkerAgent(BaseWorkerAgent):
                         role="assistant",
                         content=f"{self.task.task_result}\nRewrite the python code to fix the error.",
                     )
-                    self.task.task_status = "failed validation"
                     continue
                 self.add_message(
                     role="assistant",
@@ -224,7 +343,6 @@ class WorkerAgent(BaseWorkerAgent):
                                     role="assistant",
                                     content=f"{self.task.task_result}\nRewrite the python code to fix the error.",
                                 )
-                                self.task.task_status = "failed validation"
                                 continue
                         else:
                             await self._process_variable(
@@ -242,7 +360,6 @@ class WorkerAgent(BaseWorkerAgent):
                         role="assistant",
                         content=f"{self.task.task_result}\n\n{sandbox_result["stack_trace"]}\n\nRewrite the python code to fix the error.",
                     )
-                    self.task.task_status = "failed validation"
 
                     class RepeatFail(BaseModel):
                         repeated_failure: bool = Field(
@@ -272,8 +389,9 @@ class WorkerAgent(BaseWorkerAgent):
                 validated = await self._validate_result()
                 if validated:
                     return
-        self.task.task_status = "failed validation"
+        self.task.task_status = "failed_validation"
         self.task.task_result = "Task failed after multiple tries."
+        self.sync_task_to_db()
 
     async def _process_image_variable(self, image: Image, variable_name: str):
         content = [{"type": "text", "text": f"Image: {variable_name}"}]
@@ -326,18 +444,21 @@ class WorkerAgent(BaseWorkerAgent):
 class WorkerAgentSQL(BaseWorkerAgent):
     def __init__(
         self,
-        task: FullTask,
-        duck_conn: duckdb.DuckDBPyConnection,
+        task: FullTask = None,
+        planner_id: str = None,
+        duck_conn: duckdb.DuckDBPyConnection = None,
+        id: str = None,
         max_retry: int = settings.max_retry_tasks,
         model: str = settings.worker_model,
         temperature: float = 0,
     ):
-        super().__init__(id=task.task_id, agent_type="worker")
-        self.task = task
-        self.max_retry = max_retry
-        self.model = model
-        self.temperature = temperature
+        super().__init__(task, id, planner_id, max_retry, model, temperature)
+        
+        # Initialize WorkerAgentSQL-specific attributes
         self.duck_conn = duck_conn
+    
+    def _setup_worker_messages(self):
+        """Set up initial messages for SQL worker"""
 
         self.add_message(
             role="system",
@@ -346,21 +467,21 @@ class WorkerAgentSQL(BaseWorkerAgent):
 
         self.add_message(
             role="developer",
-            content=f"Your goal is to perform the following task:\n{task.task_description}",
+            content=f"Your goal is to perform the following task:\n{self.task.task_description}",
             verbose=False,
         )
         self.add_message(
             role="developer",
-            content=f"# Context\n{task.task_context.context}\n\n"
-            f"# Previous outputs\n{task.task_context.previous_outputs}\n\n"
-            f"# Original user request\n{task.task_context.user_request}\n\n"
+            content=f"# Context\n{self.task.task_context.context}\n\n"
+            f"# Previous outputs\n{self.task.task_context.previous_outputs}\n\n"
+            f"# Original user request\n{self.task.task_context.user_request}\n\n"
             "Unless the original user request is necessary to perform the task at hand, "
             "DO NOT change the actions to be performed based on the knowledge of the original request.",
             verbose=False,
         )
         self.add_message(
             role="developer",
-            content=f"The files have been all transferred into the DuckDB database, below are their details:\n\n{task.model_dump_json(indent=2,include="tables")}\n\n",
+            content=f"The files have been all transferred into the DuckDB database, below are their details:\n\n{self.task.model_dump_json(indent=2,include='tables')}\n\n",
             verbose=False,
         )
 
@@ -395,8 +516,13 @@ class WorkerAgentSQL(BaseWorkerAgent):
                         role="assistant",
                         content=f"{self.task.task_result}\n\nRewrite the SQL code to fix the error.",
                     )
-                    self.task.task_status = "failed validation"
             else:
                 self.task.task_result = f"SQL code cannot be generated. {sql_artefact.reason_code_not_created}"
-                self.task.task_status = "failed validation"
+                self.task.task_status = "failed_validation"
+                self.sync_task_to_db()
                 return
+        
+        # If we reach here, all retries have been exhausted without success
+        self.task.task_status = "failed_validation"
+        self.task.task_result = "SQL task failed after multiple tries."
+        self.sync_task_to_db()

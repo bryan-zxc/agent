@@ -1232,5 +1232,13 @@ def search_web_pdf(query: str) -> str:
         )
 
     llm = LLM(caller="tools")
-    response = llm.search_web(query=query, response_format=PDFSearchResults)
-    return response.model_dump_json(indent=2)
+    response = llm.search_web(
+        query=f"Provide hyperlinks to the PDF documents for: {query}\n\n"
+        "Can include additional complementary PDFs if noticed."
+    )
+    pdf = llm.get_response(
+        messages=[{"role": "developer", "content": response}],
+        model="gpt-4.1-nano",
+        response_format=PDFSearchResults,
+    )
+    return pdf.model_dump_json(indent=2)

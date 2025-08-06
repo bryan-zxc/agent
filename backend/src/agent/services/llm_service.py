@@ -46,10 +46,10 @@ PRICING = {
     "gpt-4.1-nano-2025-04-14": {"input": 0.1, "output": 0.4},
     "gemini-2.5-pro": {
         "input_low": 1.25,  # ≤200k tokens
-        "output_low": 10.0,  # ≤200k tokens  
+        "output_low": 10.0,  # ≤200k tokens
         "input_high": 2.50,  # >200k tokens
         "output_high": 15.0,  # >200k tokens
-        "threshold": 200000  # 200k token threshold
+        "threshold": 200000,  # 200k token threshold
     },
 }
 
@@ -61,8 +61,6 @@ class RequestType(enum.Enum):
     TEXT = "text"
     TOOLS = "tools"
     STRUCTURED = "structured"
-
-
 
 
 class LLMUsage(Base):
@@ -90,7 +88,11 @@ def delay_exp(e, x):
 
 
 class LLM:
-    def __init__(self, db_path: str | Path = Path("/app/db/llm_usage.db"), caller: str = "general"):
+    def __init__(
+        self,
+        db_path: str | Path = Path("/app/db/llm_usage.db"),
+        caller: str = "general",
+    ):
         # Load settings which automatically loads .env and .env.local
         settings = AgentSettings()
 
@@ -109,7 +111,7 @@ class LLM:
 
         # Store caller for usage tracking
         self.caller = caller
-        
+
         # SQLAlchemy setup
         self.engine = create_engine(f"sqlite:///{db_path}")
         Base.metadata.create_all(self.engine)
@@ -120,7 +122,7 @@ class LLM:
     ) -> float:
         """Calculate cost based on model pricing."""
         pricing = PRICING.get(model, {"input": 0, "output": 0})
-        
+
         # Handle Gemini's tiered pricing based on input tokens only
         if model == "gemini-2.5-pro" and "threshold" in pricing:
             if input_tokens <= pricing["threshold"]:
@@ -131,9 +133,9 @@ class LLM:
                 # Use high-tier pricing
                 input_rate = pricing["input_high"]
                 output_rate = pricing["output_high"]
-            
+
             return (input_tokens * input_rate + output_tokens * output_rate) / 1000000
-        
+
         # Standard pricing for other models
         return (
             input_tokens * pricing["input"] + output_tokens * pricing["output"]
@@ -185,6 +187,16 @@ class LLM:
         """Check if model is an Anthropic model."""
         return model.startswith("sonnet") or model.startswith("claude")
 
+    def _convert_developer_to_user(self, messages: list[dict]) -> list[dict]:
+        """Convert any 'developer' roles to 'user' roles in messages."""
+        converted_messages = []
+        for message in messages:
+            converted_message = message.copy()
+            if converted_message.get("role") == "developer":
+                converted_message["role"] = "user"
+            converted_messages.append(converted_message)
+        return converted_messages
+
     def _get_anthropic_pydantic_response(
         self, messages, model, temperature, response_format: BaseModel
     ) -> BaseModel:
@@ -204,6 +216,7 @@ class LLM:
                 # Use prefill with assistant message containing "{"
                 response = self.anthropic_client.messages.create(
                     model=model,
+                    max_tokens=4096,
                     temperature=temperature,
                     messages=enhanced_messages
                     + [{"role": "assistant", "content": "{"}],
@@ -261,6 +274,10 @@ class LLM:
         response_format: BaseModel | dict = None,
         tools: list = None,
     ):
+        # Convert any developer roles to user roles for Anthropic models only
+        if self._is_anthropic_model(model):
+            messages = self._convert_developer_to_user(messages)
+        
         # Select the appropriate client based on model
         client = self._get_client_for_model(model)
         # Map to actual model name
@@ -448,21 +465,23 @@ class LLM:
     ) -> Union[str, BaseModel]:
         """
         Get response from Google Gemini with inline PDF support.
-        
+
         Args:
             pdf_source: Path to local PDF file or URL to web PDF
             prompt: Text prompt to send along with the PDF
             temperature: Temperature for response generation
             response_format: Optional Pydantic model for structured response
-            
+
         Returns:
             String response or Pydantic model instance
         """
         # Use the single Google model from MODEL_MAPPING
         model = "gemini-2.5-pro"
-        
+
         # Determine if source is URL or local file
-        if isinstance(pdf_source, str) and (pdf_source.startswith('http://') or pdf_source.startswith('https://')):
+        if isinstance(pdf_source, str) and (
+            pdf_source.startswith("http://") or pdf_source.startswith("https://")
+        ):
             # Web URL
             try:
                 pdf_data = httpx.get(pdf_source).content
@@ -474,26 +493,26 @@ class LLM:
             if not pdf_path.exists():
                 raise FileNotFoundError(f"PDF file not found: {pdf_path}")
             pdf_data = pdf_path.read_bytes()
-        
+
         # Create PDF part using inline bytes
         pdf_part = types.Part.from_bytes(
             data=pdf_data,
-            mime_type='application/pdf',
+            mime_type="application/pdf",
         )
-        
+
         # Prepare the content
         contents = [pdf_part, prompt]
-        
+
         # Configure the request
         config = {
             "temperature": temperature,
         }
-        
+
         # Add structured output configuration if response_format is provided
         if response_format:
             config["response_mime_type"] = "application/json"
             config["response_schema"] = response_format
-        
+
         try:
             # Make the request
             response = self.google_client.models.generate_content(
@@ -501,12 +520,12 @@ class LLM:
                 contents=contents,
                 config=config,
             )
-            
+
             # Track usage using usage_metadata
-            if hasattr(response, 'usage_metadata'):
+            if hasattr(response, "usage_metadata"):
                 input_tokens = response.usage_metadata.prompt_token_count
                 output_tokens = response.usage_metadata.candidates_token_count
-                
+
                 self._track_usage(
                     model=model,
                     input_tokens=input_tokens,
@@ -514,55 +533,49 @@ class LLM:
                     request_type="pdf_processing",
                 )
             else:
-                logger.warning(f"Google Gemini response missing usage_metadata for PDF processing")
+                logger.warning(
+                    f"Google Gemini response missing usage_metadata for PDF processing"
+                )
                 self._track_usage(
                     model=model,
                     input_tokens=0,
                     output_tokens=0,
                     request_type="pdf_processing",
                 )
-            
+
             # Handle structured response
             if response_format:
                 return response.parsed
-            
+
             return response.text
-            
+
         except Exception as e:
             logger.error(f"Error in get_response_pdf: {e}")
             raise
 
-    def search_web(self, query: str, temperature: float = 0, response_format: Optional[Type[BaseModel]] = None) -> Union[str, BaseModel]:
+    def search_web(self, query: str, temperature: float = 0) -> str:
         """
         Perform web search using Google's grounding tool.
-        
+
         Args:
             query: The search query
             temperature: Temperature for response generation
-            response_format: Optional Pydantic model for structured response
-            
+
         Returns:
-            String response or Pydantic model instance with grounded web search results
+            String response with grounded web search results
         """
         # Define the grounding tool
-        grounding_tool = types.Tool(
-            google_search=types.GoogleSearch()
-        )
-        
+        grounding_tool = types.Tool(google_search=types.GoogleSearch())
+
         # Configure generation settings
         config = types.GenerateContentConfig(
             tools=[grounding_tool],
             temperature=temperature,
         )
-        
-        # Add structured output configuration if response_format is provided
-        if response_format:
-            config.response_mime_type = "application/json"
-            config.response_schema = response_format
-        
+
         # Use fixed model for web search
         model = "gemini-2.5-pro"
-        
+
         try:
             # Make the request
             response = self.google_client.models.generate_content(
@@ -570,12 +583,12 @@ class LLM:
                 contents=query,
                 config=config,
             )
-            
+
             # Track usage if available
-            if hasattr(response, 'usage_metadata'):
+            if hasattr(response, "usage_metadata"):
                 input_tokens = response.usage_metadata.prompt_token_count
                 output_tokens = response.usage_metadata.candidates_token_count
-                
+
                 self._track_usage(
                     model=model,
                     input_tokens=input_tokens,
@@ -583,20 +596,18 @@ class LLM:
                     request_type="web_search",
                 )
             else:
-                logger.warning(f"Google Gemini response missing usage_metadata for web search")
+                logger.warning(
+                    f"Google Gemini response missing usage_metadata for web search"
+                )
                 self._track_usage(
                     model=model,
                     input_tokens=0,
                     output_tokens=0,
                     request_type="web_search",
                 )
-            
-            # Handle structured response
-            if response_format:
-                return response.parsed
-            
+
             return response.text
-            
+
         except Exception as e:
             logger.error(f"Error in search_web: {e}")
             raise

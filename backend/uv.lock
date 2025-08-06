@@ -30,6 +30,15 @@ dependencies = [
     { name = "websockets" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "ipykernel" },
+    { name = "jupyter" },
+    { name = "jupyterlab" },
+    { name = "notebook" },
+    { name = "pyzmq" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "anthropic", specifier = ">=0.59.0" },
@@ -49,6 +58,15 @@ requires-dist = [
     { name = "sqlalchemy", specifier = ">=2.0.41" },
     { name = "uvicorn", specifier = ">=0.35.0" },
     { name = "websockets", specifier = ">=15.0.1" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "ipykernel", specifier = ">=6.30.0" },
+    { name = "jupyter", specifier = ">=1.1.1" },
+    { name = "jupyterlab", specifier = ">=4.0.0" },
+    { name = "notebook", specifier = ">=7.0.0" },
+    { name = "pyzmq", specifier = ">=27.0.0" },
 ]
 
 [[package]]

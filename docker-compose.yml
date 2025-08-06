@@ -6,6 +6,7 @@ services:
     container_name: agent_backend
     ports:
       - "${BACKEND_PORT}:${BACKEND_PORT}"
+      - "8888:8888"
     volumes:
       - ./backend:/app
       - ./shared:/app/shared

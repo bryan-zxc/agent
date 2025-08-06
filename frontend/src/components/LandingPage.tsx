@@ -14,6 +14,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   onFirstMessage,
   isConnected,
 }) => {
+  const { currentConversationId, isConversationLocked } = useChatStore();
   return (
     <div 
       className={cn(
@@ -40,9 +41,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           <div className="bg-gray-100/70 dark:bg-gray-800/70 rounded-2xl backdrop-blur-md shadow-xl border-0">
             <MessageInput 
               onSubmit={onFirstMessage}
-              disabled={!isConnected}
+              disabled={!isConnected || isConversationLocked(currentConversationId)}
               className="border-0 bg-transparent rounded-2xl"
-              placeholder="Type your message to start a conversation..."
+              placeholder={isConversationLocked(currentConversationId) ? "Processing... Please wait" : "Type your message to start a conversation..."}
             />
           </div>
         </div>

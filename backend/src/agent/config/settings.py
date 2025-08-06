@@ -37,6 +37,17 @@ class AgentSettings(BaseSettings):
         default="sonnet-4", description="Model used by WorkerAgent"
     )
 
+    # Database Configuration
+    database_schema_version: int = Field(
+        default=1, description="Current database schema version"
+    )
+    database_auto_migrate: bool = Field(
+        default=True, description="Enable automatic database migrations"
+    )
+    database_path: str = Field(
+        default="./db/agent_database.db", description="Path to SQLite database file"
+    )
+
     # Environment
     environment: str = Field(default="development", description="Current environment")
     debug_mode: bool = Field(default=False, description="Enable debug mode")

@@ -16,7 +16,8 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   isConnected, 
   className,
 }) => {
-  const { isConnecting } = useChatStore();
+  const { isConnecting, currentConversationId, isConversationLocked } = useChatStore();
+  const isCurrentConversationLocked = isConversationLocked(currentConversationId);
   return (
     <header 
       className={cn(
@@ -56,29 +57,45 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
           </div>
         </div>
         
-        <div 
-          className={cn(
-            "flex items-center gap-2 px-3 py-1.5 rounded-full transition-colors",
-            isConnected 
-              ? "bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-400"
-              : isConnecting
-              ? "bg-yellow-50 text-yellow-700 dark:bg-yellow-900/20 dark:text-yellow-400"
-              : "bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-400"
+        <div className="flex items-center gap-2">
+          {/* Processing indicator */}
+          {isCurrentConversationLocked && (
+            <div 
+              className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-400 transition-colors"
+              role="status"
+              aria-live="polite"
+              aria-label="Processing request"
+            >
+              <Loader2 className="w-3 h-3 animate-spin" />
+              <span className="text-xs font-medium">Processing</span>
+            </div>
           )}
-          role="status"
-          aria-live="polite"
-          aria-label={`Connection status: ${isConnected ? 'Connected' : isConnecting ? 'Connecting' : 'Disconnected'}`}
-        >
-          {isConnected ? (
-            <Wifi className="w-3 h-3" />
-          ) : isConnecting ? (
-            <Loader2 className="w-3 h-3 animate-spin" />
-          ) : (
-            <WifiOff className="w-3 h-3" />
-          )}
-          <span className="text-xs font-medium">
-            {isConnected ? 'Online' : isConnecting ? 'Connecting' : 'Offline'}
-          </span>
+          
+          {/* Connection status */}
+          <div 
+            className={cn(
+              "flex items-center gap-2 px-3 py-1.5 rounded-full transition-colors",
+              isConnected 
+                ? "bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-400"
+                : isConnecting
+                ? "bg-yellow-50 text-yellow-700 dark:bg-yellow-900/20 dark:text-yellow-400"
+                : "bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-400"
+            )}
+            role="status"
+            aria-live="polite"
+            aria-label={`Connection status: ${isConnected ? 'Connected' : isConnecting ? 'Connecting' : 'Disconnected'}`}
+          >
+            {isConnected ? (
+              <Wifi className="w-3 h-3" />
+            ) : isConnecting ? (
+              <Loader2 className="w-3 h-3 animate-spin" />
+            ) : (
+              <WifiOff className="w-3 h-3" />
+            )}
+            <span className="text-xs font-medium">
+              {isConnected ? 'Online' : isConnecting ? 'Connecting' : 'Offline'}
+            </span>
+          </div>
         </div>
       </div>
     </header>

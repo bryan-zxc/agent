@@ -131,13 +131,6 @@ export const MessageList: React.FC<MessageListProps> = ({
                   {status.message || 'Thinking'}<ThinkingDots />
                 </span>
               </div>
-              
-              {/* Typing dots animation */}
-              <div className="flex space-x-1 mt-2">
-                <div className="w-1.5 h-1.5 bg-gray-500 dark:bg-gray-400 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
-                <div className="w-1.5 h-1.5 bg-gray-500 dark:bg-gray-400 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
-                <div className="w-1.5 h-1.5 bg-gray-500 dark:bg-gray-400 rounded-full animate-bounce"></div>
-              </div>
             </div>
           </article>
         )}

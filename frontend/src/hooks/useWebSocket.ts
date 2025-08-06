@@ -36,6 +36,16 @@ export const useWebSocket = (url?: string) => {
               store.updateStatus({ status: 'processing', message: data.message });
               break;
               
+            case 'message':
+              const incomingMessage: ChatMessage = {
+                id: Date.now().toString(),
+                message: data.content,
+                sender: data.role,
+                timestamp: new Date(),
+              };
+              store.addMessage(incomingMessage);
+              break;
+              
             case 'response':
               const assistantMessage: ChatMessage = {
                 id: Date.now().toString(),
@@ -70,6 +80,20 @@ export const useWebSocket = (url?: string) => {
               
             case 'error':
               store.updateStatus({ status: 'error', message: data.message });
+              break;
+              
+            case 'input_lock':
+              if (data.conversation_id) {
+                store.lockConversation(data.conversation_id);
+                console.log('Locked conversation:', data.conversation_id);
+              }
+              break;
+              
+            case 'input_unlock':
+              if (data.conversation_id) {
+                store.unlockConversation(data.conversation_id);
+                console.log('Unlocked conversation:', data.conversation_id);
+              }
               break;
               
             default:

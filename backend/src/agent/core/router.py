@@ -9,7 +9,6 @@ from ..models import File
 from ..models.responses import RequireAgent
 from ..models.schemas import SinglevsMultiRequest
 from ..services.image_service import process_image_file, is_image
-import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +34,7 @@ INSTRUCTION_LIBRARY = {
         "When compiling the final response, you must aggressively use in-line citations, and your answer should be in markdown format."
     },
     "non_file": {
-        "company_query": "You must first use search_web_pdf tool to find annual report and sustainability report, as most questions can be answered by these documents."
+        "chilli_request": "You must first use search_web_pdf tool to find annual report and sustainability report, as most questions can be answered by these documents."
         "If pdf documents are found, you must use the get_facts_from_pdf tool to extract relevant facts in the form of question answer pairs from each document until either there are no longer any unanswered questions (ie missing facts to answer the user's original question), or if there are no more documents. "
         "Questions that are still open can be searched on the web using the search_web_general tool.",
         "web_search": "You must use the search_web_general tool or the search_web_pdf tool to search the web for information that can answer the user's question. "
@@ -46,11 +45,55 @@ INSTRUCTION_LIBRARY = {
 
 class RouterAgent(BaseAgent):
     def __init__(self, conversation_id: str = None):
-        super().__init__(id=conversation_id or uuid.uuid4().hex, agent_type="router")
+        super().__init__(id=conversation_id, agent_type="router")
         self.conversation_id = self.id
         self.websocket = None
-        self.model = settings.router_model
-        self.temperature = 0.0
+        
+        if self._init_by_id:
+            # Load existing router from database
+            self._load_existing_state()
+        else:
+            # New router - create database record first
+            self._agent_db.create_router(
+                router_id=self.id,
+                status="active",
+                model=settings.router_model,
+                temperature=0.0
+            )
+            # Then set the private attributes
+            self._model = settings.router_model
+            self._temperature = 0.0
+            self._status = "active"
+    
+    def _load_existing_state(self):
+        """Load router-specific state from database"""
+        state = self._agent_db.get_router(self.id)
+        if state:
+            self._model = state['model']
+            self._temperature = state['temperature'] 
+            self._status = state['status']
+        else:
+            # Fallback to defaults if database record doesn't exist
+            self._agent_db.create_router(
+                router_id=self.id,
+                status="active",
+                model=settings.router_model,
+                temperature=0.0
+            )
+            self._model = settings.router_model
+            self._temperature = 0.0
+            self._status = "active"
+    
+    # Router-specific properties
+    
+    @property
+    def status(self):
+        return getattr(self, '_status', None)
+    
+    @status.setter
+    def status(self, value):
+        self._status = value
+        self.update_agent_state(status=value)
 
     async def activate_conversation(self, user_message: str, files: list = None):
         """Activate a new conversation with system message and process first user message"""
@@ -59,7 +102,7 @@ class RouterAgent(BaseAgent):
         preview = user_message[:37] + "..." if len(user_message) > 40 else user_message
 
         # Create conversation with default title and preview in database first
-        self._message_db.create_conversation_with_details(self.id, title, preview)
+        self._agent_db.create_conversation_with_details(self.id, title, preview)
 
         # Add system message to database
         self.add_message(
@@ -67,6 +110,9 @@ class RouterAgent(BaseAgent):
             content="Your name is Bandit Heeler, your main role is to have a conversation with the user and for complex requests activate agents."
             "Otherwise, you are a fictional character from the show Bluey.",
         )
+
+        # Send user message to frontend before processing
+        await self.send_message("user", user_message)
 
         # Prepare message data for processing
         message_data = {"message": user_message, "files": files or []}
@@ -100,7 +146,7 @@ class RouterAgent(BaseAgent):
             llm_title = response.content.strip()
 
             # Update title in database
-            self._message_db.update_conversation_title(self.id, llm_title)
+            self._agent_db.update_conversation_title(self.id, llm_title)
             logger.info(f"Updated title for conversation {self.id}: {llm_title}")
 
         except Exception as e:
@@ -116,6 +162,9 @@ class RouterAgent(BaseAgent):
 
     async def handle_message(self, message_data: dict):
         """Main message handler - processes user messages"""
+        # Lock input for this conversation immediately
+        await self.send_input_lock()
+
         user_message = message_data.get("message", "")
         files = message_data.get("files", [])
 
@@ -124,7 +173,7 @@ class RouterAgent(BaseAgent):
 
         try:
             # Send processing status
-            await self.send_status("Thinking...")
+            await self.send_status("Thinking")
 
             # Determine response type
             if files:
@@ -134,18 +183,24 @@ class RouterAgent(BaseAgent):
                 async with asyncio.TaskGroup() as tg:
                     assessment_task = tg.create_task(self.assess_agent_requirements())
                     simple_chat_task = tg.create_task(self.handle_simple_chat())
-                
+
                 agent_requirements = assessment_task.result()
-                
-                # Check if agent is needed
-                if any([
-                    agent_requirements.calculation_required,
-                    agent_requirements.web_search_required,
-                    agent_requirements.company_query,
-                    agent_requirements.complex_question,
-                ]):
+                logger.info(
+                    f"Agent requirements assessed for conversation {self.id}: {agent_requirements.model_dump_json(indent=2)}"
+                )
+
+                # Check if agent is needed by looping through all boolean fields
+                boolean_requirements = [
+                    getattr(agent_requirements, field_name)
+                    for field_name, field_info in agent_requirements.__class__.model_fields.items()
+                    if field_info.annotation == bool
+                    and hasattr(agent_requirements, field_name)
+                ]
+                if any(boolean_requirements):
                     # We need complex handling - simple chat result is discarded
-                    response = await self.handle_complex_request(agent_requirements=agent_requirements)
+                    response = await self.handle_complex_request(
+                        agent_requirements=agent_requirements
+                    )
                 else:
                     # Use the already completed simple chat response
                     response = simple_chat_task.result()
@@ -156,6 +211,9 @@ class RouterAgent(BaseAgent):
 
         except Exception as e:
             await self.send_error(f"Error: {str(e)}")
+        finally:
+            # Always unlock input for this conversation, even if processing failed
+            await self.send_input_unlock()
 
     async def handle_simple_chat(self) -> str:
         """Handle simple conversational messages"""
@@ -171,7 +229,7 @@ class RouterAgent(BaseAgent):
         assessment_messages = self.messages + [
             {
                 "role": "user",
-                "content": "Based on the conversation, what type of assistance is needed? Return RequireAgent with appropriate flags.",
+                "content": "Based on the conversation, are there any indicators that the user request requires agent assistance?",
             }
         ]
 
@@ -182,7 +240,7 @@ class RouterAgent(BaseAgent):
             response_format=RequireAgent,
         )
 
-        return response.parsed
+        return response
 
     async def handle_complex_request(
         self, files: list = None, agent_requirements: RequireAgent = None
@@ -198,9 +256,9 @@ class RouterAgent(BaseAgent):
         instructions = []
         if agent_requirements:
             # Generate non-file instructions based on agent requirements
-            if agent_requirements.company_query:
+            if agent_requirements.chilli_request:
                 instructions.append(
-                    f"# Instructions for company query:\n\n{INSTRUCTION_LIBRARY.get('non_file').get('company_query', '')}"
+                    f"# Instructions for Chilli request:\n\n{INSTRUCTION_LIBRARY.get('non_file').get('chilli_request', '')}"
                 )
             if agent_requirements.web_search_required:
                 instructions.append(
@@ -225,33 +283,29 @@ class RouterAgent(BaseAgent):
         if files:
             # Determine question type
             question_type = await self.determine_question_type(user_question, files)
-            
+
             if question_type == "multiple":
-                # Process each file separately
-                responses = []
-                for file in files:
-                    response = await self._invoke_single([file], user_question, instructions)
-                    responses.append(f"**File: {file}**\n\n{response}")
-                return "\n\n---\n\n".join(responses)
+                # Process each file separately and stream results
+                for i, file in enumerate(files, 1):
+                    await self.send_status(f"Processing file {i}/{len(files)}: {file}")
+
+                    response = await self._invoke_single(
+                        [file], user_question, instructions
+                    )
+
+                    # Send result immediately to frontend
+                    file_response = f"**File {i}/{len(files)}: {file}**\n\n{response}"
+                    await self.send_response(file_response)
+
+                # Return summary message instead of collecting all responses
+                return f"Completed processing {len(files)} files. Results have been sent above."
             else:
                 # Process all files together
                 return await self._invoke_single(files, user_question, instructions)
 
         else:
-            processed_files = None
-
-        # Create planner with processed files
-        planner = PlannerAgent(
-            user_question=user_question,
-            instruction="\n\n---\n\n".join(instructions),
-            files=processed_files,
-            model=self.model,
-            temperature=self.temperature,
-            failed_task_limit=settings.failed_task_limit,
-        )
-
-        await planner.invoke()
-        return await planner.get_response_to_user()
+            # No files, use _invoke_single with empty files list
+            return await self._invoke_single([], user_question, instructions)
 
     async def process_files(self, file_paths: list) -> tuple[list, list]:
         """Process uploaded files into File objects and return (processed_files, errors)"""
@@ -354,20 +408,31 @@ class RouterAgent(BaseAgent):
                 temperature=0.0,
                 response_format=SinglevsMultiRequest,
             )
-            return response.parsed.request_type
+            return response.request_type
 
-    async def _invoke_single(self, files: list, user_question: str, instructions: list) -> str:
-        """Invoke planner for single file or combined processing"""
-        processed_files, errors, file_instructions = await self.process_files(files)
-        
-        if not processed_files:
-            return "Unable to process any files. Errors encountered:\n" + "\n".join(
-                f"• {error}" for error in errors
-            )
-        
-        # Combine instructions
-        all_instructions = instructions + file_instructions
-        
+    async def _invoke_single(
+        self, files: list, user_question: str, instructions: list
+    ) -> str:
+        """Invoke planner for single file, combined, or non-file processing"""
+        # Handle file processing if files are provided
+        if files:
+            processed_files, errors, file_instructions = await self.process_files(files)
+
+            if not processed_files:
+                return "Unable to process any files. Errors encountered:\n" + "\n".join(
+                    f"• {error}" for error in errors
+                )
+
+            # Combine instructions
+            all_instructions = instructions + file_instructions
+        else:
+            # No files case
+            processed_files = None
+            all_instructions = instructions
+
+        logger.info(
+            f"Conversation ID: {self.id}\nUser question: {user_question}\nInstructions: {"\n\n---\n\n".join(all_instructions)}"
+        )
         # Create planner with processed files
         planner = PlannerAgent(
             user_question=user_question,
@@ -377,9 +442,24 @@ class RouterAgent(BaseAgent):
             temperature=self.temperature,
             failed_task_limit=settings.failed_task_limit,
         )
+        
+        # Create router-planner link in database
+        self._agent_db.link_router_planner(
+            router_id=self.id,
+            planner_id=planner.id,
+            relationship_type="initiated"
+        )
 
         await planner.invoke()
-        return await planner.get_response_to_user()
+        workings = []
+        for i, t in enumerate(planner.user_response.workings):
+            workings.append(
+                f"**Task {i+1}: {t.task_title}**\n\n"
+                f"{t.task_description}\n\n"
+                f"{"\n > ".join(t.task_outcome.split('\n'))}"
+            )
+        workings.append(f"**Answer:**\n\n{planner.user_response.markdown_response}")
+        return "\n\n".join(workings)
 
     # WebSocket communication methods
     async def send_message(self, role: str, content: str):
@@ -420,6 +500,32 @@ class RouterAgent(BaseAgent):
                 {
                     "type": "conversation_history",
                     "messages": conversation_messages,
+                    "conversation_id": self.conversation_id,
+                }
+            )
+
+    async def send_input_lock(self):
+        """Lock input for this specific conversation"""
+        # Update router status to processing
+        self.status = "processing"
+        
+        if self.websocket:
+            await self.websocket.send_json(
+                {
+                    "type": "input_lock",
+                    "conversation_id": self.conversation_id,
+                }
+            )
+
+    async def send_input_unlock(self):
+        """Unlock input for this specific conversation"""
+        # Update router status back to active
+        self.status = "active"
+        
+        if self.websocket:
+            await self.websocket.send_json(
+                {
+                    "type": "input_unlock",
                     "conversation_id": self.conversation_id,
                 }
             )
