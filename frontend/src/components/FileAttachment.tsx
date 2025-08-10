@@ -3,12 +3,14 @@
 import { useRef } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from './ui/button';
-import { Paperclip, X, File, Image } from 'lucide-react';
+import { X, File, Image } from 'lucide-react';
+import { fileUploadService, DuplicateFileInfo } from '@/lib/fileUpload';
 
 interface FileAttachmentProps {
   selectedFiles: File[];
   onFileSelect: (files: File[]) => void;
   onFileRemove: (index: number) => void;
+  onDuplicateFound?: (duplicateInfo: DuplicateFileInfo, file: File) => Promise<string>;
   disabled?: boolean;
   className?: string;
   fileInputRef?: React.RefObject<HTMLInputElement | null>;
@@ -18,6 +20,7 @@ export const FileAttachment: React.FC<FileAttachmentProps> = ({
   selectedFiles,
   onFileSelect,
   onFileRemove,
+  onDuplicateFound,
   disabled = false,
   className,
   fileInputRef: externalFileInputRef
@@ -25,10 +28,37 @@ export const FileAttachment: React.FC<FileAttachmentProps> = ({
   const internalFileInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = externalFileInputRef || internalFileInputRef;
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
-      onFileSelect(Array.from(e.target.files));
+      const newFiles = Array.from(e.target.files);
+      
+      if (onDuplicateFound) {
+        // Check for duplicates immediately
+        try {
+          const resolvedFiles = await fileUploadService.checkFilesForDuplicates(
+            newFiles,
+            onDuplicateFound
+          );
+          
+          // Only add files that weren't cancelled
+          const filesToAdd = resolvedFiles
+            .filter(resolved => resolved.isResolved)
+            .map(resolved => resolved.file);
+          
+          onFileSelect(filesToAdd);
+        } catch (error) {
+          console.error('Error checking for duplicates:', error);
+          // Fallback to normal behaviour
+          onFileSelect(newFiles);
+        }
+      } else {
+        // No duplicate checking, proceed normally
+        onFileSelect(newFiles);
+      }
     }
+    
+    // Reset the input value so the same file can be selected again if needed
+    e.target.value = '';
   };
 
   const getFileIcon = (fileName: string) => {
@@ -59,7 +89,7 @@ export const FileAttachment: React.FC<FileAttachmentProps> = ({
           {selectedFiles.map((file, index) => (
             <div
               key={index}
-              className="inline-flex items-center gap-2 bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 text-xs px-3 py-2 rounded-lg border border-border hover:bg-gray-100 dark:bg-gray-800/80 transition-colors"
+              className="inline-flex items-center gap-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 text-xs px-3 py-2 rounded-lg hover:bg-gray-300 hover:dark:bg-gray-600 transition-colors"
               role="listitem"
             >
               {getFileIcon(file.name)}

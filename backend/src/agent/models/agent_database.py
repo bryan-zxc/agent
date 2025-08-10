@@ -85,7 +85,7 @@ class Router(Base):
     status = Column(String(50), nullable=False)  # active, completed, failed, archived
     model = Column(String(100))  # LLM model used
     temperature = Column(Float)  # LLM temperature setting
-    metadata = Column(JSON, default=lambda: {})  # Future extensibility
+    agent_metadata = Column(JSON, default=lambda: {})  # Future extensibility
     schema_version = Column(Integer, default=1)  # Schema evolution tracking
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -95,6 +95,7 @@ class Planner(Base):
     __tablename__ = 'planners'
     
     planner_id = Column(String(32), primary_key=True)  # UUID hex string
+    planner_name = Column(String(255))  # Human readable planner name
     user_question = Column(Text, nullable=False)  # Original user request
     instruction = Column(Text)  # Processing instructions
     execution_plan = Column(Text)  # Markdown formatted execution plan
@@ -102,7 +103,7 @@ class Planner(Base):
     temperature = Column(Float)  # LLM temperature setting
     failed_task_limit = Column(Integer)  # Max failed tasks allowed
     status = Column(String(50), nullable=False)  # planning, executing, completed, failed
-    metadata = Column(JSON, default=lambda: {})  # Future extensibility
+    agent_metadata = Column(JSON, default=lambda: {})  # Future extensibility
     schema_version = Column(Integer, default=1)  # Schema evolution tracking
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -112,13 +113,14 @@ class Worker(Base):
     __tablename__ = 'workers'
     
     worker_id = Column(String(32), primary_key=True)  # UUID hex string (links to worker_messages)
+    worker_name = Column(String(255))  # Human readable worker name
     planner_id = Column(String(32), ForeignKey('planners.planner_id'), nullable=False, index=True)  # Direct relationship to planner
     task_status = Column(String(50), nullable=False, index=True)  # pending, in_progress, completed, failed_validation, recorded
     task_description = Column(Text)  # Detailed task description
     acceptance_criteria = Column(JSON)  # List of success criteria
     task_context = Column(JSON)  # TaskContext pydantic model as JSON
     task_result = Column(Text)  # Execution outcome
-    querying_data_file = Column(Boolean, default=False)  # Whether task queries data files
+    querying_structured_data = Column(Boolean, default=False)  # Whether task queries data files
     image_keys = Column(JSON)  # List of relevant image identifiers
     variable_keys = Column(JSON)  # List of relevant variable identifiers
     tools = Column(JSON)  # List of required tools
@@ -127,13 +129,15 @@ class Worker(Base):
     output_images = Column(JSON)  # Output image data
     output_variables = Column(JSON)  # Output variables
     tables = Column(JSON)  # TableMeta objects
-    metadata = Column(JSON, default=lambda: {})  # Future extensibility
+    filepaths = Column(JSON)  # List of PDF file paths available for use
+    agent_metadata = Column(JSON, default=lambda: {})  # Future extensibility
     schema_version = Column(Integer, default=1)  # Schema evolution tracking
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class RouterPlannerLink(Base):
+    """Legacy table - kept for migration purposes, will be deprecated"""
     __tablename__ = 'router_planner_links'
     
     link_id = Column(Integer, primary_key=True, autoincrement=True)
@@ -143,6 +147,42 @@ class RouterPlannerLink(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     
     __table_args__ = (UniqueConstraint('router_id', 'planner_id'),)
+
+
+class RouterMessagePlannerLink(Base):
+    """Links router messages to their associated planners - Schema Version 2"""
+    __tablename__ = 'router_message_planner_links'
+    
+    link_id = Column(Integer, primary_key=True, autoincrement=True)
+    router_id = Column(String(32), ForeignKey('routers.router_id'), nullable=False)
+    message_id = Column(Integer, ForeignKey('router_messages.id'), nullable=False, index=True)
+    planner_id = Column(String(32), ForeignKey('planners.planner_id'), nullable=False)
+    relationship_type = Column(String(50), nullable=False)  # initiated, continued, forked
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    __table_args__ = (
+        UniqueConstraint('message_id', 'planner_id'),  # One planner per message
+        Index('idx_router_message', 'router_id', 'message_id'),  # Fast lookups
+    )
+
+
+class FileMetadata(Base):
+    __tablename__ = 'file_metadata'
+    
+    file_id = Column(String(32), primary_key=True)  # UUID hex string
+    content_hash = Column(String(64), nullable=False, index=True)  # SHA-256 hash
+    original_filename = Column(String(512), nullable=False)  # Original filename from user
+    file_path = Column(String(1024), nullable=False)  # Actual storage path
+    file_size = Column(Integer, nullable=False)  # File size in bytes
+    mime_type = Column(String(255))  # MIME type
+    upload_timestamp = Column(DateTime, default=datetime.utcnow)
+    user_id = Column(String(255), nullable=False, index=True)  # User identifier
+    reference_count = Column(Integer, default=1)  # Number of times referenced
+    
+    __table_args__ = (
+        Index('idx_content_hash_user', 'content_hash', 'user_id'),
+        Index('idx_filename_user', 'original_filename', 'user_id'),
+    )
 
 
 class AgentDatabase:
@@ -159,7 +199,7 @@ class AgentDatabase:
         # Initialize database with schema version checking
         self._initialize_database()
     
-    def add_message(self, agent_type: AgentType, agent_id: str, role: str, content: Any) -> None:
+    def add_message(self, agent_type: AgentType, agent_id: str, role: str, content: Any) -> Optional[int]:
         """Add a message to the appropriate agent messages table"""
         with self.SessionLocal() as session:
             if agent_type == "planner":
@@ -185,7 +225,10 @@ class AgentDatabase:
                 )
             
             session.add(message)
+            session.flush()  # Flush to get the ID before commit
+            message_id = message.id
             session.commit()
+            return message_id
     
     def create_conversation_with_details(self, conversation_id: str, title: str, preview: str) -> None:
         """Create a conversation with title and preview"""
@@ -278,7 +321,7 @@ class AgentDatabase:
                     'status': router.status,
                     'model': router.model,
                     'temperature': router.temperature,
-                    'metadata': router.metadata,
+                    'agent_metadata': router.agent_metadata,
                     'schema_version': router.schema_version,
                     'created_at': router.created_at,
                     'updated_at': router.updated_at
@@ -287,11 +330,12 @@ class AgentDatabase:
     
     def create_planner(self, planner_id: str, user_question: str, instruction: str = None, 
                       execution_plan: str = None, model: str = None, temperature: float = None,
-                      failed_task_limit: int = None, status: str = "planning") -> None:
+                      failed_task_limit: int = None, status: str = "planning", planner_name: str = None) -> None:
         """Create a new planner state record"""
         with self.SessionLocal() as session:
             planner = Planner(
                 planner_id=planner_id,
+                planner_name=planner_name,
                 user_question=user_question,
                 instruction=instruction,
                 execution_plan=execution_plan,
@@ -328,6 +372,7 @@ class AgentDatabase:
             if planner:
                 return {
                     'planner_id': planner.planner_id,
+                    'planner_name': planner.planner_name,
                     'user_question': planner.user_question,
                     'instruction': planner.instruction,
                     'execution_plan': planner.execution_plan,
@@ -335,25 +380,26 @@ class AgentDatabase:
                     'temperature': planner.temperature,
                     'failed_task_limit': planner.failed_task_limit,
                     'status': planner.status,
-                    'metadata': planner.metadata,
+                    'agent_metadata': planner.agent_metadata,
                     'schema_version': planner.schema_version,
                     'created_at': planner.created_at,
                     'updated_at': planner.updated_at
                 }
             return None
     
-    def create_worker(self, worker_id: str, planner_id: str, task_data) -> None:
+    def create_worker(self, worker_id: str, planner_id: str, task_data, worker_name: str = None) -> None:
         """Create a new worker/task state record"""
         with self.SessionLocal() as session:
             worker = Worker(
                 worker_id=worker_id,
+                worker_name=worker_name,
                 planner_id=planner_id,
                 task_status=task_data.task_status,
                 task_description=task_data.task_description,
                 acceptance_criteria=task_data.acceptance_criteria,
                 task_context=task_data.task_context.model_dump(),
                 task_result=task_data.task_result,
-                querying_data_file=task_data.querying_data_file,
+                querying_structured_data=task_data.querying_structured_data,
                 image_keys=task_data.image_keys,
                 variable_keys=task_data.variable_keys,
                 tools=task_data.tools,
@@ -361,7 +407,8 @@ class AgentDatabase:
                 input_variables=task_data.input_variables,
                 output_images=task_data.output_images,
                 output_variables=task_data.output_variables,
-                tables=[table.model_dump() for table in task_data.tables]
+                tables=[table.model_dump() for table in task_data.tables],
+                filepaths=task_data.filepaths
             )
             session.add(worker)
             session.commit()
@@ -397,13 +444,14 @@ class AgentDatabase:
             if worker:
                 return {
                     'worker_id': worker.worker_id,
+                    'worker_name': worker.worker_name,
                     'planner_id': worker.planner_id,
                     'task_status': worker.task_status,
                     'task_description': worker.task_description,
                     'acceptance_criteria': worker.acceptance_criteria,
                     'task_context': worker.task_context,
                     'task_result': worker.task_result,
-                    'querying_data_file': worker.querying_data_file,
+                    'querying_structured_data': worker.querying_structured_data,
                     'image_keys': worker.image_keys,
                     'variable_keys': worker.variable_keys,
                     'tools': worker.tools,
@@ -412,7 +460,7 @@ class AgentDatabase:
                     'output_images': worker.output_images,
                     'output_variables': worker.output_variables,
                     'tables': worker.tables,
-                    'metadata': worker.metadata,
+                    'agent_metadata': worker.agent_metadata,
                     'schema_version': worker.schema_version,
                     'created_at': worker.created_at,
                     'updated_at': worker.updated_at
@@ -426,13 +474,14 @@ class AgentDatabase:
             return [
                 {
                     'worker_id': worker.worker_id,
+                    'worker_name': worker.worker_name,
                     'planner_id': worker.planner_id,
                     'task_status': worker.task_status,
                     'task_description': worker.task_description,
                     'acceptance_criteria': worker.acceptance_criteria,
                     'task_context': worker.task_context,
                     'task_result': worker.task_result,
-                    'querying_data_file': worker.querying_data_file,
+                    'querying_structured_data': worker.querying_structured_data,
                     'image_keys': worker.image_keys,
                     'variable_keys': worker.variable_keys,
                     'tools': worker.tools,
@@ -441,7 +490,8 @@ class AgentDatabase:
                     'output_images': worker.output_images,
                     'output_variables': worker.output_variables,
                     'tables': worker.tables,
-                    'metadata': worker.metadata,
+                    'filepaths': worker.filepaths,
+                    'agent_metadata': worker.agent_metadata,
                     'schema_version': worker.schema_version,
                     'created_at': worker.created_at,
                     'updated_at': worker.updated_at
@@ -450,7 +500,7 @@ class AgentDatabase:
             ]
     
     def link_router_planner(self, router_id: str, planner_id: str, relationship_type: str = "initiated") -> None:
-        """Create a link between router and planner"""
+        """Legacy method - create a link between router and planner (V1 compatibility)"""
         with self.SessionLocal() as session:
             # Check if link already exists
             existing_link = session.query(RouterPlannerLink).filter(
@@ -467,35 +517,124 @@ class AgentDatabase:
                 session.add(link)
                 session.commit()
     
-    def get_planners_by_router(self, router_id: str) -> List[Dict[str, Any]]:
-        """Get all planners linked to a router"""
+    def link_message_planner(self, router_id: str, message_id: int, planner_id: str, relationship_type: str = "initiated") -> None:
+        """Create a link between router message and planner (V2)"""
         with self.SessionLocal() as session:
-            links = session.query(RouterPlannerLink).filter(
-                RouterPlannerLink.router_id == router_id
-            ).order_by(RouterPlannerLink.created_at).all()
+            # Check if link already exists
+            existing_link = session.query(RouterMessagePlannerLink).filter(
+                RouterMessagePlannerLink.message_id == message_id,
+                RouterMessagePlannerLink.planner_id == planner_id
+            ).first()
             
-            planners = []
-            for link in links:
-                planner = session.query(Planner).filter(
-                    Planner.planner_id == link.planner_id
-                ).first()
-                if planner:
-                    planners.append({
-                        'planner_id': planner.planner_id,
-                        'user_question': planner.user_question,
-                        'instruction': planner.instruction,
-                        'execution_plan': planner.execution_plan,
-                        'model': planner.model,
-                        'temperature': planner.temperature,
-                        'failed_task_limit': planner.failed_task_limit,
-                        'status': planner.status,
-                        'metadata': planner.metadata,
-                        'schema_version': planner.schema_version,
-                        'created_at': planner.created_at,
-                        'updated_at': planner.updated_at,
-                        'relationship_type': link.relationship_type
-                    })
-            return planners
+            if not existing_link:
+                link = RouterMessagePlannerLink(
+                    router_id=router_id,
+                    message_id=message_id,
+                    planner_id=planner_id,
+                    relationship_type=relationship_type
+                )
+                session.add(link)
+                session.commit()
+    
+    def get_planners_by_router(self, router_id: str) -> List[Dict[str, Any]]:
+        """Get all planners linked to a router (legacy V1 method)"""
+        with self.SessionLocal() as session:
+            # Try V2 first (RouterMessagePlannerLink)
+            v2_links = session.query(RouterMessagePlannerLink).filter(
+                RouterMessagePlannerLink.router_id == router_id
+            ).order_by(RouterMessagePlannerLink.created_at).all()
+            
+            if v2_links:
+                # V2 data available - use message-specific links
+                planners = []
+                for link in v2_links:
+                    planner = session.query(Planner).filter(
+                        Planner.planner_id == link.planner_id
+                    ).first()
+                    if planner:
+                        planners.append({
+                            'planner_id': planner.planner_id,
+                            'planner_name': planner.planner_name,
+                            'user_question': planner.user_question,
+                            'instruction': planner.instruction,
+                            'execution_plan': planner.execution_plan,
+                            'model': planner.model,
+                            'temperature': planner.temperature,
+                            'failed_task_limit': planner.failed_task_limit,
+                            'status': planner.status,
+                            'agent_metadata': planner.agent_metadata,
+                            'schema_version': planner.schema_version,
+                            'created_at': planner.created_at,
+                            'updated_at': planner.updated_at,
+                            'relationship_type': link.relationship_type,
+                            'message_id': link.message_id  # V2 addition
+                        })
+                return planners
+            else:
+                # Fallback to V1 data
+                v1_links = session.query(RouterPlannerLink).filter(
+                    RouterPlannerLink.router_id == router_id
+                ).order_by(RouterPlannerLink.created_at).all()
+                
+                planners = []
+                for link in v1_links:
+                    planner = session.query(Planner).filter(
+                        Planner.planner_id == link.planner_id
+                    ).first()
+                    if planner:
+                        planners.append({
+                            'planner_id': planner.planner_id,
+                            'planner_name': planner.planner_name,
+                            'user_question': planner.user_question,
+                            'instruction': planner.instruction,
+                            'execution_plan': planner.execution_plan,
+                            'model': planner.model,
+                            'temperature': planner.temperature,
+                            'failed_task_limit': planner.failed_task_limit,
+                            'status': planner.status,
+                            'agent_metadata': planner.agent_metadata,
+                            'schema_version': planner.schema_version,
+                            'created_at': planner.created_at,
+                            'updated_at': planner.updated_at,
+                            'relationship_type': link.relationship_type,
+                            'message_id': None  # V1 compatibility
+                        })
+                return planners
+    
+    def get_planner_by_message(self, message_id: int) -> Optional[Dict[str, Any]]:
+        """Get planner associated with a specific message (V2)"""
+        with self.SessionLocal() as session:
+            link = session.query(RouterMessagePlannerLink).filter(
+                RouterMessagePlannerLink.message_id == message_id
+            ).first()
+            
+            if not link:
+                return None
+                
+            planner = session.query(Planner).filter(
+                Planner.planner_id == link.planner_id
+            ).first()
+            
+            if planner:
+                return {
+                    'planner_id': planner.planner_id,
+                    'planner_name': planner.planner_name,
+                    'user_question': planner.user_question,
+                    'instruction': planner.instruction,
+                    'execution_plan': planner.execution_plan,
+                    'model': planner.model,
+                    'temperature': planner.temperature,
+                    'failed_task_limit': planner.failed_task_limit,
+                    'status': planner.status,
+                    'agent_metadata': planner.agent_metadata,
+                    'schema_version': planner.schema_version,
+                    'created_at': planner.created_at,
+                    'updated_at': planner.updated_at,
+                    'relationship_type': link.relationship_type,
+                    'message_id': link.message_id,
+                    'router_id': link.router_id
+                }
+            return None
     
     # Database Schema Management
     
@@ -552,12 +691,62 @@ class AgentDatabase:
         """Perform schema migration from one version to another"""
         logger.info(f"Performing schema migration from v{from_version} to v{to_version}")
         
-        # For now, we only support v0 -> v1 migration (fresh install)
-        if from_version == 0 and to_version == 1:
-            # Tables are already created by Base.metadata.create_all()
+        if from_version == 0 and to_version >= 1:
+            # Fresh install - tables created by Base.metadata.create_all()
             logger.info("Schema migration completed: Fresh database initialized")
+        elif from_version == 1 and to_version == 2:
+            # V1 -> V2: Add RouterMessagePlannerLink table and migrate data
+            self._migrate_v1_to_v2()
+            logger.info("Schema migration completed: V1 -> V2 migration successful")
         else:
             logger.warning(f"Migration from v{from_version} to v{to_version} not implemented")
+    
+    def _migrate_v1_to_v2(self) -> None:
+        """Migrate from Schema V1 to V2: RouterPlannerLink -> RouterMessagePlannerLink"""
+        with self.SessionLocal() as session:
+            try:
+                # Create the new table (RouterMessagePlannerLink)
+                # Note: Base.metadata.create_all() should have already created it
+                
+                # Get all existing RouterPlannerLink records
+                old_links = session.query(RouterPlannerLink).all()
+                logger.info(f"Found {len(old_links)} existing router-planner links to migrate")
+                
+                # For each old link, we need to find the most recent user message 
+                # that would have triggered this planner activation
+                migrated_count = 0
+                for old_link in old_links:
+                    # Find the most recent user message in this conversation before the planner was created
+                    recent_user_message = session.query(RouterMessage).filter(
+                        RouterMessage.conversation_id == old_link.router_id,
+                        RouterMessage.role == 'user',
+                        RouterMessage.created_at <= old_link.created_at
+                    ).order_by(RouterMessage.created_at.desc()).first()
+                    
+                    if recent_user_message:
+                        # Create new link with message association
+                        new_link = RouterMessagePlannerLink(
+                            router_id=old_link.router_id,
+                            message_id=recent_user_message.id,
+                            planner_id=old_link.planner_id,
+                            relationship_type=old_link.relationship_type,
+                            created_at=old_link.created_at
+                        )
+                        session.add(new_link)
+                        migrated_count += 1
+                    else:
+                        logger.warning(f"Could not find user message for planner {old_link.planner_id} in router {old_link.router_id}")
+                
+                # Commit the new links
+                session.commit()
+                logger.info(f"Successfully migrated {migrated_count} router-planner links to message-specific links")
+                
+                # Note: Keep old table for potential rollback, don't drop yet
+                
+            except Exception as e:
+                session.rollback()
+                logger.error(f"V1->V2 migration failed: {e}")
+                raise
     
     def get_schema_info(self) -> Dict[str, Any]:
         """Get database schema information for debugging"""
@@ -567,3 +756,97 @@ class AgentDatabase:
             'target_schema_version': settings.database_schema_version,
             'auto_migrate_enabled': settings.database_auto_migrate
         }
+    
+    # File Metadata Operations
+    
+    def create_file_metadata(self, file_id: str, content_hash: str, original_filename: str, 
+                           file_path: str, file_size: int, mime_type: str, user_id: str) -> None:
+        """Create a new file metadata record"""
+        with self.SessionLocal() as session:
+            file_metadata = FileMetadata(
+                file_id=file_id,
+                content_hash=content_hash,
+                original_filename=original_filename,
+                file_path=file_path,
+                file_size=file_size,
+                mime_type=mime_type,
+                user_id=user_id
+            )
+            session.add(file_metadata)
+            session.commit()
+    
+    def get_file_by_hash(self, content_hash: str, user_id: str) -> Optional[Dict[str, Any]]:
+        """Find existing file by content hash for a specific user"""
+        with self.SessionLocal() as session:
+            file_record = session.query(FileMetadata).filter(
+                FileMetadata.content_hash == content_hash,
+                FileMetadata.user_id == user_id
+            ).first()
+            
+            if file_record:
+                return {
+                    'file_id': file_record.file_id,
+                    'content_hash': file_record.content_hash,
+                    'original_filename': file_record.original_filename,
+                    'file_path': file_record.file_path,
+                    'file_size': file_record.file_size,
+                    'mime_type': file_record.mime_type,
+                    'upload_timestamp': file_record.upload_timestamp,
+                    'user_id': file_record.user_id,
+                    'reference_count': file_record.reference_count
+                }
+            return None
+    
+    def get_file_by_id(self, file_id: str) -> Optional[Dict[str, Any]]:
+        """Get file metadata by file ID"""
+        with self.SessionLocal() as session:
+            file_record = session.query(FileMetadata).filter(
+                FileMetadata.file_id == file_id
+            ).first()
+            
+            if file_record:
+                return {
+                    'file_id': file_record.file_id,
+                    'content_hash': file_record.content_hash,
+                    'original_filename': file_record.original_filename,
+                    'file_path': file_record.file_path,
+                    'file_size': file_record.file_size,
+                    'mime_type': file_record.mime_type,
+                    'upload_timestamp': file_record.upload_timestamp,
+                    'user_id': file_record.user_id,
+                    'reference_count': file_record.reference_count
+                }
+            return None
+    
+    def increment_file_reference(self, file_id: str) -> None:
+        """Increment reference count for a file"""
+        with self.SessionLocal() as session:
+            file_record = session.query(FileMetadata).filter(
+                FileMetadata.file_id == file_id
+            ).first()
+            if file_record:
+                file_record.reference_count += 1
+                session.commit()
+    
+    def get_files_by_filename(self, filename: str, user_id: str) -> List[Dict[str, Any]]:
+        """Get all files with the same original filename for a user"""
+        with self.SessionLocal() as session:
+            file_records = session.query(FileMetadata).filter(
+                FileMetadata.original_filename == filename,
+                FileMetadata.user_id == user_id
+            ).order_by(FileMetadata.upload_timestamp.desc()).all()
+            
+            return [
+                {
+                    'file_id': record.file_id,
+                    'content_hash': record.content_hash,
+                    'original_filename': record.original_filename,
+                    'file_path': record.file_path,
+                    'file_size': record.file_size,
+                    'mime_type': record.mime_type,
+                    'upload_timestamp': record.upload_timestamp,
+                    'user_id': record.user_id,
+                    'reference_count': record.reference_count
+                }
+                for record in file_records
+            ]

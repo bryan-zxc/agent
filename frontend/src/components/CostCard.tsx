@@ -55,7 +55,7 @@ export const CostCard: React.FC = () => {
       style: 'currency',
       currency: 'USD',
       minimumFractionDigits: 2,
-      maximumFractionDigits: 4,
+      maximumFractionDigits: 2,
     }).format(amount);
   };
 
@@ -109,31 +109,31 @@ export const CostCard: React.FC = () => {
   }
 
   return (
-    <Card className="w-full bg-gray-200 dark:bg-gray-700 border-0 shadow-lg rounded-2xl">
+    <Card className="w-full min-w-0 bg-gray-200 dark:bg-gray-700 border-0 shadow-lg rounded-2xl overflow-hidden">
       <CardHeader className="rounded-t-2xl">
         <CardTitle className="text-lg font-semibold">Usage Costs</CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="space-y-4">
-          <div className="flex justify-between items-center">
-            <span className="text-sm text-gray-500 dark:text-gray-400">Today</span>
-            <span className="font-medium">{formatCurrency(stats.today)}</span>
+        <div className="space-y-4 min-w-0">
+          <div className="flex justify-between items-center min-w-0">
+            <span className="text-sm text-gray-500 dark:text-gray-400 flex-shrink-0">Today</span>
+            <span className="font-medium text-right break-all ml-2">{formatCurrency(stats.today)}</span>
           </div>
           
-          <div className="flex justify-between items-center">
-            <span className="text-sm text-gray-500 dark:text-gray-400">This Week</span>
-            <span className="font-medium">{formatCurrency(stats.week)}</span>
+          <div className="flex justify-between items-center min-w-0">
+            <span className="text-sm text-gray-500 dark:text-gray-400 flex-shrink-0">This Week</span>
+            <span className="font-medium text-right break-all ml-2">{formatCurrency(stats.week)}</span>
           </div>
           
-          <div className="flex justify-between items-center">
-            <span className="text-sm text-gray-500 dark:text-gray-400">This Month</span>
-            <span className="font-medium">{formatCurrency(stats.month)}</span>
+          <div className="flex justify-between items-center min-w-0">
+            <span className="text-sm text-gray-500 dark:text-gray-400 flex-shrink-0">This Month</span>
+            <span className="font-medium text-right break-all ml-2">{formatCurrency(stats.month)}</span>
           </div>
           
           <div className="border-t pt-4">
-            <div className="flex justify-between items-center">
-              <span className="text-sm font-medium">Total</span>
-              <span className="font-semibold text-lg">{formatCurrency(stats.total)}</span>
+            <div className="flex justify-between items-center min-w-0">
+              <span className="text-sm font-medium flex-shrink-0">Total</span>
+              <span className="font-semibold text-lg text-right break-all ml-2">{formatCurrency(stats.total)}</span>
             </div>
           </div>
         </div>

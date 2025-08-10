@@ -54,7 +54,7 @@ erDiagram
         json acceptance_criteria
         json task_context
         text task_result
-        boolean querying_data_file
+        boolean querying_structured_data
         json image_keys
         json variable_keys
         json tools

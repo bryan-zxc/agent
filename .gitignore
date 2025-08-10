@@ -1,5 +1,6 @@
 *.pyc
 db/
+files/
 *.db
 .env.local
 *.egg-info/

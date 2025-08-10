@@ -113,7 +113,7 @@ class File(BaseModel):
     file_type: Literal["image", "data", "document"]
     image_context: list[ImageElement] = None
     data_context: Literal["csv", "excel", "other"] = None
-    document_context: PDFFull = None
+    document_context: str = None
 
 
 class ColumnMeta(BaseModel):

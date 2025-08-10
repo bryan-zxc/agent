@@ -5,14 +5,14 @@ Implementation of a conversational AI agent system with real-time frontend inter
 
 ## System Architecture
 
-```
-┌─────────────────┐    WebSocket        ┌──────────────────┐    ┌─────────────┐
-│   Next.js       │ ←─────────────────→ │   FastAPI        │───→│   SQLite    │
-│   Frontend      │                     │   Server         │    │  Database   │
-│   - Chat UI     │                     │   - RouterAgent  │    │ - Conversations
-│   - File upload │   /chat/{conv_id}   │   - PlannerAgent │    │ - Messages  │
-│   - History     │                     │   - WorkerAgents │    │ - Persistence
-└─────────────────┘                     └──────────────────┘    └─────────────┘
+```mermaid
+graph LR
+    A[Next.js Frontend<br/>- Chat UI<br/>- File upload<br/>- History] 
+    B[FastAPI Server<br/>- RouterAgent<br/>- PlannerAgent<br/>- WorkerAgents]
+    C[SQLite Database<br/>- Conversations<br/>- Messages<br/>- Persistence]
+    
+    A <-->|"WebSocket /chat/{conv_id}"| B
+    B --> C
 ```
 
 ## Core Components
@@ -27,7 +27,8 @@ Implementation of a conversational AI agent system with real-time frontend inter
   - Accessibility-first approach with ARIA labels
 - **Features**: 
   - Real-time chat interface with semantic HTML
-  - File upload with drag-and-drop capability
+  - Intelligent file upload with duplicate detection
+  - Drag-and-drop file capability with resolution dialogs
   - WebSocket connection for bidirectional communication
   - Conversation history and persistence
   - Auto-resizing input with keyboard shortcuts

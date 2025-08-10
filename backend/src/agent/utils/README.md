@@ -108,6 +108,33 @@ Comprehensive toolkit for image processing, chart reading, and document analysis
   - Automatic image analysis integration
   - Structured Q&A extraction
 
+### `file_utils.py`
+File management utilities for content hashing and unique filename generation.
+
+#### File Hash Functions
+
+**`calculate_file_hash(file_path)`**
+- Calculate SHA-256 hash of file content for duplicate detection
+- **Parameters:** File path (str or Path object)
+- **Returns:** Hexadecimal SHA-256 hash string
+- **Features:**
+  - Efficient chunk-based processing for large files (4KB chunks)
+  - Path object compatibility
+  - Comprehensive error handling and logging
+- **Usage:** Content-based duplicate detection in file uploads
+
+**`generate_unique_filename(original_filename, existing_files)`**
+- Generate unique filename by appending counter for conflict resolution
+- **Parameters:**
+  - `original_filename`: The original filename to make unique
+  - `existing_files`: List of existing filenames to check against
+- **Returns:** Unique filename (original if no conflict exists)
+- **Features:**
+  - Preserves file extension correctly
+  - Incremental naming pattern: `filename_copy_1.ext`, `filename_copy_2.ext`
+  - Path-safe filename handling
+- **Usage:** Automatic filename conflict resolution in file storage
+
 ### `sandbox.py`
 Safe code execution environment for Python code.
 
@@ -141,6 +168,18 @@ Safe code execution environment for Python code.
 - Detailed error reporting
 
 ## Usage Patterns
+
+### File Management
+```python
+from agent.utils.file_utils import calculate_file_hash, generate_unique_filename
+
+# Calculate content hash for duplicate detection
+file_hash = calculate_file_hash("uploaded_file.pdf")
+
+# Generate unique filename if conflicts exist
+existing_files = ["report.pdf", "report_copy_1.pdf"]
+unique_name = generate_unique_filename("report.pdf", existing_files)  # "report_copy_2.pdf"
+```
 
 ### Image Processing
 ```python

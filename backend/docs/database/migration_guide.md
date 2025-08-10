@@ -201,7 +201,7 @@ def table_restructure_migration():
             acceptance_criteria JSON,
             task_context JSON,
             task_result TEXT,
-            querying_data_file BOOLEAN DEFAULT FALSE,
+            querying_structured_data BOOLEAN DEFAULT FALSE,
             image_keys JSON,
             variable_keys JSON,
             tools JSON,
@@ -225,7 +225,7 @@ def table_restructure_migration():
             0 as priority,  -- new field default
             0 as retry_count,  -- new field default
             task_description, acceptance_criteria, task_context,
-            task_result, querying_data_file, image_keys, variable_keys,
+            task_result, querying_structured_data, image_keys, variable_keys,
             tools, input_images, input_variables, output_images,
             output_variables, tables, metadata,
             2 as schema_version,  -- updated version

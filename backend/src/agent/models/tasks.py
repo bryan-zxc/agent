@@ -49,33 +49,32 @@ class Task(BaseModel):
     )
     acceptance_criteria: list[str] = Field(
         description="Provide a list of criteria that needs to be satisfied for the task to be considered successful. "
+        "This is task level acceptance criteria, not objective level acceptance criteria. "
+        "Please don't be confused by the two."
         "Note: never save anything to file, for example if images need to be produced, they should be outputed as variables."
     )
-    querying_data_file: bool = Field(
-        description="Does the task require querying a data file (for example csv file)? "
-        "Files like pdf and word documents are not considered data files, they are considered documents."
+    querying_structured_data: bool = Field(
+        description="Are there data tables available for use? If so, does the task require querying an existing data table (sourced from csv file)? "
+        "If the answers to both questions are yes, then this field should be set to true, otherwise false."
     )
     tools: list[tools_type] = Field(
         [],
-        description="List of tools that will be helpful to performance the task. If there are no tools required, leave this empty.",
+        description="List of tools or functions that will be required to performance the task. If there are no tools or functions required, leave this empty.",
     )
 
 
 class FullTask(Task):
     task_id: str
-    task_status: Literal["pending", "in_progress", "completed", "failed_validation", "recorded"] = "pending"
+    task_status: Literal[
+        "pending", "in_progress", "completed", "failed_validation", "recorded"
+    ] = "pending"
     task_result: str = ""
     input_images: dict = {}
     input_variables: dict = {}
     tables: list[TableMeta] = None
+    filepaths: list[str] = []
     output_images: dict = {}
     output_variables: dict = {}
-
-
-class Tasks(BaseModel):
-    tasks: list[Task] = Field(
-        description="Break down the user request into a list of tasks that will be executed one at a time. Do not repeat any tasks that has already been performed."
-    )
 
 
 class PlanValidation(BaseModel):
@@ -203,3 +202,31 @@ class TaskValidation(BaseModel):
         "",
         description="If any acceptance criteria are not met, explain which ones and why they were not met. If all criteria are met, leave this field empty.",
     )
+
+
+class TodoItem(BaseModel):
+    description: str = Field(
+        description="Original task description (may contain '(new)' for new tasks)"
+    )
+    updated_description: str = Field(
+        default="", description="Updated description if changed"
+    )
+    next_action: bool = Field(
+        default=False,
+        description="This field should just be left False, there is separate logic to determine the next action.",
+    )
+    completed: bool = Field(
+        default=False,
+        description="This can be if the todo item is no longer relevant, or if it has been completed as part of previous task execution.",
+    )
+    obsolete: bool = Field(default=False, description="Mark for deletion")
+
+
+class ExecutionPlanModel(BaseModel):
+    objective: str = Field(description="Overall goal description")
+    todos: list[TodoItem] = Field(description="List of todo items")
+
+
+class InitialExecutionPlan(BaseModel):
+    objective: str = Field(description="Overall goal description")
+    todos: list[str] = Field(description="Simple list of task descriptions")

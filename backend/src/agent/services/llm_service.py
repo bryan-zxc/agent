@@ -98,7 +98,7 @@ class LLM:
 
         # Initialize clients with API keys from settings
         self.openai_client = OpenAI(api_key=settings.openai_api_key)
-        self.gemini_client = OpenAI(
+        self.gemini_openai_client = OpenAI(
             api_key=settings.gemini_api_key,
             base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
         )
@@ -107,7 +107,7 @@ class LLM:
             base_url="https://api.anthropic.com/v1/",
         )
         self.anthropic_client = Anthropic(api_key=settings.anthropic_api_key)
-        self.google_client = genai.Client(api_key=settings.gemini_api_key)
+        self.gemini_client = genai.Client(api_key=settings.gemini_api_key)
 
         # Store caller for usage tracking
         self.caller = caller
@@ -177,7 +177,7 @@ class LLM:
         if model.startswith("gpt"):
             return self.openai_client
         elif model.startswith("gemini"):
-            return self.gemini_client
+            return self.gemini_openai_client
         elif self._is_anthropic_model(model):
             return self.anthropic_openai_client
         else:
@@ -277,7 +277,7 @@ class LLM:
         # Convert any developer roles to user roles for Anthropic models only
         if self._is_anthropic_model(model):
             messages = self._convert_developer_to_user(messages)
-        
+
         # Select the appropriate client based on model
         client = self._get_client_for_model(model)
         # Map to actual model name
@@ -475,6 +475,11 @@ class LLM:
         Returns:
             String response or Pydantic model instance
         """
+
+        # Check if pdf_source ends with .pdf extension
+        if not str(pdf_source).lower().endswith(".pdf"):
+            return "Not a pdf"
+
         # Use the single Google model from MODEL_MAPPING
         model = "gemini-2.5-pro"
 
@@ -515,7 +520,7 @@ class LLM:
 
         try:
             # Make the request
-            response = self.google_client.models.generate_content(
+            response = self.gemini_client.models.generate_content(
                 model=model,
                 contents=contents,
                 config=config,
@@ -578,7 +583,7 @@ class LLM:
 
         try:
             # Make the request
-            response = self.google_client.models.generate_content(
+            response = self.gemini_client.models.generate_content(
                 model=model,
                 contents=query,
                 config=config,
@@ -606,8 +611,46 @@ class LLM:
                     request_type="web_search",
                 )
 
-            return response.text
+            # Add citations to the response
+            return add_citations(response)
 
         except Exception as e:
             logger.error(f"Error in search_web: {e}")
             raise
+
+
+def add_citations(response):
+    """Add citations to the response text based on grounding metadata."""
+    if not hasattr(response, 'candidates') or not response.candidates:
+        return response.text
+    
+    candidate = response.candidates[0]
+    if not hasattr(candidate, 'grounding_metadata') or not candidate.grounding_metadata:
+        return response.text
+    
+    text = response.text
+    grounding_metadata = candidate.grounding_metadata
+    
+    if not hasattr(grounding_metadata, 'grounding_supports') or not hasattr(grounding_metadata, 'grounding_chunks'):
+        return text
+        
+    supports = grounding_metadata.grounding_supports
+    chunks = grounding_metadata.grounding_chunks
+
+    # Sort supports by end_index in descending order to avoid shifting issues when inserting
+    sorted_supports = sorted(supports, key=lambda s: s.segment.end_index, reverse=True)
+
+    for support in sorted_supports:
+        end_index = support.segment.end_index
+        if support.grounding_chunk_indices:
+            # Create citation string like [1](link1)[2](link2)
+            citation_links = []
+            for i in support.grounding_chunk_indices:
+                if i < len(chunks):
+                    uri = chunks[i].web.uri
+                    citation_links.append(f"[{i + 1}]({uri})")
+
+            citation_string = ", ".join(citation_links)
+            text = text[:end_index] + citation_string + text[end_index:]
+
+    return text

@@ -3,6 +3,10 @@ import base64
 import json
 import string
 import logging
+import requests
+import re
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Union, Literal
 from pydantic import BaseModel, Field
@@ -258,7 +262,7 @@ def identify_relevant_slices(
         ],
         model="gemini-2.5-pro",
     ).content
-    logger.debug(f"Required slices description: {required_slices_description}")
+    logger.info(f"Required slices description: {required_slices_description}")
 
     relevant_slices = []
     relevant_slice_ids = []
@@ -1154,13 +1158,18 @@ def get_facts_from_pdf(question: str, pdf_source: Union[str, Path]) -> str:
     question : str
         The user's question to be answered using the PDF content.
     pdf_source : Union[str, Path]
-        Path to local PDF file or URL to web PDF.
+        Path to local PDF file or URL to web PDF. The link must end with .pdf.
 
     Returns:
     -------
     str
-        A JSON string containing question-answer pairs and unanswered questions.
+        A JSON string containing a template for providing a comprehensive answer to the user's question,
+        facts to fill in the template in the form of question-answer pairs,
+        and missing facts for the template in the form of unanswered questions.
     """
+    if not str(pdf_source).lower().endswith(".pdf"):
+        return "Not PDF source, please provide a valid PDF file or URL ending with .pdf"
+
     # Initialize the LLM service
     llm = LLM(caller="tools")
 
@@ -1178,7 +1187,7 @@ def get_facts_from_pdf(question: str, pdf_source: Union[str, Path]) -> str:
 
     # Return only question_answer and unanswered_questions fields
     return response.model_dump_json(
-        include={"question_answer", "unanswered_questions"}, indent=2
+        include={"answer_template", "question_answer", "unanswered_questions"}, indent=2
     )
 
 
@@ -1203,23 +1212,28 @@ def search_web_general(query: str) -> str:
 
 def search_web_pdf(query: str) -> str:
     """
-    Search for PDF documents online using Google Search.
+    Search for PDF documents online using Google Search and extract Q&A pairs from each PDF.
+
+    This function searches for PDFs, then extracts facts from each PDF one at a time
+    until there are no longer any unanswered questions or the list of PDFs is exhausted.
 
     Parameters:
     ----------
     query : str
-        The search query or topic to find relevant PDF documents for.
+        The search query or topic to find relevant PDF documents for and extract facts from.
 
     Returns:
     -------
     str
-        A JSON string containing structured data with PDF document information, including
-        descriptions and hyperlinks for each found document.
+        A JSON string containing comprehensive Q&A pairs extracted from all analysed PDFs,
+        along with any remaining unanswered questions.
     """
 
     class PDFResult(BaseModel):
         description: str = Field(description="Description of the PDF document")
-        hyperlink: str = Field(description="URL/hyperlink to the PDF document")
+        hyperlink: str = Field(
+            description="URL/hyperlink to the PDF document. The link must end in .pdf."
+        )
 
     class PDFSearchResults(BaseModel):
         requested_pdfs: list[PDFResult] = Field(
@@ -1232,13 +1246,320 @@ def search_web_pdf(query: str) -> str:
         )
 
     llm = LLM(caller="tools")
+
+    # First, search for PDFs
     response = llm.search_web(
         query=f"Provide hyperlinks to the PDF documents for: {query}\n\n"
         "Can include additional complementary PDFs if noticed."
     )
-    pdf = llm.get_response(
-        messages=[{"role": "developer", "content": response}],
-        model="gpt-4.1-nano",
-        response_format=PDFSearchResults,
+
+    def get_pdf_url_from_redirect(redirect_url: str) -> str:
+        """Extract actual PDF URL from Google redirect."""
+        try:
+            response_redirect = requests.get(redirect_url, allow_redirects=False, timeout=10)
+            if response_redirect.status_code in [301, 302]:
+                redirect_location = response_redirect.headers.get('Location', '')
+                if redirect_location.lower().endswith('.pdf'):
+                    return redirect_location
+            
+            # If no direct redirect, try to extract from HTML
+            response_redirect = requests.get(redirect_url, timeout=10)
+            pdf_url_match = re.search(r'HREF="([^"]*\.pdf[^"]*)"', response_redirect.text)
+            if pdf_url_match:
+                return pdf_url_match.group(1)
+                
+            return redirect_url  # Return original if no PDF found
+        except Exception as e:
+            logger.warning(f"Failed to resolve redirect {redirect_url}: {e}")
+            return redirect_url
+
+    def is_valid_pdf(file_path: str) -> bool:
+        """Check if downloaded file is actually a PDF."""
+        try:
+            with open(file_path, 'rb') as f:
+                header = f.read(4)
+                return header == b'%PDF'
+        except:
+            return False
+
+    def download_pdf_with_curl(pdf_url: str, output_path: str) -> bool:
+        """Download PDF using curl to handle Cloudflare protection."""
+        try:
+            logger.info(f"🔄 CURL: Attempting to download {pdf_url}")
+            result = subprocess.run([
+                'curl', '-L', '-o', output_path, pdf_url
+            ], capture_output=True, text=True, timeout=60)
+            
+            if result.returncode == 0 and is_valid_pdf(output_path):
+                logger.info(f"✅ CURL: Successfully downloaded valid PDF to {output_path}")
+                return True
+            else:
+                logger.warning(f"❌ CURL: Download failed or invalid PDF. Return code: {result.returncode}")
+                if result.stderr:
+                    logger.warning(f"CURL stderr: {result.stderr}")
+                # Clean up invalid file
+                Path(output_path).unlink(missing_ok=True)
+                return False
+        except Exception as e:
+            logger.warning(f"❌ CURL: Exception during download: {e}")
+            return False
+
+    def download_pdf_with_selenium(pdf_url: str, output_path: str) -> bool:
+        """Download PDF using Selenium for JavaScript-heavy protection."""
+        logger.info(f"🔄 SELENIUM: Attempting to download {pdf_url}")
+        driver = None
+        try:
+            from selenium import webdriver
+            from selenium.webdriver.chrome.options import Options
+            from selenium.webdriver.chrome.service import Service
+            import time
+            import os
+            import platform
+            
+            # Configure Chrome/Chromium options for headless mode
+            chrome_options = Options()
+            chrome_options.add_argument('--headless')
+            chrome_options.add_argument('--no-sandbox')
+            chrome_options.add_argument('--disable-dev-shm-usage')
+            chrome_options.add_argument('--disable-gpu')
+            chrome_options.add_argument('--disable-web-security')
+            chrome_options.add_argument('--disable-features=VizDisplayCompositor')
+            chrome_options.add_argument('--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+            
+            # Set binary location based on architecture
+            arch = platform.machine().lower()
+            logger.info(f"🏗️ SELENIUM: Detected architecture: {arch}")
+            if arch in ['aarch64', 'arm64']:
+                chrome_options.binary_location = '/usr/bin/chromium'
+                driver_executable = 'chromium-driver'
+                use_chromedriver_autoinstaller = False  # Skip for ARM64
+                logger.info("🏗️ SELENIUM: ARM64 detected, using system chromium-driver")
+            else:
+                chrome_options.binary_location = '/usr/bin/google-chrome'
+                driver_executable = 'chromedriver'
+                use_chromedriver_autoinstaller = True
+                logger.info("🏗️ SELENIUM: x86_64 detected, using chromedriver-autoinstaller")
+            
+            # Setup ChromeDriver service with proper path handling
+            service = None
+            driver_path = None
+            
+            # Only use chromedriver-autoinstaller for x86_64
+            if use_chromedriver_autoinstaller:
+                try:
+                    import chromedriver_autoinstaller
+                    # Install and get the path to the driver
+                    driver_path = chromedriver_autoinstaller.install()
+                    logger.info(f"📦 SELENIUM: Auto-installed ChromeDriver at {driver_path}")
+                    
+                    # Create service with the installed driver path
+                    if driver_path and os.path.exists(driver_path):
+                        # Ensure the driver has execute permissions
+                        os.chmod(driver_path, 0o755)
+                        service = Service(executable_path=driver_path)
+                        logger.info(f"🔧 SELENIUM: Using driver service at {driver_path}")
+                    else:
+                        logger.warning(f"⚠️ SELENIUM: Driver path {driver_path} doesn't exist, trying default")
+                        service = Service()
+                        
+                except ImportError:
+                    logger.info("🔧 SELENIUM: chromedriver_autoinstaller not available, using system driver")
+                    service = Service()
+                except Exception as e:
+                    logger.warning(f"⚠️ SELENIUM: ChromeDriver auto-install failed: {e}, trying system driver")
+                    service = Service()
+            else:
+                logger.info("🔧 SELENIUM: Skipping chromedriver-autoinstaller for ARM64")
+            
+            # Alternative: try to find system drivers
+            if not driver_path:
+                system_paths = [
+                    '/usr/local/bin/chromedriver',
+                    '/usr/bin/chromedriver', 
+                    '/usr/local/bin/chromium-driver',
+                    '/usr/bin/chromium-driver'
+                ]
+                for path in system_paths:
+                    if os.path.exists(path):
+                        driver_path = path
+                        # Ensure the system driver has execute permissions
+                        os.chmod(path, 0o755)
+                        service = Service(executable_path=path)
+                        logger.info(f"🔍 SELENIUM: Found system driver at {path}")
+                        break
+            
+            logger.info("🚀 SELENIUM: Starting browser")
+            driver = webdriver.Chrome(service=service, options=chrome_options)
+            driver.set_page_load_timeout(30)
+            
+            logger.info(f"🌐 SELENIUM: Navigating to {pdf_url}")
+            driver.get(pdf_url)
+            
+            # Wait for potential redirects and JavaScript execution
+            logger.info("⏳ SELENIUM: Waiting for page to load and JS to execute...")
+            time.sleep(10)
+            
+            # Check if we ended up at a PDF
+            current_url = driver.current_url
+            logger.info(f"🔍 SELENIUM: Final URL: {current_url}")
+            
+            if current_url.lower().endswith('.pdf') or 'pdf' in current_url.lower():
+                logger.info("📄 SELENIUM: Detected PDF URL, downloading with session cookies")
+                # Use requests with the session cookies from Selenium
+                cookies = driver.get_cookies()
+                driver.quit()
+                driver = None
+                
+                session = requests.Session()
+                for cookie in cookies:
+                    session.cookies.set(cookie['name'], cookie['value'])
+                
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                }
+                
+                response = session.get(current_url, headers=headers)
+                with open(output_path, 'wb') as f:
+                    f.write(response.content)
+                
+                # Validate that we actually got a PDF
+                if is_valid_pdf(output_path):
+                    logger.info(f"✅ SELENIUM: Successfully downloaded valid PDF to {output_path}")
+                    return True
+                else:
+                    logger.warning(f"❌ SELENIUM: Downloaded file is not a valid PDF")
+                    Path(output_path).unlink(missing_ok=True)
+                    return False
+            else:
+                logger.warning(f"❌ SELENIUM: Did not reach PDF URL, got: {current_url}")
+                driver.quit()
+                driver = None
+                return False
+                
+        except Exception as e:
+            logger.warning(f"❌ SELENIUM: Exception during download: {e}")
+            if driver:
+                try:
+                    driver.quit()
+                except:
+                    pass
+            return False
+
+    # Extract grounding chunks from the response
+    try:
+        chunks = response.candidates[0].grounding_metadata.grounding_chunks
+        pdf_urls = []
+        
+        for chunk in chunks:
+            if hasattr(chunk, 'web') and chunk.web.uri:
+                uri = chunk.web.uri
+                
+                # Check if it's a Google redirect that might lead to a PDF
+                if 'vertexaisearch.cloud.google.com/grounding-api-redirect' in uri:
+                    actual_pdf_url = get_pdf_url_from_redirect(uri)
+                    if actual_pdf_url.lower().endswith('.pdf'):
+                        pdf_urls.append(actual_pdf_url)
+                elif uri.lower().endswith('.pdf'):
+                    pdf_urls.append(uri)
+        
+        if not pdf_urls:
+            return '{"answer_template": "", "question_answer": [], "unanswered_questions": ["No relevant PDFs found for the query"]}'
+            
+    except Exception as e:
+        logger.error(f"Failed to extract grounding chunks: {e}")
+        return '{"answer_template": "", "question_answer": [], "unanswered_questions": ["Failed to extract PDFs from search results"]}'
+
+    # Start with empty results
+    combined_results = (
+        '{"answer_template": "", "question_answer": [], "unanswered_questions": ["'
+        + query
+        + '"]}'
     )
-    return pdf.model_dump_json(indent=2)
+
+    # Use TemporaryDirectory for automatic cleanup
+    with tempfile.TemporaryDirectory(prefix='agent_pdfs_') as temp_dir:
+        # Process each PDF one at a time
+        for i, pdf_url in enumerate(pdf_urls):
+            current_data = json.loads(combined_results)
+
+            # Stop if no more unanswered questions
+            if not current_data.get("unanswered_questions"):
+                break
+
+            try:
+                # Download PDF to temporary directory
+                temp_pdf_path = Path(temp_dir) / f"pdf_{i}.pdf"
+                
+                # Try to download the PDF - first with curl, then with Selenium as fallback
+                logger.info(f"📥 DOWNLOAD: Processing PDF {i+1}/{len(pdf_urls)}: {pdf_url}")
+                download_success = download_pdf_with_curl(pdf_url, str(temp_pdf_path))
+                if not download_success:
+                    logger.info(f"🔄 DOWNLOAD: Curl failed for {pdf_url}, trying Selenium...")
+                    download_success = download_pdf_with_selenium(pdf_url, str(temp_pdf_path))
+                
+                if download_success:
+                    logger.info(f"✅ DOWNLOAD: Successfully obtained PDF, processing content...")
+                    # Build contextual question for this PDF
+                    contextual_question = f"The full question is: {query}. "
+
+                    if current_data.get("question_answer"):
+                        answered_summary = ", ".join(
+                            [
+                                f"{qa['question']}: {qa['answer']}"
+                                for qa in current_data["question_answer"]
+                            ]
+                        )
+                        contextual_question += (
+                            f"We already know answers to the following: {answered_summary}. "
+                        )
+
+                    if len(current_data.get("unanswered_questions", [])) > 1:
+                        missing_summary = ", ".join(current_data["unanswered_questions"][1:])
+                        contextual_question += (
+                            f"We are still missing the following: {missing_summary}. "
+                        )
+
+                    if current_data.get("answer_template"):
+                        contextual_question += (
+                            f"Response template is: {current_data['answer_template']}. "
+                        )
+
+                    contextual_question += (
+                        f"Focus on: {current_data['unanswered_questions'][0]}"
+                    )
+
+                    # Get facts from the current PDF using local file
+                    new_pdf_results = get_facts_from_pdf(contextual_question, str(temp_pdf_path))
+
+                    # Use LLM to combine previous results with new PDF results
+                    combine_prompt = f"""
+                    Previous results from earlier PDFs:
+                    {combined_results}
+                    
+                    New results from current PDF ({pdf_url}):
+                    {new_pdf_results}
+                    
+                    Combine these results into a single comprehensive response. 
+                    - Update the answer_template if the new one is more comprehensive
+                    - Merge all question_answer pairs, avoiding duplicates
+                    - Update unanswered_questions by removing any that were answered in the new PDF
+                    - Ensure citations properly reference the source PDF
+                    """
+
+                    combined_results = llm.get_response(
+                        messages=[{"role": "user", "content": combine_prompt}],
+                        model="gemini-2.5-pro",
+                        response_format=QnAList,
+                    ).model_dump_json(
+                        include={"answer_template", "question_answer", "unanswered_questions"},
+                        indent=2,
+                    )
+                else:
+                    logger.warning(f"Failed to download PDF from {pdf_url}")
+                    continue
+
+            except Exception as e:
+                logger.warning(f"Failed to process PDF {pdf_url}: {str(e)}")
+                continue
+
+    return combined_results

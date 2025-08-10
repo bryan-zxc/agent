@@ -79,9 +79,9 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({ isConnected }) => {
 ```
 
 ### MessageList.tsx - Message Display
-**Purpose**: Display chat messages with auto-scrolling  
-**Size**: 79 lines  
-**Accessibility**: Article structure, screen reader support
+**Purpose**: Display chat messages with auto-scrolling and expandable execution plans  
+**Size**: ~250 lines  
+**Accessibility**: Article structure, screen reader support, collapsible content
 
 **Features**:
 - Auto-scrolling to latest messages with smooth behavior
@@ -89,21 +89,90 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({ isConnected }) => {
 - Timestamp display with proper time formatting
 - File attachment indicators with accessible labels
 - Status indicators with loading animations
+- **Expandable execution plans** when planner agent is active
+- **"Agents assemble!" message detection** with special UI treatment
+- **Message-specific execution plan display** using shadcn Collapsible
 - Semantic article structure for each message
+- Real-time and historical execution plan access
+
+**Special Message Handling**:
+The component includes special handling for "Agents assemble!" messages that indicate planner activation:
+
+```typescript
+// Helper function to detect special messages
+const isAgentsAssembleMessage = (message: ChatMessage) => {
+  return message.sender === 'assistant' && 
+         message.message === 'Agents assemble!' && 
+         message.messageId;
+};
+
+// Special component for planner messages
+const AgentsAssembleMessage: React.FC<{
+  message: ChatMessage;
+  isExpanded: boolean;
+  onToggleExpansion: () => void;
+}> = ({ message, isExpanded, onToggleExpansion }) => {
+  const { plannerInfo, loading } = usePlannerInfo(message.messageId || null);
+  
+  return (
+    <article className="flex gap-3 justify-start">
+      {/* Bandit avatar and message */}
+      <div className="bg-card text-card-foreground px-4 py-3 rounded-xl">
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-medium text-primary">
+            {message.message}
+          </span>
+          <time className="text-xs text-muted-foreground">
+            {message.timestamp.toLocaleTimeString()}
+          </time>
+        </div>
+        
+        {/* Expandable execution plan */}
+        {plannerInfo?.has_planner && plannerInfo.execution_plan && (
+          <Collapsible open={isExpanded} onOpenChange={onToggleExpansion}>
+            <CollapsibleTrigger>
+              {isExpanded ? <ChevronUp /> : <ChevronDown />}
+              <span>{isExpanded ? 'Hide' : 'Show'} execution plan</span>
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <RichMarkdownRenderer content={plannerInfo.execution_plan} />
+            </CollapsibleContent>
+          </Collapsible>
+        )}
+      </div>
+    </article>
+  );
+};
+```
 
 **Message Structure**:
 ```typescript
 <main className="flex-1 overflow-y-auto p-4" role="main" aria-live="polite">
-  {messages.map((message) => (
-    <article key={message.id} role="article" aria-label={`Message from ${message.sender}`}>
-      <div className={cn("message-bubble", message.sender === 'user' ? 'user-styles' : 'assistant-styles')}>
-        <div className="whitespace-pre-wrap">{message.message}</div>
-        <time dateTime={message.timestamp.toISOString()}>
-          {message.timestamp.toLocaleTimeString()}
-        </time>
-      </div>
-    </article>
-  ))}
+  {messages.map((message) => {
+    // Special handling for planner activation messages
+    if (isAgentsAssembleMessage(message)) {
+      return (
+        <AgentsAssembleMessage
+          key={message.id}
+          message={message}
+          isExpanded={expandedMessages.has(message.id)}
+          onToggleExpansion={() => toggleMessageExpansion(message.id)}
+        />
+      );
+    }
+    
+    // Regular message rendering
+    return (
+      <article key={message.id} role="article" aria-label={`Message from ${message.sender}`}>
+        <div className={cn("message-bubble", message.sender === 'user' ? 'user-styles' : 'assistant-styles')}>
+          <RichMarkdownRenderer content={message.message} />
+          <time dateTime={message.timestamp.toISOString()}>
+            {message.timestamp.toLocaleTimeString()}
+          </time>
+        </div>
+      </article>
+    );
+  })}
 </main>
 ```
 
@@ -181,6 +250,26 @@ export const FileAttachment: React.FC<FileAttachmentProps> = ({
     </div>
   );
 };
+```
+
+### Collapsible.tsx - Collapsible UI Component
+**Purpose**: Provides expandable/collapsible content sections  
+**Size**: 30 lines  
+**Accessibility**: Full ARIA support from Radix UI primitives
+
+**Features**:
+- Smooth expand/collapse animations
+- Keyboard navigation support  
+- ARIA attributes for screen readers
+- Composable trigger and content components
+- Used for execution plan expansion in MessageList
+
+**Usage**:
+```typescript
+<Collapsible open={isOpen} onOpenChange={setIsOpen}>
+  <CollapsibleTrigger>Toggle content</CollapsibleTrigger>
+  <CollapsibleContent>Expandable content here</CollapsibleContent>
+</Collapsible>
 ```
 
 ### ErrorBoundary.tsx - Error Handling Component
@@ -336,6 +425,53 @@ const handleSubmit = useCallback(async (data: FormData) => {
 useEffect(() => {
   // Effect logic
 }, [specificDependency]); // Not []
+```
+
+## Hooks Integration
+
+The components integrate with custom React hooks for enhanced functionality:
+
+### usePlannerInfo Hook
+**Purpose**: Fetch and manage planner information for specific messages  
+**Location**: `src/hooks/usePlannerInfo.ts`  
+**Features**:
+- Message-specific planner data fetching from `/messages/{messageId}/planner-info`
+- Real-time WebSocket updates prioritised over API calls
+- Loading states and error handling
+- Automatic refetch capability
+
+**Usage in Components**:
+```typescript
+const AgentsAssembleMessage = ({ message }) => {
+  const { plannerInfo, loading, error, refetch } = usePlannerInfo(message.messageId || null);
+  
+  // Display execution plan if available
+  if (plannerInfo?.has_planner && plannerInfo.execution_plan) {
+    return <CollapsibleExecutionPlan plan={plannerInfo.execution_plan} />;
+  }
+};
+```
+
+**Hook Implementation**:
+```typescript
+export const usePlannerInfo = (messageId: number | null): UsePlannerInfoResult => {
+  const [plannerInfo, setPlannerInfo] = useState<PlannerInfo | null>(null);
+  const [loading, setLoading] = useState(false);
+  const currentExecutionPlan = useChatStore((state) => state.currentExecutionPlan);
+
+  // Prioritise real-time WebSocket data
+  useEffect(() => {
+    if (currentExecutionPlan?.execution_plan) {
+      setPlannerInfo(currentExecutionPlan);
+      return;
+    }
+    
+    // Fallback to API for specific message
+    if (messageId) fetchPlannerInfo();
+  }, [messageId, currentExecutionPlan]);
+
+  return { plannerInfo, loading, error, refetch: fetchPlannerInfo };
+};
 ```
 
 ## Future Enhancements

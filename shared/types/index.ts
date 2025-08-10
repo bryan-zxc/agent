@@ -7,10 +7,11 @@ export interface ChatMessage {
   files?: string[];
   model?: string;
   temperature?: number;
+  messageId?: number; // Database message ID for planner linking
 }
 
 export interface WebSocketMessage {
-  type: 'message' | 'status' | 'response' | 'error';
+  type: 'message' | 'status' | 'response' | 'error' | 'execution_plan_update';
   data: any;
   timestamp?: Date;
 }
@@ -33,4 +34,13 @@ export interface ConversationHistory {
   messages: ChatMessage[];
   createdAt: Date;
   updatedAt: Date;
+}
+
+export interface PlannerInfo {
+  has_planner: boolean;
+  execution_plan: string | null;
+  status: string | null;
+  planner_id: string | null;
+  planner_name?: string | null;
+  user_question?: string | null;
 }

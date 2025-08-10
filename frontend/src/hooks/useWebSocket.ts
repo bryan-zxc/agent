@@ -96,6 +96,13 @@ export const useWebSocket = (url?: string) => {
               }
               break;
               
+            case 'execution_plan_update':
+              if (data.data) {
+                store.updateExecutionPlan(data.data);
+                console.log('Received execution plan update:', data.data);
+              }
+              break;
+              
             default:
               console.log('Unknown message type:', data.type);
           }

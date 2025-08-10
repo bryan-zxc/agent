@@ -39,7 +39,7 @@ class AgentSettings(BaseSettings):
 
     # Database Configuration
     database_schema_version: int = Field(
-        default=1, description="Current database schema version"
+        default=2, description="Current database schema version"
     )
     database_auto_migrate: bool = Field(
         default=True, description="Enable automatic database migrations"

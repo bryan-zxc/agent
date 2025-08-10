@@ -10,7 +10,7 @@ services:
     volumes:
       - ./backend:/app
       - ./shared:/app/shared
-      - uploads:/app/uploads
+      - ./files:/app/files
       - ./db:/app/db
       - backend_cache:/root/.cache
     environment:
@@ -60,8 +60,6 @@ services:
       - agent_network
 
 volumes:
-  uploads:
-    driver: local
   frontend_node_modules:
     driver: local
   backend_cache:

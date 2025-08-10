@@ -4,14 +4,17 @@ import React from 'react';
 import { MessageInput } from './MessageInput';
 import { useChatStore } from '../stores/chatStore';
 import { cn } from '@/lib/utils';
+import { DuplicateFileInfo } from '@/lib/fileUpload';
 
 interface LandingPageProps {
   onFirstMessage: (message: string, files: File[]) => Promise<void>;
+  onDuplicateFound?: (duplicateInfo: DuplicateFileInfo, file: File) => Promise<string>;
   isConnected: boolean;
 }
 
 export const LandingPage: React.FC<LandingPageProps> = ({
   onFirstMessage,
+  onDuplicateFound,
   isConnected,
 }) => {
   const { currentConversationId, isConversationLocked } = useChatStore();
@@ -29,7 +32,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
         {/* Title */}
         <div className="text-center mb-8">
           <h1 className="text-4xl font-bold text-foreground mb-2">
-            G'day Mate!
+            G&apos;day Mate!
           </h1>
           <p className="text-gray-600 dark:text-gray-400 text-lg">
             Ready for a chat? What fun adventure shall we dive into today?
@@ -41,6 +44,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           <div className="bg-gray-100/70 dark:bg-gray-800/70 rounded-2xl backdrop-blur-md shadow-xl border-0">
             <MessageInput 
               onSubmit={onFirstMessage}
+              onDuplicateFound={onDuplicateFound}
               disabled={!isConnected || isConversationLocked(currentConversationId)}
               className="border-0 bg-transparent rounded-2xl"
               placeholder={isConversationLocked(currentConversationId) ? "Processing... Please wait" : "Type your message to start a conversation..."}

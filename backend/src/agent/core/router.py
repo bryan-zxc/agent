@@ -32,13 +32,13 @@ INSTRUCTION_LIBRARY = {
         "pdf": "You must first use the provided tool get_facts_from_pdf to extract relevant facts in the form of question answer pairs from each document until there are no longer any unanswered questions (ie missing facts to answer the user's original question). "
         "Extracting from each file must be a standalone task.\n"
         "When compiling the final response, you must aggressively use in-line citations, and your answer should be in markdown format."
+        "If the document(s) do not contain all necessary information, in other words there are still unanswered questions, you can use the search_web_general tool to search the web for information that can answer the user's question."
     },
     "non_file": {
-        "chilli_request": "You must first use search_web_pdf tool to find annual report and sustainability report, as most questions can be answered by these documents."
-        "If pdf documents are found, you must use the get_facts_from_pdf tool to extract relevant facts in the form of question answer pairs from each document until either there are no longer any unanswered questions (ie missing facts to answer the user's original question), or if there are no more documents. "
-        "Questions that are still open can be searched on the web using the search_web_general tool.",
-        "web_search": "You must use the search_web_general tool or the search_web_pdf tool to search the web for information that can answer the user's question. "
-        "If pdf documents are found, you must use the get_facts_from_pdf tool to extract relevant facts in the form of question answer pairs from each document until either there are no longer any unanswered questions (ie missing facts to answer the user's original question), or if there are no more documents. ",
+        # "chilli_request": "You must first use search_web_pdf tool to find annual report and sustainability report and extract the facts as question and answer pairs, as most questions can be answered by these documents. "
+        # "Use only the latest version of these documents, for example if today is 2025 then the latest annual report is likely 2024 (as the new year's report may not yet available) or 2025. "
+        # "Questions that are still open can be searched on the web using the search_web_general tool.",
+        "web_search": "You must use the search_web_general tool or the search_web_pdf tool to search the web for information that can answer the user's question. ",
     },
 }
 
@@ -48,7 +48,7 @@ class RouterAgent(BaseAgent):
         super().__init__(id=conversation_id, agent_type="router")
         self.conversation_id = self.id
         self.websocket = None
-        
+
         if self._init_by_id:
             # Load existing router from database
             self._load_existing_state()
@@ -58,38 +58,38 @@ class RouterAgent(BaseAgent):
                 router_id=self.id,
                 status="active",
                 model=settings.router_model,
-                temperature=0.0
+                temperature=0.0,
             )
             # Then set the private attributes
             self._model = settings.router_model
             self._temperature = 0.0
             self._status = "active"
-    
+
     def _load_existing_state(self):
         """Load router-specific state from database"""
         state = self._agent_db.get_router(self.id)
         if state:
-            self._model = state['model']
-            self._temperature = state['temperature'] 
-            self._status = state['status']
+            self._model = state["model"]
+            self._temperature = state["temperature"]
+            self._status = state["status"]
         else:
             # Fallback to defaults if database record doesn't exist
             self._agent_db.create_router(
                 router_id=self.id,
                 status="active",
                 model=settings.router_model,
-                temperature=0.0
+                temperature=0.0,
             )
             self._model = settings.router_model
             self._temperature = 0.0
             self._status = "active"
-    
+
     # Router-specific properties
-    
+
     @property
     def status(self):
-        return getattr(self, '_status', None)
-    
+        return getattr(self, "_status", None)
+
     @status.setter
     def status(self, value):
         self._status = value
@@ -116,6 +116,9 @@ class RouterAgent(BaseAgent):
 
         # Prepare message data for processing
         message_data = {"message": user_message, "files": files or []}
+
+        logger.info(f"DEBUG: activate_conversation called with files: {files}")
+        logger.info(f"DEBUG: message_data prepared: {message_data}")
 
         # Process the main message
         await self.handle_message(message_data)
@@ -168,6 +171,11 @@ class RouterAgent(BaseAgent):
         user_message = message_data.get("message", "")
         files = message_data.get("files", [])
 
+        logger.info(f"DEBUG: handle_message called with files: {files}")
+        logger.info(
+            f"DEBUG: files type: {type(files)}, length: {len(files) if files else 'None'}"
+        )
+
         # Store user message
         self.add_message("user", user_message)
 
@@ -176,9 +184,14 @@ class RouterAgent(BaseAgent):
             await self.send_status("Thinking")
 
             # Determine response type
+            logger.info(
+                f"DEBUG: Checking if files exist - files: {files}, bool(files): {bool(files)}"
+            )
             if files:
+                logger.info(f"DEBUG: Taking complex request path with files: {files}")
                 response = await self.handle_complex_request(files=files)
             else:
+                logger.info(f"DEBUG: Taking simple chat path - no files provided")
                 # Run assessment and simple chat concurrently to reduce wait time
                 async with asyncio.TaskGroup() as tg:
                     assessment_task = tg.create_task(self.assess_agent_requirements())
@@ -204,12 +217,13 @@ class RouterAgent(BaseAgent):
                 else:
                     # Use the already completed simple chat response
                     response = simple_chat_task.result()
-
+            logger.info(f"Response generated in router:\n{response}")
             # Store and send response
             self.add_message("assistant", response)
             await self.send_response(response)
 
         except Exception as e:
+            logger.error(f"Error handling message in conversation {self.id}: {str(e)}", exc_info=True)
             await self.send_error(f"Error: {str(e)}")
         finally:
             # Always unlock input for this conversation, even if processing failed
@@ -246,51 +260,78 @@ class RouterAgent(BaseAgent):
         self, files: list = None, agent_requirements: RequireAgent = None
     ) -> str:
         """Handle complex requests requiring planner"""
+        logger.info(
+            f"DEBUG: handle_complex_request called with files: {files}, agent_requirements: {agent_requirements}"
+        )
+
         # Validate that either files or agent requirements exist
         if not files and not agent_requirements:
+            logger.error(
+                "DEBUG: Neither files nor agent requirements provided - raising ValueError"
+            )
             raise ValueError(
                 "Either files must be provided or agent requirements must be specified"
             )
 
         # Determine user question and generate instructions
         instructions = []
+        logger.info(
+            f"DEBUG: Checking agent_requirements path - agent_requirements: {agent_requirements}"
+        )
         if agent_requirements:
             # Generate non-file instructions based on agent requirements
-            if agent_requirements.chilli_request:
-                instructions.append(
-                    f"# Instructions for Chilli request:\n\n{INSTRUCTION_LIBRARY.get('non_file').get('chilli_request', '')}"
-                )
+            # if agent_requirements.chilli_request:
+            #     instructions.append(
+            #         f"# Instructions for Chilli request:\n\n{INSTRUCTION_LIBRARY.get('non_file').get('chilli_request', '')}"
+            #     )
             if agent_requirements.web_search_required:
                 instructions.append(
                     f"# Instructions for web search:\n\n{INSTRUCTION_LIBRARY.get('non_file').get('web_search', '')}"
                 )
             user_question = agent_requirements.context_rich_agent_request
         else:
+            logger.info(
+                f"DEBUG: Taking files-only path - calling LLM to summarise conversation"
+            )
+            # Create a fresh message context for summarisation without the Bandit Heeler system message
+            user_messages = [
+                msg for msg in self.messages if msg.get("role") != "system"
+            ]
+            summary_messages = [
+                {
+                    "role": "system",
+                    "content": "Your sole job is to summarise the conversation into a context-rich request for the downstream agent. "
+                    "Use the latest message from the user as the basis and enrich the context directly associated with the question using the conversation history. "
+                    "Return only the context-rich request for the agent, do not include any other information such as prefixes or suffixes, do not ask for more information from the user.",
+                },
+                *user_messages,
+            ]
             response = await self.llm.a_get_response(
-                messages=self.messages
-                + [
-                    {
-                        "role": "developer",
-                        "content": "Summarise the conversation into a context-rich request for the agent.",
-                    }
-                ],
+                messages=summary_messages,
                 model=self.model,
                 temperature=self.temperature,
             )
             user_question = response.content
+            logger.info(f"DEBUG: LLM summarised user question: {user_question}")
 
         # Check if files list is not empty before processing
+        logger.info(
+            f"DEBUG: About to check files - files: {files}, bool(files): {bool(files)}"
+        )
         if files:
+            logger.info(f"DEBUG: Files found - processing files: {files}")
             # Determine question type
             question_type = await self.determine_question_type(user_question, files)
+            logger.info(f"DEBUG: Question type determined: {question_type}")
 
             if question_type == "multiple":
+                logger.info(f"DEBUG: Processing multiple files separately")
                 # Process each file separately and stream results
                 for i, file in enumerate(files, 1):
                     await self.send_status(f"Processing file {i}/{len(files)}: {file}")
 
                     response = await self._invoke_single(
-                        [file], user_question, instructions
+                        [file], user_question, instructions, agent_requirements
                     )
 
                     # Send result immediately to frontend
@@ -300,15 +341,24 @@ class RouterAgent(BaseAgent):
                 # Return summary message instead of collecting all responses
                 return f"Completed processing {len(files)} files. Results have been sent above."
             else:
+                logger.info(
+                    f"DEBUG: Processing all files together - calling _invoke_single with files: {files}"
+                )
                 # Process all files together
-                return await self._invoke_single(files, user_question, instructions)
+                return await self._invoke_single(
+                    files, user_question, instructions, agent_requirements
+                )
 
         else:
+            logger.info(f"DEBUG: No files - using _invoke_single with empty files list")
             # No files, use _invoke_single with empty files list
-            return await self._invoke_single([], user_question, instructions)
+            return await self._invoke_single(
+                [], user_question, instructions, agent_requirements
+            )
 
     async def process_files(self, file_paths: list) -> tuple[list, list]:
         """Process uploaded files into File objects and return (processed_files, errors)"""
+        logger.info(f"DEBUG: process_files called with file_paths: {file_paths}")
         processed_files = []
         errors = []
         image_types = []
@@ -316,14 +366,17 @@ class RouterAgent(BaseAgent):
         document_types = []
 
         for file_path in file_paths:
+            logger.info(f"DEBUG: Processing file: {file_path}")
             file_obj = Path(file_path)
 
             if file_obj.suffix == ".csv":
+                logger.info(f"DEBUG: Processing CSV file: {file_path}")
                 processed_files.append(
                     File(filepath=file_path, file_type="data", data_context="csv")
                 )
                 data_types.append("csv")
             elif file_obj.suffix == ".pdf":
+                logger.info(f"DEBUG: Processing PDF file: {file_path}")
                 # Process PDF
                 processed_files.append(
                     File(
@@ -331,6 +384,7 @@ class RouterAgent(BaseAgent):
                     )
                 )
                 document_types.append("pdf")
+                logger.info(f"DEBUG: document_types: {document_types}")
             elif is_image(file_path)[0]:
                 # Process image
                 breakdown, error = process_image_file(file_path)
@@ -386,6 +440,9 @@ class RouterAgent(BaseAgent):
                 ]
             )
 
+        logger.info(
+            f"DEBUG: process_files completed - processed_files: {len(processed_files)}, errors: {len(errors)}, instructions: {len(instructions)}"
+        )
         return processed_files, errors, instructions
 
     async def determine_question_type(self, user_question: str, files: list) -> str:
@@ -411,27 +468,65 @@ class RouterAgent(BaseAgent):
             return response.request_type
 
     async def _invoke_single(
-        self, files: list, user_question: str, instructions: list
+        self,
+        files: list,
+        user_question: str,
+        instructions: list,
+        agent_requirements: RequireAgent = None,
     ) -> str:
         """Invoke planner for single file, combined, or non-file processing"""
+        logger.info(
+            f"DEBUG: _invoke_single called with files: {files}, user_question: {user_question[:100]}..."
+        )
+
         # Handle file processing if files are provided
         if files:
+            logger.info(f"DEBUG: Processing files in _invoke_single: {files}")
             processed_files, errors, file_instructions = await self.process_files(files)
+            logger.info(
+                f"DEBUG: process_files returned - processed_files: {processed_files}, errors: {errors}"
+            )
 
             if not processed_files:
+                logger.error(
+                    f"DEBUG: No processed files found, returning error message"
+                )
                 return "Unable to process any files. Errors encountered:\n" + "\n".join(
                     f"• {error}" for error in errors
                 )
 
+            logger.info(
+                f"DEBUG: Combining instructions - base: {len(instructions)}, file: {len(file_instructions)}"
+            )
             # Combine instructions
             all_instructions = instructions + file_instructions
         else:
+            logger.info(f"DEBUG: No files case - using base instructions only")
             # No files case
             processed_files = None
             all_instructions = instructions
 
         logger.info(
             f"Conversation ID: {self.id}\nUser question: {user_question}\nInstructions: {"\n\n---\n\n".join(all_instructions)}"
+        )
+
+        logger.info(
+            f"DEBUG: About to determine planner name - agent_requirements: {agent_requirements}"
+        )
+        # Determine planner name based on agent requirements
+        planner_name = None
+        if agent_requirements and agent_requirements.chilli_request:
+            planner_name = "Chilli"
+            logger.info(f"DEBUG: Set planner_name to Chilli")
+        else:
+            logger.info(f"DEBUG: Using default planner (no special name)")
+
+        # Send "Agents assemble!" message first and capture its ID
+        agents_assemble_message_id = self.add_message("assistant", "Agents assemble!")
+        await self.send_response("Agents assemble!")
+        
+        logger.info(
+            f"DEBUG: Creating PlannerAgent with processed_files: {processed_files}"
         )
         # Create planner with processed files
         planner = PlannerAgent(
@@ -441,25 +536,33 @@ class RouterAgent(BaseAgent):
             model=self.model,
             temperature=self.temperature,
             failed_task_limit=settings.failed_task_limit,
+            planner_name=planner_name,
         )
+        logger.info(f"DEBUG: PlannerAgent created successfully with ID: {planner.id}")
         
-        # Create router-planner link in database
-        self._agent_db.link_router_planner(
-            router_id=self.id,
-            planner_id=planner.id,
-            relationship_type="initiated"
-        )
+        # Set up callback for execution plan updates
+        planner.set_execution_plan_callback(self._on_execution_plan_update)
 
-        await planner.invoke()
-        workings = []
-        for i, t in enumerate(planner.user_response.workings):
-            workings.append(
-                f"**Task {i+1}: {t.task_title}**\n\n"
-                f"{t.task_description}\n\n"
-                f"{"\n > ".join(t.task_outcome.split('\n'))}"
+        logger.info(f"DEBUG: Creating message-planner link in database")
+        # Create message-planner link in database (V2 schema)
+        if agents_assemble_message_id:
+            self._agent_db.link_message_planner(
+                router_id=self.id, 
+                message_id=agents_assemble_message_id,
+                planner_id=planner.id, 
+                relationship_type="initiated"
             )
-        workings.append(f"**Answer:**\n\n{planner.user_response.markdown_response}")
-        return "\n\n".join(workings)
+            logger.info(f"DEBUG: Message-planner link created successfully for message {agents_assemble_message_id}")
+        else:
+            logger.warning(f"DEBUG: Could not create message-planner link - no message ID captured")
+
+        logger.info(f"DEBUG: About to invoke planner")
+        await planner.invoke()
+        logger.info(f"DEBUG: Planner.invoke() completed")
+        logger.info(
+            f"user response received from planner in router invoke_single: {planner.user_response}"
+        )
+        return planner.user_response
 
     # WebSocket communication methods
     async def send_message(self, role: str, content: str):
@@ -488,6 +591,19 @@ class RouterAgent(BaseAgent):
         """Send error message to frontend"""
         if self.websocket:
             await self.websocket.send_json({"type": "error", "message": error})
+    
+    async def _on_execution_plan_update(self, planner_id: str, execution_plan: str):
+        """Callback for when planner execution plan is updated"""
+        if self.websocket:
+            await self.websocket.send_json({
+                "type": "execution_plan_update",
+                "data": {
+                    "planner_id": planner_id,
+                    "execution_plan": execution_plan,
+                    "conversation_id": self.conversation_id
+                }
+            })
+            logger.info(f"Sent execution plan update via WebSocket for planner {planner_id}")
 
     async def send_conversation_history(self):
         """Send conversation history to frontend on connect"""
@@ -508,7 +624,7 @@ class RouterAgent(BaseAgent):
         """Lock input for this specific conversation"""
         # Update router status to processing
         self.status = "processing"
-        
+
         if self.websocket:
             await self.websocket.send_json(
                 {
@@ -521,7 +637,7 @@ class RouterAgent(BaseAgent):
         """Unlock input for this specific conversation"""
         # Update router status back to active
         self.status = "active"
-        
+
         if self.websocket:
             await self.websocket.send_json(
                 {

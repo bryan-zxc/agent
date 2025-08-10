@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -14,11 +15,14 @@ from fastapi import (
     HTTPException,
     UploadFile,
     File,
+    Form,
 )
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from src.agent.core.router import RouterAgent
+from src.agent.models.agent_database import AgentDatabase
+from src.agent.utils.file_utils import calculate_file_hash, generate_unique_filename, sanitise_filename
 
 # Load environment variables
 # Load .env first (shared config), then .env.local (secrets) to override
@@ -43,6 +47,9 @@ app.add_middleware(
 # Store active connections
 active_connections = {}  # conversation_id -> RouterAgent
 user_connections = {}  # websocket -> user_session
+
+# Initialize database
+db = AgentDatabase()
 
 
 # Pydantic models for API
@@ -154,22 +161,185 @@ async def handle_websocket_message(websocket: WebSocket, data: dict):
 
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
-    """Handle file uploads"""
+    """Handle file uploads with duplicate detection"""
     try:
-        # Create uploads directory if it doesn't exist
-        upload_dir = Path("uploads")
-        upload_dir.mkdir(exist_ok=True)
-
-        # Save uploaded file
-        file_path = upload_dir / file.filename
+        # TODO: Replace 'bryan000' with actual username from user management system
+        user_id = "bryan000"
+        
+        # Read file content
+        content = await file.read()
+        file_size = len(content)
+        
+        # Calculate content hash
+        import tempfile
+        with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+            temp_file.write(content)
+            temp_file_path = temp_file.name
+        
+        try:
+            content_hash = calculate_file_hash(temp_file_path)
+        finally:
+            # Clean up temp file
+            Path(temp_file_path).unlink(missing_ok=True)
+        
+        # Check for duplicate content
+        existing_file = db.get_file_by_hash(content_hash, user_id)
+        
+        if existing_file:
+            # Duplicate found - return duplicate info with options
+            return {
+                "duplicate_found": True,
+                "existing_file": {
+                    "file_id": existing_file["file_id"],
+                    "original_filename": existing_file["original_filename"],
+                    "file_size": existing_file["file_size"],
+                    "upload_timestamp": existing_file["upload_timestamp"].isoformat()
+                },
+                "new_filename": file.filename,
+                "options": ["use_existing", "overwrite_existing", "save_as_new_copy", "cancel"]
+            }
+        
+        # No duplicate - save file normally
+        upload_dir = Path("/app/files/uploads") / user_id
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        
+        file_id = uuid.uuid4().hex
+        sanitised_filename = sanitise_filename(file.filename)
+        
+        # Check if sanitised filename already exists and make it unique if needed
+        existing_files = [f.name for f in upload_dir.iterdir() if f.is_file()]
+        if sanitised_filename in existing_files:
+            sanitised_filename = generate_unique_filename(sanitised_filename, existing_files)
+        
+        file_path = upload_dir / sanitised_filename
+        
         with open(file_path, "wb") as buffer:
-            content = await file.read()
             buffer.write(content)
-
-        return {"filename": file.filename, "path": str(file_path)}
+        
+        # Store file metadata
+        db.create_file_metadata(
+            file_id=file_id,
+            content_hash=content_hash,
+            original_filename=sanitised_filename,
+            file_path=str(file_path),
+            file_size=file_size,
+            mime_type=file.content_type,
+            user_id=user_id
+        )
+        
+        return {
+            "duplicate_found": False,
+            "file_id": file_id,
+            "filename": sanitised_filename,
+            "path": str(file_path),
+            "size": file_size
+        }
 
     except Exception as e:
         logger.error(f"Error uploading file: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/upload/resolve-duplicate")
+async def resolve_duplicate(
+    action: str = Form(...),
+    existing_file_id: str = Form(...),
+    new_filename: str = Form(...),
+    file: UploadFile = File(...)
+):
+    """Handle duplicate resolution based on user choice"""
+    try:
+        # TODO: Replace 'bryan000' with actual username from user management system
+        user_id = "bryan000"
+        
+        if action == "cancel":
+            return {
+                "action": "cancel",
+                "files": []  # Empty files array for message handling
+            }
+        
+        existing_file = db.get_file_by_id(existing_file_id)
+        if not existing_file:
+            raise HTTPException(status_code=404, detail="Existing file not found")
+        
+        if action == "use_existing":
+            # Increment reference count and return existing file
+            db.increment_file_reference(existing_file_id)
+            return {
+                "action": "use_existing",
+                "file_id": existing_file["file_id"],
+                "filename": existing_file["original_filename"],
+                "path": existing_file["file_path"],
+                "size": existing_file["file_size"],
+                "files": [existing_file["file_path"]]  # For message handling
+            }
+        
+        elif action == "overwrite_existing":
+            # Read new file content
+            content = await file.read()
+            
+            # Overwrite existing file
+            with open(existing_file["file_path"], "wb") as buffer:
+                buffer.write(content)
+            
+            return {
+                "action": "overwrite_existing", 
+                "file_id": existing_file["file_id"],
+                "filename": new_filename,
+                "path": existing_file["file_path"],
+                "size": len(content),
+                "files": [existing_file["file_path"]]  # For message handling
+            }
+        
+        elif action == "save_as_new_copy":
+            # Read new file content
+            content = await file.read()
+            
+            # Create new file with unique filename
+            upload_dir = Path("/app/files/uploads") / user_id
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Sanitise the new filename
+            sanitised_filename = sanitise_filename(new_filename)
+            
+            # Get list of existing filenames in the directory
+            existing_files = [f.name for f in upload_dir.iterdir() if f.is_file()]
+            
+            unique_filename = generate_unique_filename(sanitised_filename, existing_files)
+            file_id = uuid.uuid4().hex
+            file_path = upload_dir / unique_filename
+            
+            with open(file_path, "wb") as buffer:
+                buffer.write(content)
+            
+            # Calculate content hash for new file
+            content_hash = calculate_file_hash(file_path)
+            
+            # Store file metadata with unique filename
+            db.create_file_metadata(
+                file_id=file_id,
+                content_hash=content_hash,
+                original_filename=unique_filename,
+                file_path=str(file_path),
+                file_size=len(content),
+                mime_type=file.content_type,
+                user_id=user_id
+            )
+            
+            return {
+                "action": "save_as_new_copy",
+                "file_id": file_id,
+                "filename": unique_filename,
+                "path": str(file_path),
+                "size": len(content),
+                "files": [str(file_path)]  # For message handling
+            }
+        
+        else:
+            raise HTTPException(status_code=400, detail="Invalid action")
+    
+    except Exception as e:
+        logger.error(f"Error resolving duplicate: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -183,13 +353,13 @@ async def health_check():
 async def get_conversations():
     """Get all conversations"""
     try:
-        from src.agent.models.message_db import (
-            MessageDatabase,
+        from src.agent.models.agent_database import (
+            AgentDatabase,
             Conversation,
             RouterMessage,
         )
 
-        db = MessageDatabase()
+        db = AgentDatabase()
         with db.SessionLocal() as session:
             conversations = (
                 session.query(Conversation)
@@ -286,6 +456,36 @@ async def update_conversation_title(conversation_id: str):
         return {"status": "started"}
     except Exception as e:
         logger.error(f"Error starting title update: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/messages/{message_id}/planner-info")
+async def get_message_planner_info(message_id: int):
+    """Get planner information for a specific message"""
+    try:
+        # Get planner associated with this specific message
+        planner = db.get_planner_by_message(message_id)
+        
+        if not planner:
+            return {
+                "has_planner": False,
+                "execution_plan": None,
+                "status": None,
+                "planner_id": None
+            }
+        
+        return {
+            "has_planner": True,
+            "execution_plan": planner["execution_plan"],
+            "status": planner["status"],
+            "planner_id": planner["planner_id"],
+            "planner_name": planner["planner_name"],
+            "user_question": planner["user_question"],
+            "message_id": planner["message_id"],
+            "router_id": planner["router_id"]
+        }
+    except Exception as e:
+        logger.error(f"Error fetching message planner info: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -1,71 +1,78 @@
-# Claude Code Project Context
+# Agent System - AI Multi-Modal Processing
 
-## Project Overview
-This is an AI agent system for processing various file types and executing complex tasks using large language models. The system uses a planning-worker architecture with multi-modal processing capabilities.
+**Architecture**: Planning-worker system with multi-modal file processing capabilities.
 
-## Code Understanding Instructions
+## Code Workflow
 
-### Primary Documentation Sources
-When working with this codebase, **ALWAYS start by reading the README files** in the relevant directories before examining individual code files:
+**ALWAYS read README files first** before examining code:
 
-1. **Main Overview**: Read `/agent/README.md` first for architecture understanding
-2. **Module-Specific**: Read the README.md in the specific folder you're working with:
-   - `/agent/agents/README.md` - For planner and worker agents
-   - `/agent/config/README.md` - For configuration and constants
-   - `/agent/core/README.md` - For base classes and routing
-   - `/agent/models/README.md` - For data models and schemas
-   - `/agent/security/README.md` - For security guardrails
-   - `/agent/services/README.md` - For LLM and processing services
-   - `/agent/utils/README.md` - For utility functions and tools
+1. Start with `/agent/README.md` for system overview
+2. Read module README in the directory you're working with
+3. Only read specific code files when README doesn't cover implementation details
 
-### Workflow for Code Tasks
+**Backend Modules**:
+- `agents/` - PlannerAgent and WorkerAgents  
+- `core/` - Base classes and routing
+- `models/` - Data schemas and database
+- `services/` - LLM integration and processing
+- `utils/` - Utility functions and tools
 
-1. **Start with READMEs**: Always read the relevant README file(s) first to understand:
-   - Module purpose and architecture
-   - Available classes and functions
-   - Usage patterns and examples
-   - Integration points
+**Frontend Modules**:
+- `components/` - React components and UI architecture
+- `app/` - Next.js App Router and theme system
+- `lib/` - Utilities (cn function) and services (file upload)
+- `ui/` - shadcn/ui components and theming
+- `hooks/` - React hooks and state management
+- `stores/` - Zustand state management
 
-2. **Targeted Code Reading**: Only read specific code files when you need to:
-   - Understand implementation details not covered in README
-   - Debug specific issues
-   - Make targeted modifications
+## Architecture Summary
 
-3. **Avoid Full Code Scanning**: Do not read all code files in a directory unless absolutely necessary. The READMEs provide comprehensive overviews.
+- **Multi-Agent**: Planner breaks down tasks → Workers execute them
+- **Multi-Modal**: Text, images, charts, tables, data files
+- **Unified LLM**: Single interface for OpenAI/Anthropic/Google
+- **Safe Execution**: Sandboxed Python with security guardrails
+- **Type Safety**: Pydantic models throughout
 
-## Key Architecture Points
+## CRITICAL: Documentation Update Requirements
 
-- **Multi-Agent System**: PlannerAgent breaks down tasks, WorkerAgents execute them
-- **Multi-Modal Processing**: Handles text, images, charts, tables, and data files
-- **Unified LLM Interface**: Single service supports OpenAI, Anthropic, and Google models
-- **Safe Execution**: Sandboxed Python environment with security guardrails
-- **Structured Data**: Pydantic models ensure type safety throughout
+**MANDATORY: After making ANY code changes, you MUST update the relevant documentation:**
 
-## Common Tasks and Starting Points
+### Required Documentation Updates After Code Changes:
 
-### Understanding the System
-- Start with `/agent/README.md`
-- Review `/agent/core/README.md` for base architecture
+1. **Module README Files**: Update the README.md in the affected module directory
+   - Add new functions/classes to the function listings
+   - Update usage examples if behaviour has changed
+   - Document new features or capabilities
+   - Revise integration points if modified
 
-### Working with Agents
-- Read `/agent/agents/README.md` for PlannerAgent and WorkerAgent details
-- Check `/agent/models/README.md` for task-related data models
+2. **Main Project README** (`/agent/README.md`): Update when:
+   - Adding new major features (add to Features section)
+   - Modifying API endpoints (update API Endpoints section)
+   - Changing core architecture or tech stack
+   - Adding new environment variables or setup steps
 
-### Adding New Features
-- Check `/agent/services/README.md` for service integrations
-- Review `/agent/utils/README.md` for available utilities
+3. **Database Documentation** (`/agent/docs/database/`): Update when:
+   - Adding new database tables or columns
+   - Modifying existing schema structures
+   - Changing relationships or indexes
+   - Adding new database operations
 
-### Configuration Changes
-- Read `/agent/config/README.md` for settings and constants
+4. **Architecture Documentation** (`/agent/ARCHITECTURE.md`): Update when:
+   - Adding new components or services
+   - Modifying system architecture or data flow
+   - Changing core design patterns or principles
+   - Adding new integration points
 
-### Security Considerations
-- Always review `/agent/security/README.md` for guardrails
+### Documentation Update Checklist:
 
-## Development Guidelines
+- [ ] Updated relevant module README with new functions/classes
+- [ ] Added usage examples for new functionality  
+- [ ] Updated main README if features/APIs changed
+- [ ] Updated database documentation if schema changed
+- [ ] Updated architecture docs if system design changed
+- [ ] Used Australian English spelling throughout
+- [ ] Verified all code references include file_path:line_number format
 
-1. **Documentation First**: READMEs are the authoritative source for module understanding
-2. **Incremental Understanding**: Build knowledge progressively from READMEs to specific code
-3. **Context Efficiency**: Use READMEs to avoid unnecessary code exploration
-4. **Maintain Documentation**: Update READMEs when making significant changes
+**NEVER SKIP DOCUMENTATION UPDATES - they are as important as the code changes themselves.**
 
 This approach ensures efficient code understanding while maintaining comprehensive project knowledge.

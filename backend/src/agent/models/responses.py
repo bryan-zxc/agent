@@ -20,24 +20,6 @@ class RequireAgent(BaseModel):
     # )
 
 
-class RequestValidation(BaseModel):
-    acceptance_criteria_satisfied: str = Field(
-        description="List the acceptance criteria that has been satisfied and why."
-    )
-    acceptance_criteria_not_satisfied: str = Field(
-        description="List the acceptance criteria that has not been satisfied and why."
-    )
-    user_request_fulfilled: bool = Field(
-        description="Based on the executed tasks, has the acceptance criteria all completely been satisfied such that the user request is fulfilled, and user question is completely answered? "
-        "Only use True if all acceptance criteria are a pass and we are ready to provide a finalised response to the user. "
-        "If a task was completed due to repeated failure with no change in process, then immediately set this field to True which will end the process to avoid being stuck in an infinite loop of failure."
-    )
-    progress_summary: str = Field(
-        description="Provide a summary of the tasks that has been completed, and describe which acceptance criteria have not been met, and should therefore be the focus of the next steps. "
-        "This field should only be populated if user_request_fulfilled is False."
-    )
-
-
 class TaskResponse(BaseModel):
     task_id: str = Field(
         description="The stated ID of the task that was completed. Do not create IDs."
@@ -54,6 +36,10 @@ class TaskResponse(BaseModel):
         "Only rephrase the outcome, do not create any information that doesn't align or exist in the corresponding task ID. "
         "If this is the third failed task that resulted in the agent terminating due to repeated failure, then explicitly state that in the task outcome and explain to the user that this is done to avoid them waiting endlessly on repeated failing tasks."
     )
+
+
+class CompletionResponse(BaseModel):
+    all_items_crossed: bool
 
 
 class RequestResponse(BaseModel):

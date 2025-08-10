@@ -10,17 +10,28 @@ import { ConversationSidebar } from './ConversationSidebar';
 import { LandingPage } from './LandingPage';
 import { ErrorBoundary } from './ErrorBoundary';
 import { RightPanel } from './RightPanel';
+import { DuplicateFileDialog } from './DuplicateFileDialog';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from './ui/resizable';
 import { SidebarProvider, SidebarInset } from './ui/sidebar';
-import { cn } from '@/lib/utils';
-import { ChatMessage } from '../../../shared/types';
+import { fileUploadService, DuplicateFileInfo } from '../lib/fileUpload';
 
 export const ChatInterface: React.FC = () => {
-  const { messages, status, currentConversationId, createNewConversationInBackend, createNewConversation, setCurrentConversation, addMessage, isConversationLocked } = useChatStore();
+  const { messages, status, currentConversationId, createNewConversationInBackend, createNewConversation, setCurrentConversation, isConversationLocked } = useChatStore();
   console.log('ChatInterface render - currentConversationId:', currentConversationId);
   const [conversationStarted, setConversationStarted] = useState(false);
-  const [pendingConversationId, setPendingConversationId] = useState<string | null>(null);
+  const [, setPendingConversationId] = useState<string | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [duplicateDialog, setDuplicateDialog] = useState<{
+    open: boolean;
+    duplicateInfo: DuplicateFileInfo | null;
+    file: File | null;
+    resolve: (action: string) => void;
+  }>({
+    open: false,
+    duplicateInfo: null,
+    file: null,
+    resolve: () => {}
+  });
   
   // Use single persistent WebSocket connection
   const { sendMessage, loadConversation, isConnected: wsConnected, isWebSocketOpen } = useWebSocket();
@@ -45,6 +56,37 @@ export const ChatInterface: React.FC = () => {
     });
   };
 
+  const handleDuplicateFound = (duplicateInfo: DuplicateFileInfo, file: File): Promise<string> => {
+    return new Promise((resolve) => {
+      setDuplicateDialog({
+        open: true,
+        duplicateInfo,
+        file,
+        resolve
+      });
+    });
+  };
+
+  const handleDuplicateResolve = (action: string) => {
+    duplicateDialog.resolve(action);
+    setDuplicateDialog({
+      open: false,
+      duplicateInfo: null,
+      file: null,
+      resolve: () => {}
+    });
+  };
+
+  const handleDuplicateClose = () => {
+    duplicateDialog.resolve('cancel');
+    setDuplicateDialog({
+      open: false,
+      duplicateInfo: null,
+      file: null,
+      resolve: () => {}
+    });
+  };
+
   const handleFirstMessage = async (message: string, files: File[]) => {
     console.log('handleFirstMessage called with message:', message);
     if (!message.trim()) return;
@@ -60,25 +102,19 @@ export const ChatInterface: React.FC = () => {
       setConversationStarted(true);
       
       // Upload files if any
+      // Since files have already been checked for duplicates during attachment,
+      // we can upload them directly without duplicate checking
       const filePaths: string[] = [];
       if (files.length > 0) {
-        for (const file of files) {
-          const formData = new FormData();
-          formData.append('file', file);
-          
-          try {
-            const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/upload`, {
-              method: 'POST',
-              body: formData,
-            });
-            
-            if (response.ok) {
-              const result = await response.json();
-              filePaths.push(result.path);
+        try {
+          for (const file of files) {
+            const uploadResult = await fileUploadService.uploadFile(file);
+            if (uploadResult.path) {
+              filePaths.push(uploadResult.path);
             }
-          } catch (error) {
-            console.error('Error uploading file:', error);
           }
+        } catch (error) {
+          console.error('Error uploading files:', error);
         }
       }
 
@@ -114,25 +150,19 @@ export const ChatInterface: React.FC = () => {
     if (!message.trim() || !isWebSocketOpen()) return;
 
     // Upload files if any
+    // Since files have already been checked for duplicates during attachment,
+    // we can upload them directly without duplicate checking
     const filePaths: string[] = [];
     if (files.length > 0) {
-      for (const file of files) {
-        const formData = new FormData();
-        formData.append('file', file);
-        
-        try {
-          const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/upload`, {
-            method: 'POST',
-            body: formData,
-          });
-          
-          if (response.ok) {
-            const result = await response.json();
-            filePaths.push(result.path);
+      try {
+        for (const file of files) {
+          const uploadResult = await fileUploadService.uploadFile(file);
+          if (uploadResult.path) {
+            filePaths.push(uploadResult.path);
           }
-        } catch (error) {
-          console.error('Error uploading file:', error);
         }
+      } catch (error) {
+        console.error('Error uploading files:', error);
       }
     }
 
@@ -174,6 +204,7 @@ export const ChatInterface: React.FC = () => {
               <ResizablePanel defaultSize={80} minSize={50}>
                 <LandingPage 
                   onFirstMessage={handleFirstMessage}
+                  onDuplicateFound={handleDuplicateFound}
                   isConnected={wsConnected}
                 />
               </ResizablePanel>
@@ -186,6 +217,16 @@ export const ChatInterface: React.FC = () => {
                 <RightPanel />
               </ResizablePanel>
             </ResizablePanelGroup>
+            
+            {/* Duplicate File Dialog */}
+            {duplicateDialog.open && duplicateDialog.duplicateInfo && (
+              <DuplicateFileDialog
+                open={duplicateDialog.open}
+                duplicateInfo={duplicateDialog.duplicateInfo}
+                onResolve={handleDuplicateResolve}
+                onClose={handleDuplicateClose}
+              />
+            )}
           </SidebarInset>
         </SidebarProvider>
       </ErrorBoundary>
@@ -200,13 +241,13 @@ export const ChatInterface: React.FC = () => {
           onConversationSelect={handleConversationSelect}
           refreshTrigger={refreshTrigger}
         />
-        <SidebarInset className="h-screen">
+        <SidebarInset className="h-screen w-full overflow-hidden">
           <ChatHeader isConnected={wsConnected} />
-          <ResizablePanelGroup direction="horizontal" className="h-full">
+          <ResizablePanelGroup direction="horizontal" className="h-full w-full">
             {/* Main Chat Panel */}
             <ResizablePanel defaultSize={80} minSize={50}>
               <div 
-                className="flex flex-col h-full"
+                className="flex flex-col h-full min-w-0 overflow-hidden"
                 role="application"
                 aria-label="Chat Interface"
               >
@@ -218,9 +259,10 @@ export const ChatInterface: React.FC = () => {
                   />
                 </div>
 
-                <div className="flex-shrink-0 bg-background/95 backdrop-blur-sm border-t">
+                <div className="flex-shrink-0 bg-muted/30 backdrop-blur-sm">
                   <MessageInput 
                     onSubmit={handleMessageSubmit}
+                    onDuplicateFound={handleDuplicateFound}
                     disabled={!wsConnected || isConversationLocked(currentConversationId)}
                     className="border-0 bg-transparent"
                     placeholder={isConversationLocked(currentConversationId) ? "Processing... Please wait" : "Type your message... (Enter to send, Shift+Enter for new line)"}
@@ -237,6 +279,16 @@ export const ChatInterface: React.FC = () => {
               <RightPanel />
             </ResizablePanel>
           </ResizablePanelGroup>
+          
+          {/* Duplicate File Dialog */}
+          {duplicateDialog.open && duplicateDialog.duplicateInfo && (
+            <DuplicateFileDialog
+              open={duplicateDialog.open}
+              duplicateInfo={duplicateDialog.duplicateInfo}
+              onResolve={handleDuplicateResolve}
+              onClose={handleDuplicateClose}
+            />
+          )}
         </SidebarInset>
       </SidebarProvider>
     </ErrorBoundary>

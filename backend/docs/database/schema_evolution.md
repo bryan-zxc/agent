@@ -23,7 +23,7 @@ The Agent State Database implements a hybrid Data Vault approach designed for gr
 ### Version Management
 ```python
 # Current version tracking
-AGENT_DATABASE_SCHEMA_VERSION = 1
+AGENT_DATABASE_SCHEMA_VERSION = 2
 
 # Version checking on startup
 def check_schema_version():
@@ -34,9 +34,9 @@ def check_schema_version():
 
 ### Version Storage
 Each table includes:
-- `schema_version INTEGER DEFAULT 1` - Per-record version tracking
+- `schema_version INTEGER DEFAULT 2` - Per-record version tracking
 - Global version in `settings.AGENT_DATABASE_SCHEMA_VERSION`
-- Migration history table (future enhancement)
+- Migration history tracked in `schema_versions` table
 
 ## Evolution Patterns
 
@@ -44,9 +44,9 @@ Each table includes:
 **Use Case**: Adding new optional attributes without downtime
 
 ```sql
--- Step 1: Add to JSON metadata (immediate)
+-- Step 1: Add to JSON agent_metadata (immediate)
 UPDATE routers 
-SET metadata = JSON_SET(metadata, '$.timeout_seconds', 300)
+SET agent_metadata = JSON_SET(agent_metadata, '$.timeout_seconds', 300)
 WHERE schema_version = 1;
 
 -- Step 2: Update application code to read/write new attribute
@@ -68,13 +68,13 @@ ALTER TABLE routers ADD COLUMN timeout_seconds INTEGER DEFAULT 300;
 
 -- Phase 2: Migrate existing data
 UPDATE routers 
-SET timeout_seconds = CAST(JSON_EXTRACT(metadata, '$.timeout_seconds') AS INTEGER)
-WHERE JSON_EXTRACT(metadata, '$.timeout_seconds') IS NOT NULL;
+SET timeout_seconds = CAST(JSON_EXTRACT(agent_metadata, '$.timeout_seconds') AS INTEGER)
+WHERE JSON_EXTRACT(agent_metadata, '$.timeout_seconds') IS NOT NULL;
 
 -- Phase 3: Update application to use column
--- Phase 4: Clean up JSON metadata (optional)
+-- Phase 4: Clean up JSON agent_metadata (optional)
 UPDATE routers 
-SET metadata = JSON_REMOVE(metadata, '$.timeout_seconds');
+SET agent_metadata = JSON_REMOVE(agent_metadata, '$.timeout_seconds');
 
 -- Phase 5: Update schema version
 UPDATE routers SET schema_version = 2;
@@ -100,7 +100,7 @@ CREATE TABLE routers_v2 (
     -- existing columns
     model VARCHAR(100),
     temperature FLOAT,
-    metadata JSON,
+    agent_metadata JSON,
     schema_version INTEGER DEFAULT 2,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -110,9 +110,9 @@ CREATE TABLE routers_v2 (
 INSERT INTO routers_v2 SELECT 
     router_id, status, 
     NULL as conversation_context,  -- new field starts empty
-    COALESCE(CAST(JSON_EXTRACT(metadata, '$.timeout_seconds') AS INTEGER), 300),
+    COALESCE(CAST(JSON_EXTRACT(agent_metadata, '$.timeout_seconds') AS INTEGER), 300),
     model, temperature, 
-    JSON_REMOVE(metadata, '$.timeout_seconds'),  -- clean metadata
+    JSON_REMOVE(agent_metadata, '$.timeout_seconds'),  -- clean agent_metadata
     2 as schema_version,
     created_at, updated_at
 FROM routers;
@@ -184,21 +184,21 @@ def perform_migration(from_version: int, to_version: int):
 ### Best Practices
 ```python
 # Reading JSON attributes with fallback
-timeout = json_extract(metadata, '$.timeout_seconds', default=300)
+timeout = json_extract(agent_metadata, '$.timeout_seconds', default=300)
 
 # Writing JSON attributes safely
-metadata = json_set(metadata, '$.timeout_seconds', 300)
+agent_metadata = json_set(agent_metadata, '$.timeout_seconds', 300)
 
 # Querying JSON attributes (performance consideration)
 SELECT * FROM routers 
-WHERE JSON_EXTRACT(metadata, '$.feature_flag') = 'enabled';
+WHERE JSON_EXTRACT(agent_metadata, '$.feature_flag') = 'enabled';
 ```
 
 ### Performance Considerations
 - **Index JSON extracts** for frequent queries:
   ```sql
   CREATE INDEX idx_router_timeout 
-  ON routers(CAST(JSON_EXTRACT(metadata, '$.timeout_seconds') AS INTEGER));
+  ON routers(CAST(JSON_EXTRACT(agent_metadata, '$.timeout_seconds') AS INTEGER));
   ```
 - **Monitor query performance** on JSON fields
 - **Consider column promotion** when JSON queries become frequent
@@ -246,8 +246,73 @@ COMMIT;
 - **Selective rollback** of specific migrations
 - **Data reconstruction** from application logs if needed
 
+## V1→V2 Migration: Message-Specific Planner Association
+
+### Migration Summary
+**Date**: 2025-08-10  
+**Type**: Structural Enhancement  
+**Impact**: New table creation with foreign key relationships  
+
+### Changes Made
+1. **New Table**: `router_message_planner_links`
+   - Links planners to specific router messages instead of just conversations
+   - Enables multiple execution plans per conversation
+   - Supports historical access to execution plans
+
+2. **Table Schema**:
+   ```sql
+   CREATE TABLE router_message_planner_links (
+       link_id INTEGER NOT NULL PRIMARY KEY,
+       router_id VARCHAR(32) NOT NULL,
+       message_id INTEGER NOT NULL,
+       planner_id VARCHAR(32) NOT NULL,
+       relationship_type VARCHAR(50) NOT NULL,
+       created_at DATETIME,
+       UNIQUE (message_id, planner_id),
+       FOREIGN KEY(router_id) REFERENCES routers (router_id),
+       FOREIGN KEY(message_id) REFERENCES router_messages (id),
+       FOREIGN KEY(planner_id) REFERENCES planners (planner_id)
+   )
+   ```
+
+3. **Migration Process**:
+   - Existing `router_planner_links` preserved for backward compatibility
+   - New linking logic uses message-specific associations
+   - Fresh databases start directly with V2 schema
+
+4. **API Changes**:
+   - New endpoint: `/messages/{message_id}/planner-info`
+   - Returns execution plan specific to a message
+   - Supports real-time updates via WebSocket
+
+5. **Frontend Integration**:
+   - "Agents assemble!" messages now expandable
+   - Shows execution plans underneath planner activation messages
+   - Uses shadcn Collapsible component for expansion UI
+
+### Migration Code
+```python
+def _migrate_v1_to_v2(self):
+    """Migrate from V1 to V2 schema - add message-specific planner links"""
+    # Create new table
+    RouterMessagePlannerLink.__table__.create(self.engine, checkfirst=True)
+    
+    # Preserve existing data - no migration needed for router_planner_links
+    # New functionality uses RouterMessagePlannerLink table
+    
+    # Record migration
+    self._record_migration(2, 'Added RouterMessagePlannerLink table')
+```
+
+### Benefits
+- Multiple execution plans per conversation
+- Historical access to past execution plans  
+- Better UI/UX with message-specific expansion
+- Maintains data integrity through proper foreign keys
+- Backward compatibility preserved
+
 ---
 
-**Schema Version**: 1.0  
-**Last Updated**: 2025-08-06  
-**Next Review**: After first production migration
+**Schema Version**: 2.0  
+**Last Updated**: 2025-08-10  
+**Next Review**: After production deployment validation

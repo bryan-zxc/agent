@@ -26,7 +26,7 @@ Router agent state and configuration persistence.
 | status | VARCHAR(50) | NOT NULL | Router execution state | Values: active, completed, failed, archived |
 | model | VARCHAR(100) | | LLM model identifier | e.g., "gpt-4", "claude-3-sonnet" |
 | temperature | FLOAT | | LLM temperature setting | Range: 0.0-2.0, default varies by model |
-| metadata | JSON | | Extensible router attributes | Future-proofing for new router features |
+| agent_metadata | JSON | | Extensible router attributes | Future-proofing for new router features |
 | schema_version | INTEGER | DEFAULT 1 | Table schema version | Enables migration tracking |
 | created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Record creation time | Immutable after creation |
 | updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Last modification time | Auto-updated via property setters |
@@ -46,6 +46,7 @@ Planner agent execution plans and state management.
 | Field | Type | Constraints | Description | Business Rules |
 |-------|------|-------------|-------------|----------------|
 | planner_id | VARCHAR(32) | PRIMARY KEY | UUID hex string | Unique planner identifier |
+| planner_name | VARCHAR(255) | | Human readable planner name | Character name from TV shows/Disney |
 | user_question | TEXT | NOT NULL | Original user request | Immutable source of truth |
 | instruction | TEXT | | Processing instructions | Additional context for task planning |
 | execution_plan | TEXT | | Generated execution strategy | LLM-generated markdown plan |
@@ -53,7 +54,7 @@ Planner agent execution plans and state management.
 | temperature | FLOAT | | LLM temperature setting | Task-specific temperature |
 | failed_task_limit | INTEGER | | Max allowed task failures | Prevents infinite retry loops |
 | status | VARCHAR(50) | NOT NULL | Planner execution state | Values: planning, executing, completed, failed |
-| metadata | JSON | | Extensible planner attributes | Future enhancements |
+| agent_metadata | JSON | | Extensible planner attributes | Future enhancements |
 | schema_version | INTEGER | DEFAULT 1 | Table schema version | Migration support |
 | created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Record creation time | Immutable |
 | updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Last modification time | Auto-sync via properties |
@@ -73,13 +74,14 @@ Task/worker execution details and lifecycle management.
 | Field | Type | Constraints | Description | Business Rules |
 |-------|------|-------------|-------------|----------------|
 | worker_id | VARCHAR(32) | PRIMARY KEY | UUID hex string | Links to worker_messages.agent_id |
+| worker_name | VARCHAR(255) | | Human readable worker name | Character name from children's shows |
 | planner_id | VARCHAR(32) | NOT NULL, FK | Parent planner ID | FOREIGN KEY to planners.planner_id |
 | task_status | VARCHAR(50) | NOT NULL | Task execution state | Values: pending, in_progress, completed, failed_validation, recorded |
 | task_description | TEXT | | Detailed task description | Human-readable task definition |
 | acceptance_criteria | JSON | | Success criteria list | Array of validation requirements |
 | task_context | JSON | | TaskContext pydantic model | Structured context including user_request, context, previous_outputs |
 | task_result | TEXT | | Execution outcome | Detailed result description |
-| querying_data_file | BOOLEAN | DEFAULT FALSE | Data file query flag | Determines WorkerAgent vs WorkerAgentSQL |
+| querying_structured_data | BOOLEAN | DEFAULT FALSE | Data file query flag | Determines WorkerAgent vs WorkerAgentSQL |
 | image_keys | JSON | | Relevant image identifiers | Array of image keys from planner |
 | variable_keys | JSON | | Relevant variable identifiers | Array of variable keys from planner |
 | tools | JSON | | Required tools list | Array of tool names for execution |
@@ -88,7 +90,7 @@ Task/worker execution details and lifecycle management.
 | output_images | JSON | | Generated image outputs | Key-value pairs from task execution |
 | output_variables | JSON | | Generated variable outputs | Key-value pairs from task execution |
 | tables | JSON | | TableMeta objects | Array of table metadata for data tasks |
-| metadata | JSON | | Extensible task attributes | Future enhancements |
+| agent_metadata | JSON | | Extensible task attributes | Future enhancements |
 | schema_version | INTEGER | DEFAULT 1 | Table schema version | Migration support |
 | created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Record creation time | Immutable |
 | updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Last modification time | Auto-updated during execution |
@@ -199,4 +201,36 @@ Defined in application code, enforced via business logic:
 ---
 
 **Schema Version**: 1.0  
-**Last Updated**: 2025-08-06
+---
+
+### file_metadata
+
+File storage and duplicate detection via content hashing.
+
+| Field | Type | Constraints | Description | Business Rules |
+|-------|------|-------------|-------------|----------------|
+| file_id | VARCHAR(32) | PRIMARY KEY | UUID hex string | Unique file identifier |
+| content_hash | VARCHAR(64) | NOT NULL, INDEX | SHA-256 file hash | Content-based duplicate detection |
+| original_filename | VARCHAR(512) | NOT NULL | User-provided filename | Preserved for display purposes |
+| file_path | TEXT | NOT NULL | Physical file location | Server filesystem path |
+| file_size | INTEGER | NOT NULL | File size in bytes | Used for duplicate resolution UI |
+| mime_type | VARCHAR(100) | | File MIME type | Content type identification |
+| user_id | VARCHAR(100) | NOT NULL | File owner identifier | Multi-tenancy support |
+| reference_count | INTEGER | DEFAULT 1 | Usage reference count | Enables safe file cleanup |
+| upload_timestamp | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Initial upload time | Immutable creation timestamp |
+| last_accessed | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Last usage timestamp | Updated on file access |
+
+**Indexes:**
+- `content_hash, user_id` (compound) - Fast duplicate detection per user
+- `user_id` - User file queries
+- `upload_timestamp` - Chronological file listing
+
+**Business Logic:**
+- Duplicate detection: Files with identical `content_hash` for same `user_id` are considered duplicates
+- Reference counting: Prevents premature deletion of files referenced by multiple conversations
+- User isolation: File visibility restricted by `user_id`
+
+---
+
+**Schema Version**: 1.0  
+**Last Updated**: 2025-08-10

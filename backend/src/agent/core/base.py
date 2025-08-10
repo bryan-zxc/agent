@@ -1,7 +1,7 @@
 import logging
 import uuid
 from pathlib import Path
-from typing import Union, List, Dict, Any
+from typing import Union, List, Dict, Any, Optional
 from PIL import Image
 from datetime import datetime, timezone
 from ..services.llm_service import LLM
@@ -17,7 +17,7 @@ class BaseAgent:
     def __init__(self, id: str = None, agent_type: AgentType = None):
         # Use the class name as the caller for LLM usage tracking
         self.llm = LLM(caller=self.__class__.__name__)
-        
+
         if id:
             self.id = id
             self._init_by_id = True
@@ -30,22 +30,22 @@ class BaseAgent:
 
         # Initialize messages property to use database
         self._messages_cache = None
-    
+
     # Common agent properties with database sync
-    
+
     @property
     def model(self):
-        return getattr(self, '_model', None)
-    
+        return getattr(self, "_model", None)
+
     @model.setter
     def model(self, value):
         self._model = value
         self.update_agent_state(model=value)
-    
-    @property  
+
+    @property
     def temperature(self):
-        return getattr(self, '_temperature', None)
-    
+        return getattr(self, "_temperature", None)
+
     @temperature.setter
     def temperature(self, value):
         self._temperature = value
@@ -81,7 +81,7 @@ class BaseAgent:
         content: str,
         image: Union[str, Path, Image.Image] = None,
         verbose=True,
-    ):
+    ) -> Optional[int]:
         """
         Adds a message to the conversation history.
 
@@ -120,16 +120,20 @@ class BaseAgent:
                     }
                 ]
 
-        if verbose:
-            if isinstance(content, str):
-                # print(content, flush=True)
+        if isinstance(content, str):
+            if verbose:
                 logger.info(content)
-            elif isinstance(content, list):
-                for c in content:
-                    if c.get("type") == "text":
-                        # print(c["text"], flush=True)
+            else:
+                logger.debug(content)
+        elif isinstance(content, list):
+            for c in content:
+                if c.get("type") == "text":
+                    if verbose:
                         logger.info(c["text"])
                     else:
+                        logger.debug(c["text"])
+                else:
+                    if verbose:
                         decode_image(
                             c["image_url"]["url"].replace("data:image/png;base64,", "")
                         ).show()
@@ -139,44 +143,46 @@ class BaseAgent:
             if not hasattr(self, "_fallback_messages"):
                 self._fallback_messages = []
             self._fallback_messages.append({"role": role, "content": content})
+            return None  # In-memory storage doesn't have IDs
         else:
-            # Store in database
-            self._agent_db.add_message(self.agent_type, self.id, role, content)
-    
+            # Store in database and return message ID
+            return self._agent_db.add_message(self.agent_type, self.id, role, content)
+
     # Agent State Management
-    
+
     def update_agent_state(self, **kwargs):
         """Update any agent state fields dynamically"""
         if not kwargs or not self.agent_type:
             return
-            
+
         # Always update the updated_at timestamp
-        kwargs['updated_at'] = datetime.now(timezone.utc)
-        
+        kwargs["updated_at"] = datetime.now(timezone.utc)
+
         # Build dynamic update query
         with self._agent_db.SessionLocal() as session:
             # Get the appropriate model class and ID field
             model_mapping = {
-                "router": (Router, 'router_id'),
-                "planner": (Planner, 'planner_id'),
-                "worker": (Worker, 'worker_id')
+                "router": (Router, "router_id"),
+                "planner": (Planner, "planner_id"),
+                "worker": (Worker, "worker_id"),
             }
-            
+
             if self.agent_type not in model_mapping:
                 return
-                
+
             model_class, id_field = model_mapping[self.agent_type]
-            
+
             # Get the existing record
-            record = session.query(model_class).filter(
-                getattr(model_class, id_field) == self.id
-            ).first()
-            
+            record = (
+                session.query(model_class)
+                .filter(getattr(model_class, id_field) == self.id)
+                .first()
+            )
+
             if record:
                 # Update all provided fields
                 for field, value in kwargs.items():
                     if hasattr(record, field):
                         setattr(record, field, value)
-                
+
                 session.commit()
-    

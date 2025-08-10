@@ -83,7 +83,7 @@ export const RichMarkdownRenderer: React.FC<RichMarkdownRendererProps> = ({
   className = '' 
 }) => {
   return (
-    <div className={`prose dark:prose-invert max-w-none text-sm leading-relaxed ${className}`}>
+    <div className={`prose dark:prose-invert max-w-none text-sm leading-relaxed break-words overflow-wrap-anywhere min-w-0 ${className}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeHighlight, rehypeKatex]}
@@ -91,7 +91,7 @@ export const RichMarkdownRenderer: React.FC<RichMarkdownRendererProps> = ({
           // Enhanced pre blocks - let highlight.js handle colors
           pre({ children }) {
             return (
-              <pre className="p-4 rounded-lg overflow-x-auto text-sm my-4">
+              <pre className="p-4 rounded-lg overflow-x-auto text-sm my-4 break-all">
                 {children}
               </pre>
             );
@@ -108,7 +108,7 @@ export const RichMarkdownRenderer: React.FC<RichMarkdownRendererProps> = ({
             
             if (inline) {
               return (
-                <code className="bg-gray-100 dark:bg-gray-800 px-1 py-0.5 rounded text-sm font-mono" {...props}>
+                <code className="bg-gray-100 dark:bg-gray-800 px-1 py-0.5 rounded text-sm font-mono break-all" {...props}>
                   {children}
                 </code>
               );
@@ -261,7 +261,7 @@ export const RichMarkdownRenderer: React.FC<RichMarkdownRendererProps> = ({
           // Enhanced paragraphs
           p({ children }) {
             return (
-              <p className="mb-4 leading-relaxed">
+              <p className="mb-4 leading-relaxed break-words overflow-wrap-anywhere">
                 {children}
               </p>
             );

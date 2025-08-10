@@ -6,9 +6,11 @@ import { FileAttachment } from './FileAttachment';
 import { Button } from './ui/button';
 import { Textarea } from './ui/textarea';
 import { Send, Paperclip } from 'lucide-react';
+import { DuplicateFileInfo } from '@/lib/fileUpload';
 
 interface MessageInputProps {
   onSubmit: (message: string, files: File[]) => Promise<void>;
+  onDuplicateFound?: (duplicateInfo: DuplicateFileInfo, file: File) => Promise<string>;
   disabled?: boolean;
   className?: string;
   placeholder?: string;
@@ -16,6 +18,7 @@ interface MessageInputProps {
 
 export const MessageInput: React.FC<MessageInputProps> = ({
   onSubmit,
+  onDuplicateFound,
   disabled = false,
   className,
   placeholder = "Type your message... (Enter to send, Shift+Enter for new line)"
@@ -89,6 +92,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
             selectedFiles={selectedFiles}
             onFileSelect={handleFileSelect}
             onFileRemove={handleFileRemove}
+            onDuplicateFound={onDuplicateFound}
             disabled={isFormDisabled}
             fileInputRef={fileInputRef}
           />
@@ -100,10 +104,38 @@ export const MessageInput: React.FC<MessageInputProps> = ({
             ref={fileInputRef}
             type="file"
             multiple
-            onChange={(e) => {
+            onChange={async (e) => {
               if (e.target.files) {
-                handleFileSelect(Array.from(e.target.files));
+                const newFiles = Array.from(e.target.files);
+                
+                if (onDuplicateFound) {
+                  // Check for duplicates immediately
+                  try {
+                    const { fileUploadService } = await import('@/lib/fileUpload');
+                    const resolvedFiles = await fileUploadService.checkFilesForDuplicates(
+                      newFiles,
+                      onDuplicateFound
+                    );
+                    
+                    // Only add files that weren't cancelled
+                    const filesToAdd = resolvedFiles
+                      .filter(resolved => resolved.isResolved)
+                      .map(resolved => resolved.file);
+                    
+                    handleFileSelect(filesToAdd);
+                  } catch (error) {
+                    console.error('Error checking for duplicates:', error);
+                    // Fallback to normal behaviour
+                    handleFileSelect(newFiles);
+                  }
+                } else {
+                  // No duplicate checking, proceed normally
+                  handleFileSelect(newFiles);
+                }
               }
+              
+              // Reset the input value so the same file can be selected again if needed
+              e.target.value = '';
             }}
             className="hidden"
             accept="image/*,.pdf,.txt,.doc,.docx,.md"

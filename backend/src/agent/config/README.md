@@ -4,6 +4,38 @@ Configuration management and application constants for the agent system.
 
 ## Modules
 
+### `agent_names.py`
+Character names for agent personality assignment.
+
+#### Character Name Lists
+
+**`PLANNER_NAMES`**
+- Names assigned to PlannerAgent instances for personality
+- **Sources:**
+  - Bluey adults: Uncle Stripe, Aunt Trixie, Uncle Rad, Frisky, etc.
+  - Peppa Pig adults: Daddy Pig, Mummy Pig, Grandpa Pig, etc.
+  - Ryder from Paw Patrol (special inclusion)
+  - Disney Princesses: Snow White, Cinderella, Aurora, Ariel, Belle, etc.
+
+**`WORKER_NAMES`** 
+- Names assigned to WorkerAgent instances for personality
+- **Sources:**
+  - Paw Patrol dogs: Marshall, Rubble, Chase, Rocky, etc.
+  - Sofia the First children: Sofia, Amber, James, etc.
+  - Spidey and His Amazing Friends: Peter Parker, Miles Morales, etc.
+  - Peppa Pig children: Peppa, George, Rebecca Rabbit, etc.
+  - Bluey children: Bluey, Bingo, Muffin, Socks, etc.
+
+#### Functions
+
+**`get_random_planner_name()`**
+- Returns a random name from PLANNER_NAMES list
+- Used during PlannerAgent creation when no specific name provided
+
+**`get_random_worker_name()`**
+- Returns a random name from WORKER_NAMES list  
+- Used during WorkerAgent creation (always random)
+
 ### `constants.py`
 Application-wide constants and configuration values.
 

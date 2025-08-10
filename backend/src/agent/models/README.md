@@ -43,15 +43,96 @@ Database models and service for agent message persistence and state management.
   - `content`: Text content of the message
   - `created_at`: Message timestamp
 
+**`Router`**
+- Agent state for RouterAgent instances
+- **Fields:**
+  - `router_id`: UUID hex string (primary key, same as conversation_id)
+  - `status`: Router status (active, processing, completed, failed, archived)
+  - `model`: LLM model used
+  - `temperature`: LLM temperature setting
+  - `agent_metadata`: JSON metadata for future extensibility
+  - `schema_version`: Schema evolution tracking
+  - `created_at`: Router creation timestamp
+  - `updated_at`: Last update timestamp
+
+**`Planner`**
+- Agent state for PlannerAgent instances
+- **Fields:**
+  - `planner_id`: UUID hex string (primary key)
+  - `planner_name`: Human readable planner name (optional)
+  - `user_question`: Original user request
+  - `instruction`: Processing instructions
+  - `execution_plan`: Markdown formatted execution plan
+  - `model`: LLM model used
+  - `temperature`: LLM temperature setting
+  - `failed_task_limit`: Max failed tasks allowed
+  - `status`: Planner status (planning, executing, completed, failed)
+  - `agent_metadata`: JSON metadata for future extensibility
+  - `schema_version`: Schema evolution tracking
+  - `created_at`: Planner creation timestamp
+  - `updated_at`: Last update timestamp
+
+**`Worker`**
+- Agent state for WorkerAgent instances (task records)
+- **Fields:**
+  - `worker_id`: UUID hex string (primary key, same as task_id)
+  - `worker_name`: Human readable worker name (optional)
+  - `planner_id`: Foreign key to Planner table
+  - `task_status`: Task status (pending, in_progress, completed, failed_validation, recorded)
+  - `task_description`: Detailed task description
+  - `acceptance_criteria`: JSON list of success criteria
+  - `task_context`: JSON TaskContext pydantic model
+  - `task_result`: Execution outcome
+  - `querying_structured_data`: Boolean for data file operations
+  - `image_keys`: JSON list of relevant image identifiers
+  - `variable_keys`: JSON list of relevant variable identifiers
+  - `tools`: JSON list of required tools
+  - `input_images`: JSON input image data
+  - `input_variables`: JSON input variables
+  - `output_images`: JSON output image data
+  - `output_variables`: JSON output variables
+  - `tables`: JSON TableMeta objects
+  - `agent_metadata`: JSON metadata for future extensibility
+  - `schema_version`: Schema evolution tracking
+  - `created_at`: Worker/task creation timestamp
+  - `updated_at`: Last update timestamp
+
+**`RouterPlannerLink`**
+- Links between routers and planners for relationship tracking
+- **Fields:**
+  - `link_id`: Auto-incrementing primary key
+  - `router_id`: Foreign key to Router table
+  - `planner_id`: Foreign key to Planner table
+  - `relationship_type`: Relationship type (initiated, continued, forked)
+  - `created_at`: Link creation timestamp
+
+**`RouterMessagePlannerLink`** *(Schema V2)*
+- Links planners to specific router messages for message-specific execution plans
+- **Fields:**
+  - `link_id`: Auto-incrementing primary key
+  - `router_id`: Foreign key to Router table
+  - `message_id`: Foreign key to RouterMessage table
+  - `planner_id`: Foreign key to Planner table
+  - `relationship_type`: Relationship type (initiated, continued, forked)
+  - `created_at`: Link creation timestamp
+- **Purpose**: Enables multiple execution plans per conversation and historical access
+
 #### Service Class
 
 **`AgentDatabase`**
 - Unified database service for all agent types and state management
-- **Methods:**
-  - `add_message(agent_type, agent_id, role, content)`: Store message
+- **Core Methods:**
+  - `add_message(agent_type, agent_id, role, content)`: Store message (returns message ID)
   - `get_messages(agent_type, agent_id)`: Retrieve conversation history
   - `clear_messages(agent_type, agent_id)`: Clear conversation history
-- **Database**: SQLite with automatic table creation
+- **Planner Linking Methods (Schema V2):**
+  - `link_message_planner(router_id, message_id, planner_id)`: Associate planner with specific message
+  - `get_planner_by_message(message_id)`: Retrieve planner info for a specific message
+  - `get_planner_by_conversation(conversation_id)`: Get all planners for conversation (legacy)
+- **Migration Features:**
+  - `_migrate_v1_to_v2()`: Automatic schema migration on startup
+  - `_record_migration(version, description)`: Track migration history
+- **Database**: SQLite with automatic table creation and migrations
 - **Thread Safety**: Session-per-operation pattern
 
 ## Modules
@@ -187,7 +268,7 @@ Task definition and execution models.
   - `task_context`: TaskContext object
   - `task_description`: Detailed action description
   - `acceptance_criteria`: Success criteria list
-  - `querying_data_file`: Boolean for data file operations
+  - `querying_structured_data`: Boolean for data file operations
   - `image_keys`: List of relevant image identifiers
   - `variable_keys`: List of relevant variable identifiers
   - `tools`: List of required tools
@@ -287,7 +368,7 @@ task = Task(
     ),
     task_description="Generate summary statistics",
     acceptance_criteria=["Mean and median calculated", "Results formatted"],
-    querying_data_file=True
+    querying_structured_data=True
 )
 ```
 

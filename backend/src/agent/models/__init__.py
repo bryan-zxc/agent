@@ -27,16 +27,18 @@ from .tasks import (
     TaskContext,
     Task,
     FullTask,
-    Tasks,
     PlanValidation,
     TaskResult,
     TaskArtefact,
     TaskArtefactSQL,
     TaskValidation,
+    TodoItem,
+    ExecutionPlanModel,
+    InitialExecutionPlan,
 )
 
 from .responses import (
-    RequestValidation,
+    CompletionResponse,
     TaskResponse,
     RequestResponse,
 )
@@ -67,14 +69,16 @@ __all__ = [
     "TaskContext",
     "Task",
     "FullTask",
-    "Tasks",
     "PlanValidation",
     "TaskResult",
     "TaskArtefact",
     "TaskArtefactSQL",
     "TaskValidation",
+    "TodoItem",
+    "ExecutionPlanModel", 
+    "InitialExecutionPlan",
     # Responses
-    "RequestValidation",
+    "CompletionResponse", 
     "TaskResponse",
     "RequestResponse",
 ]

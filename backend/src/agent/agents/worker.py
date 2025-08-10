@@ -1,9 +1,11 @@
 import logging
 import duckdb
+import json
 from PIL import Image
 from pydantic import BaseModel, Field
 from ..core.base import BaseAgent
 from ..config.settings import settings
+from ..config.agent_names import get_random_worker_name
 from ..utils.sandbox import CodeSandbox
 from ..utils.tools import encode_image, decode_image, is_serialisable
 from ..models import (
@@ -37,102 +39,104 @@ class BaseWorkerAgent(BaseAgent):
         # Use task.task_id as ID if task provided, otherwise use provided ID
         worker_id = task.task_id if task else id
         super().__init__(id=worker_id, agent_type="worker")
-        
+
         # Initialize or load worker state
         state = self._agent_db.get_worker(self.id) if self._init_by_id else None
         if state:
             self._load_existing_state(state)
         else:
             self._create_new_worker(task, planner_id, max_retry, model, temperature)
-        
+
         # Only set up messages for new workers
         if not state:
             self._setup_worker_messages()
-    
+
     def _load_existing_state(self, state):
         """Load worker-specific state from database"""
         # Reconstruct FullTask from database state
         self.task = FullTask(
-            task_id=state['worker_id'],
-            task_status=state['task_status'],
-            task_description=state['task_description'],
-            acceptance_criteria=state['acceptance_criteria'],
-            task_context=state['task_context'],
-            task_result=state['task_result'],
-            querying_data_file=state['querying_data_file'],
-            image_keys=state['image_keys'] or [],
-            variable_keys=state['variable_keys'] or [],
-            tools=state['tools'] or [],
-            input_images=state['input_images'] or {},
-            input_variables=state['input_variables'] or {},
-            output_images=state['output_images'] or {},
-            output_variables=state['output_variables'] or {},
-            tables=state['tables'] or []
+            task_id=state["worker_id"],
+            task_status=state["task_status"],
+            task_description=state["task_description"],
+            acceptance_criteria=state["acceptance_criteria"],
+            task_context=state["task_context"],
+            task_result=state["task_result"],
+            querying_structured_data=state["querying_structured_data"],
+            image_keys=state["image_keys"] or [],
+            variable_keys=state["variable_keys"] or [],
+            tools=state["tools"] or [],
+            input_images=state["input_images"] or {},
+            input_variables=state["input_variables"] or {},
+            output_images=state["output_images"] or {},
+            output_variables=state["output_variables"] or {},
+            tables=state["tables"] or [],
         )
-        self._max_retry = state.get('max_retry', settings.max_retry_tasks)
-        self._model = state.get('model', settings.worker_model)
-        self._temperature = state.get('temperature', 0.0)
-        self._planner_id = state['planner_id']
-    
+        self._max_retry = state.get("max_retry", settings.max_retry_tasks)
+        self._model = state.get("model", settings.worker_model)
+        self._temperature = state.get("temperature", 0.0)
+        self._planner_id = state["planner_id"]
+
     def _create_new_worker(self, task, planner_id, max_retry, model, temperature):
         """Create new worker with database record and initial setup"""
         if not task:
             raise ValueError("Task must be provided for new workers")
         if not planner_id:
             raise ValueError("Planner ID must be provided for new workers")
-            
+
         # Store task as instance variable
         self.task = task
-        
+
         # Create database record first - pass FullTask directly
+        worker_name = get_random_worker_name()
         self._agent_db.create_worker(
             worker_id=self.id,
             planner_id=planner_id,
-            task_data=task
+            task_data=task,
+            worker_name=worker_name,
         )
-        
+
         # Set private attributes
         self._max_retry = max_retry
         self._model = model
         self._temperature = temperature
         self._planner_id = planner_id
-    
+
     def _setup_worker_messages(self):
         """Set up initial messages for worker - to be overridden by subclasses"""
         pass
-    
+
     # Worker-specific properties with auto-sync
-    
+
     @property
     def max_retry(self):
-        return getattr(self, '_max_retry', settings.max_retry_tasks)
-    
+        return getattr(self, "_max_retry", settings.max_retry_tasks)
+
     @max_retry.setter
     def max_retry(self, value):
         self._max_retry = value
         self.update_agent_state(max_retry=value)
-    
+
     @property
     def planner_id(self):
-        return getattr(self, '_planner_id', None)
-    
-    @planner_id.setter  
+        return getattr(self, "_planner_id", None)
+
+    @planner_id.setter
     def planner_id(self, value):
         self._planner_id = value
         self.update_agent_state(planner_id=value)
-    
+
     def sync_task_to_db(self):
         """Sync all FullTask attributes to database"""
-        if not hasattr(self, 'task') or not self.task:
+        if not hasattr(self, "task") or not self.task:
             return
-            
+
         self.update_agent_state(
             task_status=self.task.task_status,
             task_description=self.task.task_description,
             acceptance_criteria=self.task.acceptance_criteria,
-            task_context=self.task.task_context,
+            task_context=self.task.task_context.model_dump(),
             task_result=self.task.task_result,
-            querying_data_file=self.task.querying_data_file,
+            querying_structured_data=self.task.querying_structured_data,
             image_keys=self.task.image_keys,
             variable_keys=self.task.variable_keys,
             tools=self.task.tools,
@@ -140,7 +144,8 @@ class BaseWorkerAgent(BaseAgent):
             input_variables=self.task.input_variables,
             output_images=self.task.output_images,
             output_variables=self.task.output_variables,
-            tables=self.task.tables
+            tables=self.task.tables,
+            filepaths=self.task.filepaths,
         )
 
     async def _validate_result(self):
@@ -155,7 +160,7 @@ class BaseWorkerAgent(BaseAgent):
             response_format=TaskValidation,
         )
         # print(f"Validation result: {validation.model_dump_json(indent=2)}", flush=True)
-        logger.debug(f"Validation result: {validation.model_dump_json(indent=2)}")
+        logger.info(f"Validation result: {validation.model_dump_json(indent=2)}")
         if validation.task_completed:
             self.task.task_result = convert_result_to_str(validation.validated_result)
             # print(
@@ -185,11 +190,11 @@ class WorkerAgent(BaseWorkerAgent):
         temperature: float = 0,
     ):
         super().__init__(task, id, planner_id, max_retry, model, temperature)
-        
+
         # Initialize WorkerAgent-specific attributes (both new and existing)
         self.output_variables = []
         self.image_descriptions = ImageDescriptions(descriptions=[])
-        
+
     def _setup_worker_messages(self):
         """Set up initial messages for new worker"""
         self.add_message(
@@ -228,6 +233,11 @@ class WorkerAgent(BaseWorkerAgent):
                 )
                 self.add_message(role="user", content=content, verbose=False)
         if self.task.input_variables:
+            self.add_message(
+                role="developer",
+                content="The following variables are available for use, they already exist in the environment, "
+                f"you do not need to declare or create it: {', '.join(self.task.input_variables.keys())}",
+            )
             for variable_name, variable in self.task.input_variables.items():
                 self.add_message(
                     role="developer",
@@ -236,6 +246,12 @@ class WorkerAgent(BaseWorkerAgent):
                     f"Variable content (first 10000 characters)```\n{str(variable)[:10000]}\n```",
                     verbose=False,
                 )
+        if self.task.filepaths:
+            self.add_message(
+                role="developer",
+                content=f"The following PDF files are available for use: {', '.join(self.task.filepaths)}",
+                verbose=False,
+            )
         if self.task.tools:
             tools_text = "\n\n-------------------------\n\n".join(
                 [f"# {t}\n{TOOLS.get(t).__doc__}" for t in self.task.tools]
@@ -250,34 +266,16 @@ class WorkerAgent(BaseWorkerAgent):
             )
 
     async def invoke(self):
-        appending_msgs = []
-
-        if self.task.input_variables:
-            appending_msgs.append(
-                {
-                    "role": "developer",
-                    "content": "The following variables are available for use, they already exist in the environment, "
-                    f"you do not need to declare or create it: {', '.join(self.task.input_variables.keys())}",
-                }
-            )
-        appending_msgs.append(
-            {
-                "role": "developer",
-                "content": "If writing code, you can assume a variable called 'messages' exists in the environment, "
-                "and contains conversation history in the format expected by the LLM, "
-                "containing the task at hand and context required such as user request. "
-                "Do not assign 'messages' variable, just call it when needed.",
-            }
-        )
         for n in range(self.max_retry):
             logger.info(f"Worker {self.task.task_id} - Attempt {n + 1}")
+            logger.info(f"Messages: {json.dumps(self.messages, indent=2)}")
             task_result = await self.llm.a_get_response(
-                messages=self.messages + appending_msgs,
+                messages=self.messages,
                 model=self.model,
                 temperature=self.temperature,
                 response_format=TaskArtefact,
             )
-            logger.debug(f"Task result: {task_result.model_dump_json(indent=2)}")
+            logger.info(f"Task result: {task_result.model_dump_json(indent=2)}")
             if task_result.python_code:
                 if task_result.is_malicious:
                     self.task.task_result = "The code is either making changes to the database or creating executable files - this is considered malicious and not permitted."
@@ -291,7 +289,7 @@ class WorkerAgent(BaseWorkerAgent):
                     content=f"The python code to execute:\n```python\n{task_result.python_code}\n```",
                 )
                 # Execute the code in a sandbox
-                locals_dict = {"messages": self.messages}
+                locals_dict = {}
                 if self.task.input_images:
                     locals_dict.update(self.task.input_images)
                 if self.task.input_variables:
@@ -302,7 +300,7 @@ class WorkerAgent(BaseWorkerAgent):
                         if callable(func):
                             locals_dict[t] = func
                 # print(locals_dict.keys(), flush=True)
-                logger.debug(f"Locals dict keys: {list(locals_dict.keys())}")
+                logger.info(f"Locals dict keys: {list(locals_dict.keys())}")
                 sandbox = CodeSandbox(locals_dict=locals_dict)
                 sandbox_result = sandbox.execute(task_result.python_code)
                 if sandbox_result["success"]:
@@ -356,6 +354,37 @@ class WorkerAgent(BaseWorkerAgent):
                     self.task.task_result = (
                         f"Error executing code: {sandbox_result['error']}"
                     )
+
+                    # Check if error is due to unavailable tool/function
+                    class ToolMissing(BaseModel):
+                        tool_not_available: bool = Field(
+                            False,
+                            description="True if the error indicates a tool or function is not available or doesn't exist",
+                        )
+
+                    tool_check = await self.llm.a_get_response(
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": f"Error: {sandbox_result['error']}",
+                            }
+                        ],
+                        model=self.model,
+                        response_format=ToolMissing,
+                    )
+
+                    if tool_check.tool_not_available:
+                        self.task.task_result = (
+                            "Task failed: Required tool was not provided"
+                        )
+                        self.task.task_status = "failed_validation"
+                        self.add_message(
+                            role="assistant",
+                            content=f"{self.task.task_result}\n\n{sandbox_result["stack_trace"]}\n\nRequired tool is not available, please supply the task with the required tool and try again.",
+                        )
+                        self.sync_task_to_db()
+                        return
+
                     self.add_message(
                         role="assistant",
                         content=f"{self.task.task_result}\n\n{sandbox_result["stack_trace"]}\n\nRewrite the python code to fix the error.",
@@ -383,6 +412,8 @@ class WorkerAgent(BaseWorkerAgent):
                         self.task.task_result += (
                             f"\n\nRepeated failure: {repeated_fail.failure_summary}"
                         )
+                        self.task.task_status = "failed_validation"
+                        self.sync_task_to_db()
                         return
             else:
                 self.add_message(role="assistant", content=task_result.result)
@@ -453,10 +484,10 @@ class WorkerAgentSQL(BaseWorkerAgent):
         temperature: float = 0,
     ):
         super().__init__(task, id, planner_id, max_retry, model, temperature)
-        
+
         # Initialize WorkerAgentSQL-specific attributes
         self.duck_conn = duck_conn
-    
+
     def _setup_worker_messages(self):
         """Set up initial messages for SQL worker"""
 
@@ -496,7 +527,7 @@ class WorkerAgentSQL(BaseWorkerAgent):
                 response_format=TaskArtefactSQL,
             )
             # print(f"SQL artefact: {sql_artefact.model_dump_json(indent=2)}", flush=True)
-            logger.debug(f"SQL artefact: {sql_artefact.model_dump_json(indent=2)}")
+            logger.info(f"SQL artefact: {sql_artefact.model_dump_json(indent=2)}")
             if sql_artefact.sql_code:
                 try:
                     sql_output = (
@@ -521,7 +552,7 @@ class WorkerAgentSQL(BaseWorkerAgent):
                 self.task.task_status = "failed_validation"
                 self.sync_task_to_db()
                 return
-        
+
         # If we reach here, all retries have been exhausted without success
         self.task.task_status = "failed_validation"
         self.task.task_result = "SQL task failed after multiple tries."

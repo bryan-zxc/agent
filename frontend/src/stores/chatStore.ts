@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { ChatMessage, AgentStatus } from '../../../shared/types';
+import { ChatMessage, AgentStatus, PlannerInfo } from '../../../shared/types';
 
 interface Conversation {
   id: string;
@@ -18,6 +18,7 @@ interface ChatStore {
   currentConversationId: string;
   conversations: Conversation[];
   lockedConversations: Set<string>;
+  currentExecutionPlan: PlannerInfo | null;
   
   // Actions
   addMessage: (message: ChatMessage) => void;
@@ -35,6 +36,7 @@ interface ChatStore {
   lockConversation: (conversationId: string) => void;
   unlockConversation: (conversationId: string) => void;
   isConversationLocked: (conversationId: string) => boolean;
+  updateExecutionPlan: (planData: any) => void;
 }
 
 const generateConversationId = () => {
@@ -51,6 +53,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   currentConversationId: generateConversationId(),
   conversations: [],
   lockedConversations: new Set(),
+  currentExecutionPlan: null,
   
   addMessage: (message) =>
     set((state) => ({
@@ -58,7 +61,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     })),
     
   updateStatus: (status) =>
-    set({ status }),
+    set((state) => ({
+      status,
+      // Clear execution plan when status changes from processing to idle
+      currentExecutionPlan: status.status === 'idle' ? null : state.currentExecutionPlan
+    })),
     
   setConnected: (connected) =>
     set({ isConnected: connected, isConnecting: false }),
@@ -76,7 +83,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     set({ messages: [] }),
     
   setCurrentConversation: (conversationId) =>
-    set({ currentConversationId: conversationId }),
+    set({ currentConversationId: conversationId, currentExecutionPlan: null }),
     
   setConversations: (conversations) =>
     set({ conversations }),
@@ -86,7 +93,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     const newId = generateConversationId();
     set({ 
       currentConversationId: newId,
-      messages: [] 
+      messages: [],
+      currentExecutionPlan: null
     });
     return newId;
   },
@@ -105,7 +113,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         console.log('Creating new conversation in backend - old ID:', currentState.currentConversationId, '-> new ID:', newId);
         set({ 
           currentConversationId: newId,
-          messages: [] 
+          messages: [],
+          currentExecutionPlan: null
         });
         return newId;
       } else {
@@ -113,7 +122,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         const newId = generateConversationId();
         set({ 
           currentConversationId: newId,
-          messages: [] 
+          messages: [],
+          currentExecutionPlan: null
         });
         return newId;
       }
@@ -132,7 +142,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   loadConversation: (conversationId, messages) =>
     set({ 
       currentConversationId: conversationId,
-      messages 
+      messages,
+      currentExecutionPlan: null
     }),
     
   lockConversation: (conversationId) =>
@@ -149,4 +160,16 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     
   isConversationLocked: (conversationId) =>
     get().lockedConversations.has(conversationId),
+    
+  updateExecutionPlan: (planData) =>
+    set({
+      currentExecutionPlan: {
+        has_planner: true,
+        execution_plan: planData.execution_plan,
+        status: 'executing', // Since we're receiving updates
+        planner_id: planData.planner_id,
+        planner_name: null,
+        user_question: null
+      }
+    }),
 }));

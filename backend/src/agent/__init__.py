@@ -7,7 +7,7 @@ import logging
 
 # Configure logging for the entire package
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler('agent.log'),
@@ -24,10 +24,8 @@ from .models import (
     File,
     Task,
     FullTask,
-    Tasks,
     # Request/Response models
     RequestResponse,
-    RequestValidation,
     TaskResponse,
     # Document models
     PDFContent,
@@ -71,9 +69,7 @@ __all__ = [
     "File",
     "Task",
     "FullTask", 
-    "Tasks",
     "RequestResponse",
-    "RequestValidation",
     "TaskResponse",
     "PDFContent",
     "PDFMetaSummary",
