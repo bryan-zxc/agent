@@ -23,7 +23,7 @@ The Agent State Database implements a hybrid Data Vault approach designed for gr
 ### Version Management
 ```python
 # Current version tracking
-AGENT_DATABASE_SCHEMA_VERSION = 2
+AGENT_DATABASE_SCHEMA_VERSION = 1
 
 # Version checking on startup
 def check_schema_version():
@@ -34,7 +34,7 @@ def check_schema_version():
 
 ### Version Storage
 Each table includes:
-- `schema_version INTEGER DEFAULT 2` - Per-record version tracking
+- `schema_version INTEGER DEFAULT 1` - Per-record version tracking
 - Global version in `settings.AGENT_DATABASE_SCHEMA_VERSION`
 - Migration history tracked in `schema_versions` table
 
@@ -95,7 +95,7 @@ CREATE TABLE routers_v2 (
     router_id VARCHAR(32) PRIMARY KEY,
     status VARCHAR(50) NOT NULL,
     -- new/changed columns
-    conversation_context TEXT,  -- new field
+    router_context TEXT,  -- new field
     timeout_seconds INTEGER DEFAULT 300,  -- promoted from JSON
     -- existing columns
     model VARCHAR(100),
@@ -109,7 +109,7 @@ CREATE TABLE routers_v2 (
 -- Phase 2: Migrate data
 INSERT INTO routers_v2 SELECT 
     router_id, status, 
-    NULL as conversation_context,  -- new field starts empty
+    NULL as router_context,  -- new field starts empty
     COALESCE(CAST(JSON_EXTRACT(agent_metadata, '$.timeout_seconds') AS INTEGER), 300),
     model, temperature, 
     JSON_REMOVE(agent_metadata, '$.timeout_seconds'),  -- clean agent_metadata
@@ -255,8 +255,8 @@ COMMIT;
 
 ### Changes Made
 1. **New Table**: `router_message_planner_links`
-   - Links planners to specific router messages instead of just conversations
-   - Enables multiple execution plans per conversation
+   - Links planners to specific router messages instead of just routers
+   - Enables multiple execution plans per router
    - Supports historical access to execution plans
 
 2. **Table Schema**:
@@ -305,7 +305,7 @@ def _migrate_v1_to_v2(self):
 ```
 
 ### Benefits
-- Multiple execution plans per conversation
+- Multiple execution plans per router
 - Historical access to past execution plans  
 - Better UI/UX with message-specific expansion
 - Maintains data integrity through proper foreign keys

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { ChatMessage, AgentStatus, PlannerInfo } from '../../../shared/types';
+import { ChatMessage, AgentStatus } from '../../../shared/types';
 
 interface Conversation {
   id: string;
@@ -15,10 +15,9 @@ interface ChatStore {
   isConnecting: boolean;
   currentModel: string;
   temperature: number;
-  currentConversationId: string;
+  currentRouterId: string;
   conversations: Conversation[];
   lockedConversations: Set<string>;
-  currentExecutionPlan: PlannerInfo | null;
   
   // Actions
   addMessage: (message: ChatMessage) => void;
@@ -28,18 +27,17 @@ interface ChatStore {
   setModel: (model: string) => void;
   setTemperature: (temperature: number) => void;
   clearMessages: () => void;
-  setCurrentConversation: (conversationId: string) => void;
+  setCurrentConversation: (routerId: string) => void;
   setConversations: (conversations: Conversation[]) => void;
   createNewConversation: () => Promise<string>;
   createNewConversationInBackend: () => Promise<string>;
-  loadConversation: (conversationId: string, messages: ChatMessage[]) => void;
-  lockConversation: (conversationId: string) => void;
-  unlockConversation: (conversationId: string) => void;
-  isConversationLocked: (conversationId: string) => boolean;
-  updateExecutionPlan: (planData: any) => void;
+  loadConversation: (routerId: string, messages: ChatMessage[]) => void;
+  lockConversation: (routerId: string) => void;
+  unlockConversation: (routerId: string) => void;
+  isConversationLocked: (routerId: string) => boolean;
 }
 
-const generateConversationId = () => {
+const generateRouterId = () => {
   return Date.now().toString(36) + Math.random().toString(36).substr(2);
 };
 
@@ -50,10 +48,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   isConnecting: true, // Start as connecting to avoid showing offline immediately
   currentModel: 'gpt-4',
   temperature: 0.7,
-  currentConversationId: generateConversationId(),
+  currentRouterId: generateRouterId(),
   conversations: [],
   lockedConversations: new Set(),
-  currentExecutionPlan: null,
   
   addMessage: (message) =>
     set((state) => ({
@@ -61,11 +58,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     })),
     
   updateStatus: (status) =>
-    set((state) => ({
-      status,
-      // Clear execution plan when status changes from processing to idle
-      currentExecutionPlan: status.status === 'idle' ? null : state.currentExecutionPlan
-    })),
+    set({ status }),
     
   setConnected: (connected) =>
     set({ isConnected: connected, isConnecting: false }),
@@ -82,19 +75,18 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   clearMessages: () =>
     set({ messages: [] }),
     
-  setCurrentConversation: (conversationId) =>
-    set({ currentConversationId: conversationId, currentExecutionPlan: null }),
+  setCurrentConversation: (routerId) =>
+    set({ currentRouterId: routerId }),
     
   setConversations: (conversations) =>
     set({ conversations }),
     
   createNewConversation: async () => {
     // Generate client-side ID only, don't create in backend yet
-    const newId = generateConversationId();
+    const newId = generateRouterId();
     set({ 
-      currentConversationId: newId,
-      messages: [],
-      currentExecutionPlan: null
+      currentRouterId: newId,
+      messages: []
     });
     return newId;
   },
@@ -103,73 +95,59 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     const currentState = useChatStore.getState();
     try {
       // Call backend to create conversation
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/conversations`, {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/routers`, {
         method: 'POST',
       });
       
       if (response.ok) {
         const data = await response.json();
-        const newId = data.conversation_id;
-        console.log('Creating new conversation in backend - old ID:', currentState.currentConversationId, '-> new ID:', newId);
+        const newId = data.router_id;
+        console.log('Creating new conversation in backend - old ID:', currentState.currentRouterId, '-> new ID:', newId);
         set({ 
-          currentConversationId: newId,
-          messages: [],
-          currentExecutionPlan: null
+          currentRouterId: newId,
+          messages: []
         });
         return newId;
       } else {
         // Fallback to client-side generation
-        const newId = generateConversationId();
+        const newId = generateRouterId();
         set({ 
-          currentConversationId: newId,
-          messages: [],
-          currentExecutionPlan: null
+          currentRouterId: newId,
+          messages: []
         });
         return newId;
       }
     } catch (error) {
       console.error('Error creating conversation:', error);
       // Fallback to client-side generation
-      const newId = generateConversationId();
+      const newId = generateRouterId();
       set({ 
-        currentConversationId: newId,
+        currentRouterId: newId,
         messages: [] 
       });
       return newId;
     }
   },
   
-  loadConversation: (conversationId, messages) =>
+  loadConversation: (routerId, messages) =>
     set({ 
-      currentConversationId: conversationId,
-      messages,
-      currentExecutionPlan: null
+      currentRouterId: routerId,
+      messages
     }),
     
-  lockConversation: (conversationId) =>
+  lockConversation: (routerId) =>
     set((state) => ({
-      lockedConversations: new Set(state.lockedConversations).add(conversationId),
+      lockedConversations: new Set(state.lockedConversations).add(routerId),
     })),
     
-  unlockConversation: (conversationId) =>
+  unlockConversation: (routerId) =>
     set((state) => {
       const newLockedConversations = new Set(state.lockedConversations);
-      newLockedConversations.delete(conversationId);
+      newLockedConversations.delete(routerId);
       return { lockedConversations: newLockedConversations };
     }),
     
-  isConversationLocked: (conversationId) =>
-    get().lockedConversations.has(conversationId),
+  isConversationLocked: (routerId) =>
+    get().lockedConversations.has(routerId),
     
-  updateExecutionPlan: (planData) =>
-    set({
-      currentExecutionPlan: {
-        has_planner: true,
-        execution_plan: planData.execution_plan,
-        status: 'executing', // Since we're receiving updates
-        planner_id: planData.planner_id,
-        planner_name: null,
-        user_question: null
-      }
-    }),
 }));

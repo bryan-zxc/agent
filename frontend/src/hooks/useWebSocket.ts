@@ -52,29 +52,31 @@ export const useWebSocket = (url?: string) => {
                 message: data.message,
                 sender: 'assistant',
                 timestamp: new Date(),
+                messageId: data.message_id, // Include database message ID if provided
               };
               store.addMessage(assistantMessage);
               store.updateStatus({ status: 'idle' });
               break;
               
-            case 'conversation_history':
-              // Handle conversation history for specific conversation
+            case 'message_history':
+              // Handle message history for specific router
               const historyMessages = data.messages
-                .filter((msg: {role: string; content: string}) => msg.role !== 'system')
-                .map((msg: {role: string; content: string}, index: number) => ({
+                .filter((msg: {role: string; content: string; message_id?: number}) => msg.role !== 'system')
+                .map((msg: {role: string; content: string; message_id?: number}, index: number) => ({
                   id: index.toString(),
                   message: msg.content,
                   sender: msg.role,
                   timestamp: new Date(),
+                  messageId: msg.message_id, // Include database message ID if available
                 }));
               
               // Only update messages if this is for the current conversation
-              const currentConversationId = useChatStore.getState().currentConversationId;
-              if (data.conversation_id === currentConversationId) {
-                console.log('Loading conversation history for', data.conversation_id, ':', historyMessages.length, 'messages');
+              const currentRouterId = useChatStore.getState().currentRouterId;
+              if (data.router_id === currentRouterId) {
+                console.log('Loading conversation history for', data.router_id, ':', historyMessages.length, 'messages');
                 useChatStore.setState({ messages: historyMessages });
               } else {
-                console.log('Ignoring history for different conversation:', data.conversation_id, 'vs current:', currentConversationId);
+                console.log('Ignoring history for different conversation:', data.router_id, 'vs current:', currentRouterId);
               }
               break;
               
@@ -83,25 +85,20 @@ export const useWebSocket = (url?: string) => {
               break;
               
             case 'input_lock':
-              if (data.conversation_id) {
-                store.lockConversation(data.conversation_id);
-                console.log('Locked conversation:', data.conversation_id);
+              if (data.router_id) {
+                store.lockConversation(data.router_id);
+                console.log('Locked conversation:', data.router_id);
               }
               break;
               
             case 'input_unlock':
-              if (data.conversation_id) {
-                store.unlockConversation(data.conversation_id);
-                console.log('Unlocked conversation:', data.conversation_id);
+              if (data.router_id) {
+                store.unlockConversation(data.router_id);
+                console.log('Unlocked conversation:', data.router_id);
               }
               break;
               
-            case 'execution_plan_update':
-              if (data.data) {
-                store.updateExecutionPlan(data.data);
-                console.log('Received execution plan update:', data.data);
-              }
-              break;
+            // execution_plan_update case removed - now using frontend polling instead
               
             default:
               console.log('Unknown message type:', data.type);
@@ -138,17 +135,17 @@ export const useWebSocket = (url?: string) => {
     }
   }, [wsUrl]); // Remove store functions to prevent recreation
 
-  const sendMessage = useCallback((message: string, files: string[] = [], conversationId?: string) => {
+  const sendMessage = useCallback((message: string, files: string[] = [], routerId?: string) => {
     console.log('sendMessage called, WebSocket readyState:', ws.current?.readyState, 'URL:', ws.current?.url);
     
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-      const { currentModel, temperature, currentConversationId } = useChatStore.getState();
-      const targetConversationId = conversationId || currentConversationId;
+      const { currentModel, temperature, currentRouterId } = useChatStore.getState();
+      const targetRouterId = routerId || currentRouterId;
       
       const payload = {
         type: 'message',
         message,
-        conversation_id: targetConversationId,
+        router_id: targetRouterId,
         files,
         model: currentModel,
         temperature,
@@ -175,13 +172,13 @@ export const useWebSocket = (url?: string) => {
     }
   }, []);
 
-  const loadConversation = useCallback((conversationId: string) => {
-    console.log('loadConversation called for:', conversationId);
+  const loadConversation = useCallback((routerId: string) => {
+    console.log('loadConversation called for:', routerId);
     
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
       const payload = {
-        type: 'load_conversation',
-        conversation_id: conversationId,
+        type: 'load_router',
+        router_id: routerId,
       };
       
       console.log('Loading conversation via WebSocket:', payload);

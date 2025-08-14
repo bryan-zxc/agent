@@ -2,15 +2,15 @@
 
 ## Table Definitions and Field Specifications
 
-### conversations
+### routers
 
-Original message persistence table, now linked to router agents.
+Main router message persistence table, handles chat routing and agent state.
 
 | Field | Type | Constraints | Description | Business Rules |
 |-------|------|-------------|-------------|----------------|
 | id | VARCHAR(32) | PRIMARY KEY | UUID hex string | Router uses same ID for 1:1 relationship |
-| title | TEXT | | Conversation display title | Auto-generated from first user message |
-| preview | TEXT | | Short conversation summary | Truncated first message content |
+| title | TEXT | | Router display title | Auto-generated from first user message |
+| preview | TEXT | | Short router summary | Truncated first message content |
 | created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Record creation time | Immutable after creation |
 | updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Last modification time | Auto-updated on changes |
 
@@ -22,7 +22,7 @@ Router agent state and configuration persistence.
 
 | Field | Type | Constraints | Description | Business Rules |
 |-------|------|-------------|-------------|----------------|
-| router_id | VARCHAR(32) | PRIMARY KEY | UUID hex string | Matches conversation.id for 1:1 relationship |
+| router_id | VARCHAR(32) | PRIMARY KEY | UUID hex string | Primary router identifier |
 | status | VARCHAR(50) | NOT NULL | Router execution state | Values: active, completed, failed, archived |
 | model | VARCHAR(100) | | LLM model identifier | e.g., "gpt-4", "claude-3-sonnet" |
 | temperature | FLOAT | | LLM temperature setting | Range: 0.0-2.0, default varies by model |
@@ -32,8 +32,8 @@ Router agent state and configuration persistence.
 | updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Last modification time | Auto-updated via property setters |
 
 **Status Values:**
-- `active`: Router currently processing conversation
-- `completed`: Conversation completed successfully  
+- `active`: Router currently processing messages
+- `completed`: Router completed successfully  
 - `failed`: Router encountered unrecoverable error
 - `archived`: Historical record, no longer active
 
@@ -85,10 +85,10 @@ Task/worker execution details and lifecycle management.
 | image_keys | JSON | | Relevant image identifiers | Array of image keys from planner |
 | variable_keys | JSON | | Relevant variable identifiers | Array of variable keys from planner |
 | tools | JSON | | Required tools list | Array of tool names for execution |
-| input_images | JSON | | Input image data | Key-value pairs of image identifiers and data |
-| input_variables | JSON | | Input variables | Key-value pairs of variable names and values |
-| output_images | JSON | | Generated image outputs | Key-value pairs from task execution |
-| output_variables | JSON | | Generated variable outputs | Key-value pairs from task execution |
+| input_variable_filepaths | JSON | DEFAULT {} | Input variable file paths | Key-value pairs mapping variable keys to file paths |
+| input_image_filepaths | JSON | DEFAULT {} | Input image file paths | Key-value pairs mapping image keys to file paths |
+| output_variable_filepaths | JSON | DEFAULT {} | Output variable file paths | Key-value pairs mapping variable keys to file paths |
+| output_image_filepaths | JSON | DEFAULT {} | Output image file paths | Key-value pairs mapping image keys to file paths |
 | tables | JSON | | TableMeta objects | Array of table metadata for data tasks |
 | agent_metadata | JSON | | Extensible task attributes | Future enhancements |
 | schema_version | INTEGER | DEFAULT 1 | Table schema version | Migration support |
@@ -227,7 +227,7 @@ File storage and duplicate detection via content hashing.
 
 **Business Logic:**
 - Duplicate detection: Files with identical `content_hash` for same `user_id` are considered duplicates
-- Reference counting: Prevents premature deletion of files referenced by multiple conversations
+- Reference counting: Prevents premature deletion of files referenced by multiple routers
 - User isolation: File visibility restricted by `user_id`
 
 ---

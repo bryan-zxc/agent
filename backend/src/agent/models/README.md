@@ -1,6 +1,6 @@
 # Models Module
 
-Pydantic data models and schemas that define the structure of data throughout the agent system, including database models for conversation persistence.
+Pydantic data models and schemas that define the structure of data throughout the agent system, including database models for router persistence.
 
 ## Modules
 
@@ -9,11 +9,16 @@ Database models and service for agent message persistence and state management.
 
 #### Database Models
 
-**`Conversation`**
-- Represents a chat conversation with a user
+**`Router`** (Updated from Conversation)
+- Represents a chat router with a user
 - **Fields:**
-  - `id`: Unique conversation identifier (UUID hex string)
-  - `created_at`: Conversation creation timestamp
+  - `router_id`: Unique router identifier (UUID hex string)
+  - `status`: Router status (active, processing, completed, failed, archived)
+  - `model`: LLM model used
+  - `temperature`: LLM temperature setting
+  - `title`: Router title for UI display
+  - `preview`: Router preview text
+  - `created_at`: Router creation timestamp
   - `updated_at`: Last message timestamp
 
 **`PlannerMessage`**
@@ -35,10 +40,10 @@ Database models and service for agent message persistence and state management.
   - `created_at`: Message timestamp
 
 **`RouterMessage`**
-- Messages from RouterAgent conversations
+- Messages from RouterAgent routers
 - **Fields:**
   - `id`: Auto-incrementing primary key
-  - `conversation_id`: Foreign key to Conversation table
+  - `router_id`: Foreign key to Router table
   - `role`: Message role (user, assistant)
   - `content`: Text content of the message
   - `created_at`: Message timestamp
@@ -46,7 +51,7 @@ Database models and service for agent message persistence and state management.
 **`Router`**
 - Agent state for RouterAgent instances
 - **Fields:**
-  - `router_id`: UUID hex string (primary key, same as conversation_id)
+  - `router_id`: UUID hex string (primary key)
   - `status`: Router status (active, processing, completed, failed, archived)
   - `model`: LLM model used
   - `temperature`: LLM temperature setting
@@ -115,7 +120,7 @@ Database models and service for agent message persistence and state management.
   - `planner_id`: Foreign key to Planner table
   - `relationship_type`: Relationship type (initiated, continued, forked)
   - `created_at`: Link creation timestamp
-- **Purpose**: Enables multiple execution plans per conversation and historical access
+- **Purpose**: Enables multiple execution plans per router and historical access
 
 #### Service Class
 
@@ -123,12 +128,12 @@ Database models and service for agent message persistence and state management.
 - Unified database service for all agent types and state management
 - **Core Methods:**
   - `add_message(agent_type, agent_id, role, content)`: Store message (returns message ID)
-  - `get_messages(agent_type, agent_id)`: Retrieve conversation history
-  - `clear_messages(agent_type, agent_id)`: Clear conversation history
+  - `get_messages(agent_type, agent_id)`: Retrieve router history
+  - `clear_messages(agent_type, agent_id)`: Clear router history
 - **Planner Linking Methods (Schema V2):**
   - `link_message_planner(router_id, message_id, planner_id)`: Associate planner with specific message
   - `get_planner_by_message(message_id)`: Retrieve planner info for a specific message
-  - `get_planner_by_conversation(conversation_id)`: Get all planners for conversation (legacy)
+  - `get_planner_by_router(router_id)`: Get all planners for router (legacy)
 - **Migration Features:**
   - `_migrate_v1_to_v2()`: Automatic schema migration on startup
   - `_record_migration(version, description)`: Track migration history
@@ -331,12 +336,12 @@ from agent.models.agent_database import AgentDatabase
 
 db = AgentDatabase()
 
-# Store conversation message
-db.add_message("router", "conversation-123", "user", "Hello!")
-db.add_message("router", "conversation-123", "assistant", "Hi there!")
+# Store router message
+db.add_message("router", "router-123", "user", "Hello!")
+db.add_message("router", "router-123", "assistant", "Hi there!")
 
-# Retrieve conversation
-messages = db.get_messages("router", "conversation-123")
+# Retrieve router
+messages = db.get_messages("router", "router-123")
 ```
 
 ### File Processing

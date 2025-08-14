@@ -49,9 +49,9 @@ from fastapi import FastAPI, WebSocket
 
 app = FastAPI()
 
-@app.websocket("/chat/{conversation_id}")
-async def websocket_endpoint(websocket: WebSocket, conversation_id: str):
-    router = RouterAgent(conversation_id=conversation_id)
+@app.websocket("/chat")
+async def websocket_endpoint(websocket: WebSocket):
+    router = RouterAgent()
     await router.connect_websocket(websocket)
     
     # Handle messages
@@ -64,8 +64,8 @@ async def websocket_endpoint(websocket: WebSocket, conversation_id: str):
 ```python
 from agent.core.router import RouterAgent
 
-# Create router for conversation
-router = RouterAgent(conversation_id="user-123")
+# Create router
+router = RouterAgent()
 
 # Handle messages
 message_data = {
@@ -77,7 +77,7 @@ await router.handle_message(message_data)
 
 ## Features
 
-- **Real-time Communication**: WebSocket-based chat interface with conversation persistence
+- **Real-time Communication**: WebSocket-based chat interface with router persistence
 - **Intelligent Routing**: Automatically switches between simple chat and complex analysis
 - **Multi-modal Processing**: Handles text, images, charts, tables, and data files
 - **Task Planning**: Automatically breaks down complex requests using PlannerAgent
@@ -85,7 +85,7 @@ await router.handle_message(message_data)
 - **SQL Queries**: DuckDB integration for data analysis
 - **Image Analysis**: Chart reading, table extraction, and visual content analysis
 - **Document Processing**: PDF parsing with text and image extraction
-- **Database Persistence**: SQLite-based conversation history and message storage
+- **Database Persistence**: SQLite-based router history and message storage
 - **Safety**: Built-in security guardrails and code validation
 
 ## Dependencies

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Text, DateTime, Integer, JSON, create_engine, ForeignKey, Float, Boolean, UniqueConstraint, Index
+from sqlalchemy import Column, String, Text, DateTime, Integer, JSON, create_engine, ForeignKey, Float, Boolean, UniqueConstraint, Index, func
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
@@ -49,21 +49,11 @@ class WorkerMessage(Base):
         }
 
 
-class Conversation(Base):
-    __tablename__ = 'conversations'
-    
-    id = Column(String(32), primary_key=True)
-    title = Column(String(255), nullable=False, default="New Conversation")
-    preview = Column(String(255), nullable=False, default="")
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-
 class RouterMessage(Base):
     __tablename__ = 'router_messages'
     
     id = Column(Integer, primary_key=True, autoincrement=True)
-    conversation_id = Column(String(32), ForeignKey('conversations.id'), nullable=False, index=True)
+    router_id = Column(String(32), ForeignKey('routers.router_id'), nullable=False, index=True)
     role = Column(String(20), nullable=False)  # 'user', 'assistant'
     content = Column(Text, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -72,7 +62,8 @@ class RouterMessage(Base):
         """Convert database record back to message format"""
         return {
             "role": self.role,
-            "content": self.content
+            "content": self.content,
+            "message_id": self.id  # Include database message ID for frontend
         }
 
 
@@ -81,10 +72,12 @@ class RouterMessage(Base):
 class Router(Base):
     __tablename__ = 'routers'
     
-    router_id = Column(String(32), primary_key=True)  # UUID hex string (conversation_id)
+    router_id = Column(String(32), primary_key=True)  # UUID hex string (same as router_id)
     status = Column(String(50), nullable=False)  # active, completed, failed, archived
     model = Column(String(100))  # LLM model used
     temperature = Column(Float)  # LLM temperature setting
+    title = Column(String(255), nullable=False, default="New conversation")
+    preview = Column(String(255), nullable=False, default="")
     agent_metadata = Column(JSON, default=lambda: {})  # Future extensibility
     schema_version = Column(Integer, default=1)  # Schema evolution tracking
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -103,6 +96,13 @@ class Planner(Base):
     temperature = Column(Float)  # LLM temperature setting
     failed_task_limit = Column(Integer)  # Max failed tasks allowed
     status = Column(String(50), nullable=False)  # planning, executing, completed, failed
+    user_response = Column(Text)  # Final response generated for user when completed
+    
+    # New fields for function-based task queue system
+    next_task = Column(String(100))  # Next function name to execute for resumability
+    variable_file_paths = Column(JSON, default=lambda: {})  # File paths for variables {key: file_path}
+    image_file_paths = Column(JSON, default=lambda: {})  # File paths for images {key: file_path}
+    
     agent_metadata = Column(JSON, default=lambda: {})  # Future extensibility
     schema_version = Column(Integer, default=1)  # Schema evolution tracking
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -116,6 +116,7 @@ class Worker(Base):
     worker_name = Column(String(255))  # Human readable worker name
     planner_id = Column(String(32), ForeignKey('planners.planner_id'), nullable=False, index=True)  # Direct relationship to planner
     task_status = Column(String(50), nullable=False, index=True)  # pending, in_progress, completed, failed_validation, recorded
+    next_task = Column(String(100))  # Next async function to execute
     task_description = Column(Text)  # Detailed task description
     acceptance_criteria = Column(JSON)  # List of success criteria
     task_context = Column(JSON)  # TaskContext pydantic model as JSON
@@ -124,10 +125,11 @@ class Worker(Base):
     image_keys = Column(JSON)  # List of relevant image identifiers
     variable_keys = Column(JSON)  # List of relevant variable identifiers
     tools = Column(JSON)  # List of required tools
-    input_images = Column(JSON)  # Input image data
-    input_variables = Column(JSON)  # Input variables
-    output_images = Column(JSON)  # Output image data
-    output_variables = Column(JSON)  # Output variables
+    input_variable_filepaths = Column(JSON, default=lambda: {})  # File paths for input variables {key: file_path}
+    input_image_filepaths = Column(JSON, default=lambda: {})  # File paths for input images {key: file_path}
+    output_variable_filepaths = Column(JSON, default=lambda: {})  # File paths for output variables {key: file_path}
+    output_image_filepaths = Column(JSON, default=lambda: {})  # File paths for output images {key: file_path}
+    current_attempt = Column(Integer, default=0)  # Current retry attempt number
     tables = Column(JSON)  # TableMeta objects
     filepaths = Column(JSON)  # List of PDF file paths available for use
     agent_metadata = Column(JSON, default=lambda: {})  # Future extensibility
@@ -163,6 +165,27 @@ class RouterMessagePlannerLink(Base):
     __table_args__ = (
         UniqueConstraint('message_id', 'planner_id'),  # One planner per message
         Index('idx_router_message', 'router_id', 'message_id'),  # Fast lookups
+    )
+
+
+class TaskQueue(Base):
+    """Task queue for async execution of planner and worker functions"""
+    __tablename__ = 'task_queue'
+    
+    task_id = Column(String(32), primary_key=True)  # UUID hex string
+    entity_type = Column(String(20), nullable=False, index=True)  # 'planner' or 'worker'
+    entity_id = Column(String(32), nullable=False, index=True)  # planner_id or worker_id
+    function_name = Column(String(100), nullable=False)  # async function to execute
+    status = Column(String(20), nullable=False, default='PENDING', index=True)  # PENDING, IN_PROGRESS, COMPLETED, FAILED
+    created_at = Column(DateTime, default=datetime.utcnow)
+    started_at = Column(DateTime)
+    completed_at = Column(DateTime)
+    error_message = Column(Text)  # Store error details for failed tasks
+    payload = Column(JSON, nullable=True)  # JSON payload for additional task parameters
+    
+    __table_args__ = (
+        Index('idx_entity_status', 'entity_id', 'status'),
+        Index('idx_status_created', 'status', 'created_at'),
     )
 
 
@@ -215,11 +238,11 @@ class AgentDatabase:
                     content=content
                 )
             else:  # router
-                # For router, agent_id is the conversation_id
-                # Conversation should already exist (created via activate_conversation)
+                # For router, agent_id is the router_id
+                # Router should already exist (created via activate_conversation)
                 
                 message = RouterMessage(
-                    conversation_id=agent_id,
+                    router_id=agent_id,
                     role=role,
                     content=content
                 )
@@ -230,26 +253,15 @@ class AgentDatabase:
             session.commit()
             return message_id
     
-    def create_conversation_with_details(self, conversation_id: str, title: str, preview: str) -> None:
-        """Create a conversation with title and preview"""
+    def update_router_title(self, router_id: str, title: str) -> None:
+        """Update the title of an existing router"""
         with self.SessionLocal() as session:
-            conversation = Conversation(
-                id=conversation_id,
-                title=title,
-                preview=preview
-            )
-            session.add(conversation)
-            session.commit()
-    
-    def update_conversation_title(self, conversation_id: str, title: str) -> None:
-        """Update the title of an existing conversation"""
-        with self.SessionLocal() as session:
-            conversation = session.query(Conversation).filter(
-                Conversation.id == conversation_id
+            router_record = session.query(Router).filter(
+                Router.router_id == router_id
             ).first()
-            if conversation:
-                conversation.title = title
-                conversation.updated_at = datetime.utcnow()
+            if router_record:
+                router_record.title = title
+                router_record.updated_at = datetime.utcnow()
                 session.commit()
     
     def get_messages(self, agent_type: AgentType, agent_id: str) -> List[Dict[str, Any]]:
@@ -265,7 +277,7 @@ class AgentDatabase:
                 ).order_by(WorkerMessage.created_at).all()
             else:  # router
                 messages = session.query(RouterMessage).filter(
-                    RouterMessage.conversation_id == agent_id
+                    RouterMessage.router_id == agent_id
                 ).order_by(RouterMessage.created_at).all()
             
             return [msg.to_message_dict() for msg in messages]
@@ -283,21 +295,23 @@ class AgentDatabase:
                 ).delete()
             else:  # router
                 session.query(RouterMessage).filter(
-                    RouterMessage.conversation_id == agent_id
+                    RouterMessage.router_id == agent_id
                 ).delete()
             
             session.commit()
     
     # Agent State Operations
     
-    def create_router(self, router_id: str, status: str, model: str = None, temperature: float = None) -> None:
-        """Create a new router state record"""
+    def create_router(self, router_id: str, status: str, model: str = None, temperature: float = None, title: str = None, preview: str = None) -> None:
+        """Create a new router record"""
         with self.SessionLocal() as session:
             router = Router(
                 router_id=router_id,
                 status=status,
-                model=model,
-                temperature=temperature
+                model=model or settings.router_model,
+                temperature=temperature or 0.0,
+                title=title or "New conversation",
+                preview=preview or ""
             )
             session.add(router)
             session.commit()
@@ -387,28 +401,34 @@ class AgentDatabase:
                 }
             return None
     
-    def create_worker(self, worker_id: str, planner_id: str, task_data, worker_name: str = None) -> None:
+    def create_worker(self, worker_id: str, planner_id: str, worker_name: str,
+                     task_status: str, task_description: str, acceptance_criteria: list,
+                     task_context: dict, task_result: str, querying_structured_data: bool,
+                     image_keys: list, variable_keys: list, tools: list,
+                     input_variable_filepaths: dict, input_image_filepaths: dict,
+                     tables: list, filepaths: list) -> None:
         """Create a new worker/task state record"""
         with self.SessionLocal() as session:
             worker = Worker(
                 worker_id=worker_id,
                 worker_name=worker_name,
                 planner_id=planner_id,
-                task_status=task_data.task_status,
-                task_description=task_data.task_description,
-                acceptance_criteria=task_data.acceptance_criteria,
-                task_context=task_data.task_context.model_dump(),
-                task_result=task_data.task_result,
-                querying_structured_data=task_data.querying_structured_data,
-                image_keys=task_data.image_keys,
-                variable_keys=task_data.variable_keys,
-                tools=task_data.tools,
-                input_images=task_data.input_images,
-                input_variables=task_data.input_variables,
-                output_images=task_data.output_images,
-                output_variables=task_data.output_variables,
-                tables=[table.model_dump() for table in task_data.tables],
-                filepaths=task_data.filepaths
+                task_status=task_status,
+                task_description=task_description,
+                acceptance_criteria=acceptance_criteria,
+                task_context=task_context,
+                task_result=task_result,
+                querying_structured_data=querying_structured_data,
+                image_keys=image_keys,
+                variable_keys=variable_keys,
+                tools=tools,
+                input_variable_filepaths=input_variable_filepaths,
+                input_image_filepaths=input_image_filepaths,
+                output_variable_filepaths={},  # Empty initially
+                output_image_filepaths={},    # Empty initially
+                current_attempt=0,  # Initialize to 0
+                tables=tables,
+                filepaths=filepaths
             )
             session.add(worker)
             session.commit()
@@ -434,6 +454,25 @@ class AgentDatabase:
                     worker.output_images = output_images
                 if output_variables is not None:
                     worker.output_variables = output_variables
+                worker.updated_at = datetime.utcnow()
+                session.commit()
+    
+    def update_worker_file_paths(self, worker_id: str, variable_paths: Dict = None, 
+                                image_paths: Dict = None) -> None:
+        """Update worker output file paths"""
+        with self.SessionLocal() as session:
+            worker = session.query(Worker).filter(Worker.worker_id == worker_id).first()
+            if worker:
+                if variable_paths is not None:
+                    # Merge with existing paths
+                    current_var_paths = worker.output_variable_filepaths or {}
+                    current_var_paths.update(variable_paths)
+                    worker.output_variable_filepaths = current_var_paths
+                if image_paths is not None:
+                    # Merge with existing paths
+                    current_img_paths = worker.output_image_filepaths or {}
+                    current_img_paths.update(image_paths)
+                    worker.output_image_filepaths = current_img_paths
                 worker.updated_at = datetime.utcnow()
                 session.commit()
     
@@ -636,6 +675,15 @@ class AgentDatabase:
                 }
             return None
     
+    def get_message_by_planner(self, planner_id: str) -> Optional[int]:
+        """Get message ID associated with a specific planner (V2)"""
+        with self.SessionLocal() as session:
+            link = session.query(RouterMessagePlannerLink).filter(
+                RouterMessagePlannerLink.planner_id == planner_id
+            ).first()
+            
+            return link.message_id if link else None
+    
     # Database Schema Management
     
     def _initialize_database(self) -> None:
@@ -682,7 +730,7 @@ class AgentDatabase:
                 # If routers table doesn't exist or doesn't have schema_version, 
                 # check if we have old message tables
                 try:
-                    session.execute("SELECT 1 FROM conversations LIMIT 1")
+                    session.execute("SELECT 1 FROM routers LIMIT 1")
                     return 1  # We have message tables, assume v1
                 except Exception:
                     return 0  # Fresh database
@@ -694,59 +742,9 @@ class AgentDatabase:
         if from_version == 0 and to_version >= 1:
             # Fresh install - tables created by Base.metadata.create_all()
             logger.info("Schema migration completed: Fresh database initialized")
-        elif from_version == 1 and to_version == 2:
-            # V1 -> V2: Add RouterMessagePlannerLink table and migrate data
-            self._migrate_v1_to_v2()
-            logger.info("Schema migration completed: V1 -> V2 migration successful")
         else:
             logger.warning(f"Migration from v{from_version} to v{to_version} not implemented")
     
-    def _migrate_v1_to_v2(self) -> None:
-        """Migrate from Schema V1 to V2: RouterPlannerLink -> RouterMessagePlannerLink"""
-        with self.SessionLocal() as session:
-            try:
-                # Create the new table (RouterMessagePlannerLink)
-                # Note: Base.metadata.create_all() should have already created it
-                
-                # Get all existing RouterPlannerLink records
-                old_links = session.query(RouterPlannerLink).all()
-                logger.info(f"Found {len(old_links)} existing router-planner links to migrate")
-                
-                # For each old link, we need to find the most recent user message 
-                # that would have triggered this planner activation
-                migrated_count = 0
-                for old_link in old_links:
-                    # Find the most recent user message in this conversation before the planner was created
-                    recent_user_message = session.query(RouterMessage).filter(
-                        RouterMessage.conversation_id == old_link.router_id,
-                        RouterMessage.role == 'user',
-                        RouterMessage.created_at <= old_link.created_at
-                    ).order_by(RouterMessage.created_at.desc()).first()
-                    
-                    if recent_user_message:
-                        # Create new link with message association
-                        new_link = RouterMessagePlannerLink(
-                            router_id=old_link.router_id,
-                            message_id=recent_user_message.id,
-                            planner_id=old_link.planner_id,
-                            relationship_type=old_link.relationship_type,
-                            created_at=old_link.created_at
-                        )
-                        session.add(new_link)
-                        migrated_count += 1
-                    else:
-                        logger.warning(f"Could not find user message for planner {old_link.planner_id} in router {old_link.router_id}")
-                
-                # Commit the new links
-                session.commit()
-                logger.info(f"Successfully migrated {migrated_count} router-planner links to message-specific links")
-                
-                # Note: Keep old table for potential rollback, don't drop yet
-                
-            except Exception as e:
-                session.rollback()
-                logger.error(f"V1->V2 migration failed: {e}")
-                raise
     
     def get_schema_info(self) -> Dict[str, Any]:
         """Get database schema information for debugging"""
@@ -850,3 +848,147 @@ class AgentDatabase:
                 }
                 for record in file_records
             ]
+
+    # Task Queue Management Methods
+    
+    def enqueue_task(self, task_id: str, entity_type: str, entity_id: str, 
+                    function_name: str, payload: dict = None) -> bool:
+        """Add a task to the queue"""
+        with self.SessionLocal() as session:
+            # Create new task
+            task = TaskQueue(
+                task_id=task_id,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                function_name=function_name,
+                payload=payload
+            )
+            
+            session.add(task)
+            session.commit()
+            logger.info(f"Enqueued task {task_id} for {entity_type} {entity_id}")
+            return True
+    
+    def get_pending_tasks(self) -> List[Dict[str, Any]]:
+        """Get all pending tasks ordered by creation time"""
+        with self.SessionLocal() as session:
+            tasks = session.query(TaskQueue).filter(
+                TaskQueue.status == 'PENDING'
+            ).order_by(TaskQueue.created_at).all()
+            
+            return [
+                {
+                    'task_id': task.task_id,
+                    'entity_type': task.entity_type,
+                    'entity_id': task.entity_id,
+                    'function_name': task.function_name,
+                    'created_at': task.created_at,
+                    'payload': task.payload
+                }
+                for task in tasks
+            ]
+    
+    def update_task_status(self, task_id: str, status: str, error_message: str = None) -> bool:
+        """Update task status with timestamps"""
+        with self.SessionLocal() as session:
+            task = session.query(TaskQueue).filter(TaskQueue.task_id == task_id).first()
+            if not task:
+                logger.error(f"Task {task_id} not found")
+                return False
+            
+            task.status = status
+            if status == 'IN_PROGRESS':
+                task.started_at = datetime.utcnow()
+            elif status in ['COMPLETED', 'FAILED']:
+                task.completed_at = datetime.utcnow()
+                if status == 'FAILED':
+                    task.error_message = error_message
+                    task.retry_count += 1
+            
+            session.commit()
+            return True
+    
+    def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Get task by ID"""
+        with self.SessionLocal() as session:
+            task = session.query(TaskQueue).filter(TaskQueue.task_id == task_id).first()
+            if task:
+                return {
+                    'task_id': task.task_id,
+                    'entity_type': task.entity_type,
+                    'entity_id': task.entity_id,
+                    'router_id': task.router_id,
+                    'function_name': task.function_name,
+                    'status': task.status,
+                    'created_at': task.created_at,
+                    'started_at': task.started_at,
+                    'completed_at': task.completed_at,
+                    'retry_count': task.retry_count,
+                    'max_retries': task.max_retries,
+                    'error_message': task.error_message
+                }
+            return None
+    
+    def remove_completed_tasks(self, router_id: str) -> int:
+        """Remove completed/failed tasks for a router"""
+        with self.SessionLocal() as session:
+            count = session.query(TaskQueue).filter(
+                TaskQueue.router_id == router_id,
+                TaskQueue.status.in_(['COMPLETED', 'FAILED'])
+            ).count()
+            
+            session.query(TaskQueue).filter(
+                TaskQueue.router_id == router_id,
+                TaskQueue.status.in_(['COMPLETED', 'FAILED'])
+            ).delete()
+            
+            session.commit()
+            return count
+    
+    # Planner Task Management Methods
+    
+    
+    def get_planner_next_task(self, planner_id: str) -> Optional[str]:
+        """Get the next task function name for a planner"""
+        with self.SessionLocal() as session:
+            planner = session.query(Planner).filter(Planner.planner_id == planner_id).first()
+            return planner.next_task if planner else None
+    
+    def update_planner_file_paths(self, planner_id: str, variable_paths: Dict[str, str] = None, 
+                                 image_paths: Dict[str, str] = None) -> bool:
+        """Update file paths for planner variables and images"""
+        with self.SessionLocal() as session:
+            planner = session.query(Planner).filter(Planner.planner_id == planner_id).first()
+            if planner:
+                if variable_paths is not None:
+                    planner.variable_file_paths = variable_paths
+                if image_paths is not None:
+                    planner.image_file_paths = image_paths
+                session.commit()
+                return True
+            return False
+    
+    def get_router_id_for_planner(self, planner_id: str) -> Optional[str]:
+        """Get router ID for a planner via router-message-planner links"""
+        with self.SessionLocal() as session:
+            link = session.query(RouterMessagePlannerLink).filter(
+                RouterMessagePlannerLink.planner_id == planner_id
+            ).first()
+            return link.router_id if link else None
+    
+    def get_pending_task_for_entity(self, entity_id: str, function_name: str) -> Optional[Dict[str, Any]]:
+        """Check if a specific function is already queued for an entity"""
+        with self.SessionLocal() as session:
+            task = session.query(TaskQueue).filter(
+                TaskQueue.entity_id == entity_id,
+                TaskQueue.function_name == function_name,
+                TaskQueue.status.in_(['PENDING', 'IN_PROGRESS'])
+            ).first()
+            
+            if task:
+                return {
+                    'task_id': task.task_id,
+                    'function_name': task.function_name,
+                    'status': task.status
+                }
+            return None

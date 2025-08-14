@@ -103,18 +103,18 @@ const ChatComponent = () => {
 ```
 
 ### usePlannerInfo.ts
-Custom hook that fetches and manages planner execution plan information for conversations.
+Custom hook that fetches and manages planner execution plan information for routers.
 
 #### Purpose
 - **Plan Fetching** - Retrieve execution plans from planner agents
 - **Loading States** - Handle loading and error states for API requests
 - **Cache Management** - Avoid unnecessary API calls
-- **Integration** - Works with conversation state to show relevant plans
+- **Integration** - Works with router state to show relevant plans
 
 #### API
 ```typescript
 const usePlannerInfo = (
-  conversationId: string | null,
+  routerId: string | null,
   isProcessing: boolean
 ) => {
   // Returns
@@ -126,7 +126,7 @@ const usePlannerInfo = (
 ```
 
 #### Parameters
-- `conversationId`: Current conversation ID to fetch planner info for
+- `routerId`: Current router ID to fetch planner info for
 - `isProcessing`: Whether the agent is currently processing (triggers fetching)
 
 #### Return Values
@@ -140,20 +140,20 @@ const usePlannerInfo = (
 **Conditional Fetching:**
 ```typescript
 useEffect(() => {
-  // Only fetch when we have a conversation ID and system is processing
-  if (conversationId && isProcessing) {
+  // Only fetch when we have a router ID and system is processing
+  if (routerId && isProcessing) {
     fetchPlannerInfo();
   } else if (!isProcessing) {
     // Clear planner info when not processing
     setPlannerInfo(null);
   }
-}, [conversationId, isProcessing]);
+}, [routerId, isProcessing]);
 ```
 
 **Error Handling:**
 ```typescript
 try {
-  const response = await fetch(`/api/conversations/${conversationId}/planner-info`);
+  const response = await fetch(`/api/routers/${routerId}/planner-info`);
   if (!response.ok) throw new Error('Failed to fetch planner information');
   const data: PlannerInfo = await response.json();
   setPlannerInfo(data);
@@ -168,11 +168,11 @@ import { usePlannerInfo } from '../hooks/usePlannerInfo';
 import { useChatStore } from '../stores/chatStore';
 
 const MessageList = () => {
-  const { currentConversationId } = useChatStore();
+  const { currentRouterId } = useChatStore();
   const isProcessing = status.status === 'processing';
   
   const { plannerInfo, loading } = usePlannerInfo(
-    currentConversationId, 
+    currentRouterId, 
     isProcessing
   );
   
@@ -369,7 +369,7 @@ useEffect(() => {
 ### Planned Hooks
 - `useFileUpload` - File upload with progress tracking
 - `useAgentStatus` - Agent status monitoring and updates
-- `useConversationHistory` - Conversation persistence and retrieval
+- `useRouterHistory` - Router persistence and retrieval
 - `useVoiceInput` - Speech-to-text integration
 - `useTheme` - Dark/light mode management
 

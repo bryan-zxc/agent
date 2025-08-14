@@ -45,7 +45,7 @@ app.add_middleware(
 )
 
 # Store active connections
-active_connections = {}  # conversation_id -> RouterAgent
+active_connections = {}  # router_id -> RouterAgent
 user_connections = {}  # websocket -> user_session
 
 # Initialize database
@@ -55,7 +55,7 @@ db = AgentDatabase()
 # Pydantic models for API
 class ChatMessage(BaseModel):
     message: str
-    conversation_id: str
+    router_id: str
     files: Optional[List[str]] = []
     model: str = "gpt-4"
     temperature: float = 0.7
@@ -68,9 +68,21 @@ class StatusUpdate(BaseModel):
 
 @app.websocket("/chat")
 async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket endpoint for chat communication"""
+    """WebSocket endpoint for chat communication with enhanced tracking"""
     await websocket.accept()
-    logger.info("WebSocket connection established")
+    
+    # Enhanced connection logging
+    connection_info = {
+        "websocket_id": id(websocket),
+        "websocket_type": type(websocket).__name__,
+        "remote_address": websocket.scope.get('client', 'unknown'),
+        "path": websocket.scope.get('path', 'unknown')
+    }
+    
+    if hasattr(websocket, 'client_state'):
+        connection_info["client_state"] = str(websocket.client_state)
+        
+    logger.info(f"WebSocket connection established: {connection_info}")
 
     # Store connection with a session ID
     import uuid
@@ -78,7 +90,9 @@ async def websocket_endpoint(websocket: WebSocket):
     session_id = uuid.uuid4().hex
     user_connections[websocket] = {
         "session_id": session_id,
-        "current_conversation": None,
+        "current_router": None,
+        "connection_info": connection_info,
+        "established_at": logger.info.__globals__.get('datetime', __import__('datetime')).datetime.now().isoformat() if 'datetime' in logger.info.__globals__ else "unknown"
     }
 
     try:
@@ -86,70 +100,84 @@ async def websocket_endpoint(websocket: WebSocket):
         await websocket.send_json(
             {"type": "connection_established", "session_id": session_id}
         )
+        logger.info(f"Sent connection confirmation to session {session_id}")
 
         while True:
             # Receive message from frontend
             data = await websocket.receive_json()
-            await handle_websocket_message(websocket, data)
+            logger.info(f"Received WebSocket message from session {session_id}: {data.get('type', 'unknown')}")
+            asyncio.create_task(handle_websocket_message(websocket, data))
 
     except WebSocketDisconnect:
         # Clean up connection
         if websocket in user_connections:
             session_info = user_connections[websocket]
             del user_connections[websocket]
-            logger.info(f"Client session {session_info['session_id']} disconnected")
+            logger.info(f"Client session {session_info['session_id']} disconnected - connection info: {session_info.get('connection_info', {})}")
 
 
 async def handle_websocket_message(websocket: WebSocket, data: dict):
-    """Handle incoming WebSocket messages with conversation routing"""
+    """Handle incoming WebSocket messages with router routing"""
     try:
         message_type = data.get("type", "message")
 
-        if message_type == "load_conversation":
-            # Load conversation history
-            conversation_id = data.get("conversation_id")
-            if conversation_id:
-                router = RouterAgent(conversation_id=conversation_id)
-                # Update current conversation for this session
-                user_connections[websocket]["current_conversation"] = conversation_id
+        if message_type == "load_router":
+            # Load router history
+            router_id = data.get("router_id")
+            if router_id:
+                router = RouterAgent(router_id=router_id)
+                # Update current router for this session
+                user_connections[websocket]["current_router"] = router_id
 
-                # Send conversation history
+                # Send message history
                 await websocket.send_json(
                     {
-                        "type": "conversation_history",
-                        "conversation_id": conversation_id,
+                        "type": "message_history",
+                        "router_id": router_id,
                         "messages": router.messages,
                     }
                 )
 
         elif message_type == "message":
             # Regular chat message
-            conversation_id = data.get("conversation_id")
-            if not conversation_id:
+            router_id = data.get("router_id")
+            if not router_id:
                 await websocket.send_json(
-                    {"type": "error", "message": "conversation_id is required"}
+                    {"type": "error", "message": "router_id is required"}
                 )
                 return
 
-            # Get or create router for this conversation
-            if conversation_id not in active_connections:
-                router = RouterAgent(conversation_id=conversation_id)
+            # Get or create router for this router session
+            if router_id not in active_connections:
+                logger.info(f"Creating new router for router {router_id}")
+                router = RouterAgent(router_id=router_id)
                 await router.connect_websocket(websocket)
-                active_connections[conversation_id] = router
+                active_connections[router_id] = router
                 
-                # For new conversations, use activate_conversation
+                # Log active connection mapping
+                logger.info(f"Stored router {router_id} with WebSocket ID {id(websocket)} in active_connections")
+                
+                # For new routers, use activate_conversation
                 user_message = data.get("message", "")
                 files = data.get("files", [])
                 await router.activate_conversation(user_message, files)
             else:
-                router = active_connections[conversation_id]
+                logger.info(f"Using existing router for router {router_id}")
+                router = active_connections[router_id]
+                
+                # Log WebSocket connection update
+                old_websocket_id = id(router.websocket) if router.websocket else "None"
+                new_websocket_id = id(websocket)
+                
+                logger.info(f"Updating WebSocket for router {router_id}: {old_websocket_id} -> {new_websocket_id}")
+                
                 # Update websocket connection for existing router
                 router.websocket = websocket
 
-                # Update current conversation for this session
-                user_connections[websocket]["current_conversation"] = conversation_id
+                # Update current router for this session
+                user_connections[websocket]["current_router"] = router_id
 
-                # Handle the message for existing conversations
+                # Handle the message for existing routers
                 await router.handle_message(data)
 
     except Exception as e:
@@ -349,68 +377,68 @@ async def health_check():
     return {"status": "healthy", "service": "agent-system"}
 
 
-@app.get("/conversations")
-async def get_conversations():
-    """Get all conversations"""
+@app.get("/routers")
+async def get_routers():
+    """Get all routers"""
     try:
         from src.agent.models.agent_database import (
             AgentDatabase,
-            Conversation,
+            Router,
             RouterMessage,
         )
 
         db = AgentDatabase()
         with db.SessionLocal() as session:
-            conversations = (
-                session.query(Conversation)
-                .order_by(Conversation.updated_at.desc())
+            routers = (
+                session.query(Router)
+                .order_by(Router.updated_at.desc())
                 .all()
             )
 
             result = []
-            for conv in conversations:
+            for router in routers:
                 result.append(
                     {
-                        "id": conv.id,
-                        "title": conv.title,
-                        "preview": conv.preview,
-                        "timestamp": conv.updated_at.isoformat(),
+                        "id": router.router_id,
+                        "title": router.title,
+                        "preview": router.preview,
+                        "timestamp": router.updated_at.isoformat(),
                     }
                 )
 
         return result
     except Exception as e:
-        logger.error(f"Error fetching conversations: {str(e)}")
+        logger.error(f"Error fetching routers: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/conversations/{conversation_id}")
-async def get_conversation(conversation_id: str):
-    """Get conversation history"""
+@app.get("/routers/{router_id}")
+async def get_router(router_id: str):
+    """Get router history"""
     try:
-        router = RouterAgent(conversation_id=conversation_id)
-        return {"conversation_id": conversation_id, "messages": router.messages}
+        router = RouterAgent(router_id=router_id)
+        return {"router_id": router_id, "messages": router.messages}
     except Exception as e:
-        logger.error(f"Error fetching conversation: {str(e)}")
+        logger.error(f"Error fetching router: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/conversations")
-async def create_conversation():
-    """Create a new conversation"""
+@app.post("/routers")
+async def create_router():
+    """Create a new router"""
     try:
         import uuid
 
-        conversation_id = uuid.uuid4().hex
-        return {"conversation_id": conversation_id}
+        router_id = uuid.uuid4().hex
+        return {"router_id": router_id}
     except Exception as e:
-        logger.error(f"Error creating conversation: {str(e)}")
+        logger.error(f"Error creating router: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/conversations/{conversation_id}/activate")
-async def activate_conversation(conversation_id: str, request: dict):
-    """Activate a conversation with the first user message"""
+@app.post("/routers/{router_id}/activate")
+async def activate_router(router_id: str, request: dict):
+    """Activate a router with the first user message"""
     try:
         user_message = request.get("message", "")
         files = request.get("files", [])
@@ -419,13 +447,13 @@ async def activate_conversation(conversation_id: str, request: dict):
             raise HTTPException(status_code=400, detail="Message is required")
 
         # Create or get existing router
-        router = RouterAgent(conversation_id=conversation_id)
+        router = RouterAgent(router_id=router_id)
 
-        # Activate the conversation (this will add system message and process user message)
+        # Activate the router (this will add system message and process user message)
         await router.activate_conversation(user_message, files)
 
         # Store the router for WebSocket connections
-        active_connections[conversation_id] = router
+        active_connections[router_id] = router
 
         # Get the conversation messages to return the assistant's response
         messages = router.messages
@@ -437,25 +465,59 @@ async def activate_conversation(conversation_id: str, request: dict):
 
         return {
             "status": "activated",
-            "conversation_id": conversation_id,
+            "router_id": router_id,
             "response": assistant_response,
         }
     except Exception as e:
-        logger.error(f"Error activating conversation: {str(e)}")
+        logger.error(f"Error activating router: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/conversations/{conversation_id}/update-title")
-async def update_conversation_title(conversation_id: str):
-    """Update conversation title using LLM (async, fire-and-forget)"""
+@app.post("/routers/{router_id}/update-title")
+async def update_router_title(router_id: str):
+    """Update router title using LLM (async, fire-and-forget)"""
     try:
         # Create RouterAgent and call method directly
-        router = RouterAgent(conversation_id=conversation_id)
+        router = RouterAgent(router_id=router_id)
         asyncio.create_task(router.generate_and_update_title())
 
         return {"status": "started"}
     except Exception as e:
         logger.error(f"Error starting title update: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/routers/{planner_id}/handle-planner-completion")
+async def handle_planner_completion(planner_id: str):
+    """Handle planner completion - get router_id from planner and call completion handler"""
+    try:
+        # Get planner to extract router_id
+        planner = db.get_planner(planner_id)
+        if not planner:
+            raise HTTPException(status_code=404, detail=f"Planner {planner_id} not found")
+        
+        # Get router_id from planner data (from message link)
+        planner_by_message = db.get_planner_by_message(planner.get("message_id"))
+        if not planner_by_message:
+            raise HTTPException(status_code=404, detail=f"Router link not found for planner {planner_id}")
+        
+        router_id = planner_by_message.get("router_id")
+        if not router_id:
+            raise HTTPException(status_code=404, detail=f"Router ID not found for planner {planner_id}")
+        
+        # Get existing RouterAgent instance with WebSocket connection
+        router = active_connections.get(router_id)
+        if not router:
+            raise HTTPException(status_code=404, detail=f"Active router connection not found for router {router_id}")
+        
+        # Call completion handler on existing router instance
+        await router.handle_planner_completion(planner_id)
+
+        return {"status": "completed", "planner_id": planner_id, "router_id": router_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error handling planner completion: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

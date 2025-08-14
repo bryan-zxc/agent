@@ -25,7 +25,7 @@ By centralizing type definitions, we ensure:
 ## Type Definitions
 
 ### ChatMessage
-Core message structure for chat conversations:
+Core message structure for chat routers:
 ```typescript
 interface ChatMessage {
   id: string;
@@ -69,10 +69,10 @@ interface AgentStatus {
 }
 ```
 
-### ConversationHistory
-Conversation management structure:
+### RouterHistory
+Router management structure:
 ```typescript
-interface ConversationHistory {
+interface RouterHistory {
   id: string;
   messages: ChatMessage[];
   createdAt: Date;

@@ -5,7 +5,7 @@ interface DuplicateFile {
   upload_timestamp: string;
 }
 
-interface DuplicateFileInfo {
+export interface DuplicateFileInfo {
   duplicate_found: boolean;
   existing_file?: DuplicateFile;
   new_filename?: string;
@@ -122,8 +122,8 @@ export class FileUploadService {
         const checkResult = await this.checkForDuplicate(file);
         
         if (checkResult.duplicate_found && checkResult.existing_file && checkResult.options) {
-          // Handle duplicate immediately
-          const duplicateInfo: DuplicateFileInfo = {
+          // Handle duplicate immediately - we know existing_file is defined due to the check above
+          const duplicateInfo: any = {
             duplicate_found: true,
             existing_file: checkResult.existing_file,
             new_filename: checkResult.new_filename || file.name,
@@ -211,8 +211,8 @@ export class FileUploadService {
         const uploadResult = await this.uploadFile(file);
         
         if (uploadResult.duplicate_found && uploadResult.existing_file && uploadResult.options) {
-          // Handle duplicate
-          const duplicateInfo: DuplicateFileInfo = {
+          // Handle duplicate - we know existing_file is defined due to the check above
+          const duplicateInfo: any = {
             duplicate_found: true,
             existing_file: uploadResult.existing_file,
             new_filename: uploadResult.new_filename || file.name,

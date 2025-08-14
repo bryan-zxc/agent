@@ -116,25 +116,25 @@ def add_json_attribute_migration():
 
 ```python
 def add_column_migration():
-    """Add conversation_context column to planners"""
+    """Add router_context column to planners"""
     
     # Pre-check: Verify column doesn't exist
     cursor.execute("PRAGMA table_info(planners)")
     columns = [col[1] for col in cursor.fetchall()]
-    assert 'conversation_context' not in columns, "Column already exists"
+    assert 'router_context' not in columns, "Column already exists"
     
     # Migration: Add column with default
     cursor.execute("""
         ALTER TABLE planners 
-        ADD COLUMN conversation_context TEXT DEFAULT NULL
+        ADD COLUMN router_context TEXT DEFAULT NULL
     """)
     
     # Verification: Confirm column exists
     cursor.execute("PRAGMA table_info(planners)")
     columns = [col[1] for col in cursor.fetchall()]
-    assert 'conversation_context' in columns, "Column addition failed"
+    assert 'router_context' in columns, "Column addition failed"
     
-    print("Added conversation_context column to planners table")
+    print("Added router_context column to planners table")
 ```
 
 ### 3. Column Promotion

@@ -98,7 +98,7 @@ interface ChatStore {
 **clearMessages()**
 - Clears all messages from chat history
 - Used for "new conversation" functionality
-- Resets conversation state
+- Resets router state
 
 #### Usage Examples
 
@@ -386,7 +386,7 @@ describe('chatStore', () => {
 ### Planned Stores
 - `useSettingsStore` - User preferences and configuration
 - `useFileStore` - File upload and management state
-- `useHistoryStore` - Conversation history persistence
+- `useHistoryStore` - Router history persistence
 - `useThemeStore` - UI theme and appearance settings
 
 ### Advanced Features

@@ -39,13 +39,24 @@ class AgentSettings(BaseSettings):
 
     # Database Configuration
     database_schema_version: int = Field(
-        default=2, description="Current database schema version"
+        default=1, description="Current database schema version"
     )
     database_auto_migrate: bool = Field(
         default=True, description="Enable automatic database migrations"
     )
     database_path: str = Field(
         default="./db/agent_database.db", description="Path to SQLite database file"
+    )
+
+    # File Storage Configuration  
+    collaterals_base_path: str = Field(
+        default="/app/files/agent_collaterals", description="Base path for agent collateral files"
+    )
+    execution_plan_model_filename: str = Field(
+        default="execution_plan_model.json", description="Filename for execution plan model in planner directory"
+    )
+    current_task_filename: str = Field(
+        default="current_task.json", description="Filename for current task in planner directory"
     )
 
     # Environment

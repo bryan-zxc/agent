@@ -11,7 +11,7 @@ export interface ChatMessage {
 }
 
 export interface WebSocketMessage {
-  type: 'message' | 'status' | 'response' | 'error' | 'execution_plan_update';
+  type: 'message' | 'status' | 'response' | 'error' | 'message_history' | 'load_router';
   data: any;
   timestamp?: Date;
 }

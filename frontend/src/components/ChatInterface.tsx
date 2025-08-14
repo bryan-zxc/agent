@@ -16,10 +16,10 @@ import { SidebarProvider, SidebarInset } from './ui/sidebar';
 import { fileUploadService, DuplicateFileInfo } from '../lib/fileUpload';
 
 export const ChatInterface: React.FC = () => {
-  const { messages, status, currentConversationId, createNewConversationInBackend, createNewConversation, setCurrentConversation, isConversationLocked } = useChatStore();
-  console.log('ChatInterface render - currentConversationId:', currentConversationId);
+  const { messages, status, currentRouterId, createNewConversationInBackend, createNewConversation, setCurrentConversation, isConversationLocked } = useChatStore();
+  console.log('ChatInterface render - currentRouterId:', currentRouterId);
   const [conversationStarted, setConversationStarted] = useState(false);
-  const [, setPendingConversationId] = useState<string | null>(null);
+  const [, setPendingRouterId] = useState<string | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [duplicateDialog, setDuplicateDialog] = useState<{
     open: boolean;
@@ -94,27 +94,22 @@ export const ChatInterface: React.FC = () => {
     try {
       console.log('Creating new conversation in backend...');
       // Create new conversation in backend first
-      const newConversationId = await createNewConversationInBackend();
-      console.log('New conversation created:', newConversationId);
+      const newRouterId = await createNewConversationInBackend();
+      console.log('New router created:', newRouterId);
       
-      setPendingConversationId(newConversationId);
-      setCurrentConversation(newConversationId);
+      setPendingRouterId(newRouterId);
+      setCurrentConversation(newRouterId);
       setConversationStarted(true);
       
-      // Upload files if any
-      // Since files have already been checked for duplicates during attachment,
-      // we can upload them directly without duplicate checking
+      // Upload files using the optimised method that handles resolved duplicates
       const filePaths: string[] = [];
       if (files.length > 0) {
         try {
-          for (const file of files) {
-            const uploadResult = await fileUploadService.uploadFile(file);
-            if (uploadResult.path) {
-              filePaths.push(uploadResult.path);
-            }
-          }
+          const resolvedFiles = await fileUploadService.checkFilesForDuplicates(files, handleDuplicateFound);
+          const uploadedPaths = await fileUploadService.uploadResolvedFiles(resolvedFiles);
+          filePaths.push(...uploadedPaths);
         } catch (error) {
-          console.error('Error uploading files:', error);
+          console.error('Error handling files:', error);
         }
       }
 
@@ -125,11 +120,11 @@ export const ChatInterface: React.FC = () => {
 
       // Send first message via WebSocket instead of REST API
       console.log('Sending first message via WebSocket...');
-      sendMessage(message, filePaths, newConversationId);
+      sendMessage(message, filePaths, newRouterId);
       
       // Trigger title update asynchronously (fire and forget)
       setTimeout(() => {
-        fetch(`${process.env.NEXT_PUBLIC_API_URL}/conversations/${newConversationId}/update-title`, {
+        fetch(`${process.env.NEXT_PUBLIC_API_URL}/routers/${newRouterId}/update-title`, {
           method: 'POST',
         }).catch(error => {
           console.warn('Failed to update conversation title:', error);
@@ -142,48 +137,43 @@ export const ChatInterface: React.FC = () => {
       console.error('Error in handleFirstMessage:', error);
       // Reset state on error
       setConversationStarted(false);
-      setPendingConversationId(null);
+      setPendingRouterId(null);
     }
   };
 
   const handleMessageSubmit = async (message: string, files: File[]) => {
     if (!message.trim() || !isWebSocketOpen()) return;
 
-    // Upload files if any
-    // Since files have already been checked for duplicates during attachment,
-    // we can upload them directly without duplicate checking
+    // Upload files using the optimised method that handles resolved duplicates
     const filePaths: string[] = [];
     if (files.length > 0) {
       try {
-        for (const file of files) {
-          const uploadResult = await fileUploadService.uploadFile(file);
-          if (uploadResult.path) {
-            filePaths.push(uploadResult.path);
-          }
-        }
+        const resolvedFiles = await fileUploadService.checkFilesForDuplicates(files, handleDuplicateFound);
+        const uploadedPaths = await fileUploadService.uploadResolvedFiles(resolvedFiles);
+        filePaths.push(...uploadedPaths);
       } catch (error) {
-        console.error('Error uploading files:', error);
+        console.error('Error handling files:', error);
       }
     }
 
     // Send message with current conversation ID
-    sendMessage(message, filePaths, currentConversationId);
+    sendMessage(message, filePaths, currentRouterId);
   };
 
   const handleNewConversation = () => {
     setConversationStarted(false);
-    setPendingConversationId(null);
+    setPendingRouterId(null);
     // Generate client-side conversation ID only, don't create in backend yet
     createNewConversation();
   };
 
-  const handleConversationSelect = (conversationId: string, hasMessages: boolean) => {
+  const handleConversationSelect = (routerId: string, hasMessages: boolean) => {
     setConversationStarted(hasMessages);
-    setPendingConversationId(hasMessages ? null : conversationId);
+    setPendingRouterId(hasMessages ? null : routerId);
     
     // Load conversation via WebSocket
     if (hasMessages) {
-      loadConversation(conversationId);
+      loadConversation(routerId);
     }
   };
 
@@ -263,9 +253,9 @@ export const ChatInterface: React.FC = () => {
                   <MessageInput 
                     onSubmit={handleMessageSubmit}
                     onDuplicateFound={handleDuplicateFound}
-                    disabled={!wsConnected || isConversationLocked(currentConversationId)}
+                    disabled={!wsConnected || isConversationLocked(currentRouterId)}
                     className="border-0 bg-transparent"
-                    placeholder={isConversationLocked(currentConversationId) ? "Processing... Please wait" : "Type your message... (Enter to send, Shift+Enter for new line)"}
+                    placeholder={isConversationLocked(currentRouterId) ? "Processing... Please wait" : "Type your message... (Enter to send, Shift+Enter for new line)"}
                   />
                 </div>
               </div>

@@ -4,27 +4,21 @@
 
 ```mermaid
 erDiagram
-    conversations ||--o{ router_messages : contains
-    conversations ||--|| routers : "activates (1:1)"
+    routers ||--o{ router_messages : contains
     routers ||--o{ router_planner_links : "initiates"
     planners ||--o{ router_planner_links : "activated by"
     planners ||--o{ planner_messages : "generates (1:1)"
     planners ||--o{ workers : "creates tasks"
     workers ||--o{ worker_messages : "generates (1:1)"
     
-    conversations {
-        string id PK
-        string title
-        string preview  
-        datetime created_at
-        datetime updated_at
-    }
     
     routers {
         string router_id PK
         string status
         string model
         float temperature
+        string title
+        string preview
         json metadata
         integer schema_version
         datetime created_at
@@ -108,13 +102,13 @@ erDiagram
 ## Relationship Details
 
 ### Core Agent Flow
-1. **Conversation → Router**: Each conversation activates exactly one router (1:1)
+1. **Router**: Main routing agent handles messages and activates planners as needed
 2. **Router → Planner**: Router can initiate multiple planners over time (1:n via link table)
 3. **Planner → Worker**: Each planner creates multiple tasks/workers (1:n)
 
 ### Message Relationships
 Each agent type maintains its own message history:
-- **Router Messages**: Conversation-level messaging
+- **Router Messages**: Router-level messaging
 - **Planner Messages**: Planning and task management messaging  
 - **Worker Messages**: Task execution and result messaging
 

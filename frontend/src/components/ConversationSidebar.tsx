@@ -8,7 +8,7 @@ import { Plus, MessageSquare } from 'lucide-react';
 
 interface ConversationSidebarProps {
   onNewConversation?: () => void;
-  onConversationSelect?: (conversationId: string, hasMessages: boolean) => void;
+  onConversationSelect?: (routerId: string, hasMessages: boolean) => void;
   refreshTrigger?: number; // Used to trigger refresh from parent
 }
 
@@ -19,7 +19,7 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({
 }) => {
   
   const {
-    currentConversationId,
+    currentRouterId,
     conversations,
     setConversations,
     createNewConversation,
@@ -40,7 +40,7 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({
     }
     
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/conversations`);
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/routers`);
       console.log('fetchConversations response status:', response.status);
       if (response.ok) {
         const data = await response.json();
@@ -90,24 +90,24 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({
     }
   };
 
-  const handleSelectConversation = async (conversationId: string) => {
-    if (conversationId === currentConversationId) {
+  const handleSelectConversation = async (routerId: string) => {
+    if (routerId === currentRouterId) {
       return;
     }
 
     try {
       // Get conversation metadata to check if it has messages
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/conversations/${conversationId}`);
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/routers/${routerId}`);
       if (response.ok) {
         const data = await response.json();
         const hasMessages = data.messages.filter((msg: {role: string; content: string}) => msg.role !== 'system').length > 0;
         
         // Set the conversation in store
-        setCurrentConversation(conversationId);
+        setCurrentConversation(routerId);
         
         // Notify parent about conversation selection (this will trigger WebSocket loading)
         if (onConversationSelect) {
-          onConversationSelect(conversationId, hasMessages);
+          onConversationSelect(routerId, hasMessages);
         }
       }
     } catch (error) {
@@ -167,7 +167,7 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({
               <SidebarMenuItem key={conversation.id}>
                 <Button
                   onClick={() => handleSelectConversation(conversation.id)}
-                  variant={currentConversationId === conversation.id ? "secondary" : "ghost"}
+                  variant={currentRouterId === conversation.id ? "secondary" : "ghost"}
                   className="h-auto p-3 w-full justify-start"
                 >
                   <div className="flex items-start gap-3 w-full">

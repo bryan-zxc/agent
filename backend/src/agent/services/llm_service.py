@@ -5,6 +5,7 @@ import json
 import re
 import logging
 import enum
+import requests
 from pathlib import Path
 from datetime import datetime
 from pydantic import BaseModel, ValidationError
@@ -619,6 +620,28 @@ class LLM:
             raise
 
 
+def get_actual_url_from_redirect(redirect_url: str) -> str:
+    """Extract actual URL from Google redirect (generalised from get_pdf_url_from_redirect)."""
+    try:
+        response_redirect = requests.get(redirect_url, allow_redirects=False, timeout=10)
+        if response_redirect.status_code in [301, 302]:
+            redirect_location = response_redirect.headers.get('Location', '')
+            if redirect_location:
+                return redirect_location
+        
+        # If no direct redirect, try to extract from HTML
+        response_redirect = requests.get(redirect_url, timeout=10)
+        # Look for common URL patterns in the HTML
+        url_match = re.search(r'HREF="([^"]*)"', response_redirect.text)
+        if url_match:
+            return url_match.group(1)
+            
+        return redirect_url  # Return original if no redirect found
+    except Exception as e:
+        logger.warning(f"Failed to resolve redirect {redirect_url}: {e}")
+        return redirect_url
+
+
 def add_citations(response):
     """Add citations to the response text based on grounding metadata."""
     if not hasattr(response, 'candidates') or not response.candidates:
@@ -648,6 +671,11 @@ def add_citations(response):
             for i in support.grounding_chunk_indices:
                 if i < len(chunks):
                     uri = chunks[i].web.uri
+                    
+                    # Convert Google redirect URLs to actual URLs
+                    if 'vertexaisearch.cloud.google.com/grounding-api-redirect' in uri:
+                        uri = get_actual_url_from_redirect(uri)
+                    
                     citation_links.append(f"[{i + 1}]({uri})")
 
             citation_string = ", ".join(citation_links)

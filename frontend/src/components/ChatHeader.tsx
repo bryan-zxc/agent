@@ -16,8 +16,8 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   isConnected, 
   className,
 }) => {
-  const { isConnecting, currentConversationId, isConversationLocked } = useChatStore();
-  const isCurrentConversationLocked = isConversationLocked(currentConversationId);
+  const { isConnecting, currentRouterId, isConversationLocked } = useChatStore();
+  const isCurrentConversationLocked = isConversationLocked(currentRouterId);
   return (
     <header 
       className={cn(

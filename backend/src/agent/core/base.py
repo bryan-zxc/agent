@@ -83,7 +83,7 @@ class BaseAgent:
         verbose=True,
     ) -> Optional[int]:
         """
-        Adds a message to the conversation history.
+        Adds a message to the message history.
 
         :param role: The role of the message sender (e.g., 'user', 'assistant').
         :param content: The content of the message.

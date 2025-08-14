@@ -1,7 +1,7 @@
 # Agent System Architecture
 
 ## Overview
-Implementation of a conversational AI agent system with real-time frontend interface. The system features a conversational router that handles normal chat interactions and automatically activates the planner agent when specific triggers are detected (e.g., image analysis, complex tasks).
+Implementation of an AI agent system with real-time frontend interface. The system features a router that handles normal chat interactions and automatically activates the planner agent when specific triggers are detected (e.g., image analysis, complex tasks).
 
 ## System Architecture
 
@@ -9,9 +9,9 @@ Implementation of a conversational AI agent system with real-time frontend inter
 graph LR
     A[Next.js Frontend<br/>- Chat UI<br/>- File upload<br/>- History] 
     B[FastAPI Server<br/>- RouterAgent<br/>- PlannerAgent<br/>- WorkerAgents]
-    C[SQLite Database<br/>- Conversations<br/>- Messages<br/>- Persistence]
+    C[SQLite Database<br/>- Routers<br/>- Messages<br/>- Persistence]
     
-    A <-->|"WebSocket /chat/{conv_id}"| B
+    A <-->|"WebSocket /chat"| B
     B --> C
 ```
 
@@ -30,7 +30,7 @@ graph LR
   - Intelligent file upload with duplicate detection
   - Drag-and-drop file capability with resolution dialogs
   - WebSocket connection for bidirectional communication
-  - Conversation history and persistence
+  - Router history and persistence
   - Auto-resizing input with keyboard shortcuts
   - Status indicators and loading states
 - **State Management**: Zustand with TypeScript
@@ -48,18 +48,18 @@ graph LR
   - **WorkerAgents**: Execute individual tasks (general and SQL-specialized)
 
 ### Database
-- **Technology**: SQLite with conversation-based persistence
-- **Schema**: Conversations, RouterMessage, PlannerMessage, WorkerMessage tables
-- **Purpose**: Store conversation history, message threading, and agent state
+- **Technology**: SQLite with router-based persistence
+- **Schema**: Routers, RouterMessage, PlannerMessage, WorkerMessage tables
+- **Purpose**: Store router history, message threading, and agent state
 - **Scalability**: Can migrate to PostgreSQL for multi-user production deployment
 
 ## Agent Flow
 
-### Conversational Mode (Default)
+### Router Mode (Default)
 1. User sends message via WebSocket
-2. RouterAgent processes in conversational context
+2. RouterAgent processes in router context
 3. Responds directly for simple queries
-4. Maintains conversation history
+4. Maintains router history
 
 ### Analysis Mode (Triggered)
 1. RouterAgent detects triggers:
@@ -74,26 +74,26 @@ graph LR
 ## Communication Protocols
 
 ### WebSocket (Primary)
-- **Endpoint**: `/chat/{conversation_id}`
+- **Endpoint**: `/chat`
 - **Purpose**: Real-time bidirectional communication
 - **Features**: 
-  - Instant messaging with conversation persistence
+  - Instant messaging with router persistence
   - Status updates during processing
-  - Automatic conversation history on connect
+  - Automatic router history on connect
   - File-based analysis triggering
 
 ### HTTP REST (Secondary)
-- **Purpose**: File uploads and conversation management
+- **Purpose**: File uploads and router management
 - **Endpoints**: 
   - `POST /upload` - File uploads
-  - `GET /conversations/{id}` - Conversation history
+  - `GET /routers/{id}` - Router history
   - `GET /health` - Service status
 
 ## Key Features
 
 ### Intelligent Routing
 - Automatic detection of simple chat vs complex analysis needs
-- Seamless switching between conversational and analysis modes
+- Seamless switching between router and analysis modes
 - Status updates during processing ("Analyzing image...", "Processing table 1 of 3...")
 
 ### Multi-Modal Processing
@@ -102,9 +102,9 @@ graph LR
 - CSV data analysis with SQL queries
 - Table extraction and data visualization
 
-### Conversation Management
-- Persistent conversation history with SQLite database
-- Thread-based conversation organization
+### Router Management
+- Persistent router history with SQLite database
+- Thread-based router organization
 - Full message history retrieval on reconnection
 - Cross-session state management
 
@@ -157,7 +157,7 @@ agent/
 - Monorepo for coordinated development
 - Independent scaling of frontend/backend
 - Database migration path (SQLite → PostgreSQL)
-- Conversation-based architecture supports multi-user scenarios
+- Router-based architecture supports multi-user scenarios
 
 ### Developer Experience
 - Type safety across frontend/backend with shared types
@@ -183,6 +183,6 @@ agent/
 ## Future Enhancements
 
 - Multi-user support with PostgreSQL migration
-- Advanced conversation analytics
+- Advanced router analytics
 - Plugin system for additional agent capabilities
 - Mobile-responsive PWA features

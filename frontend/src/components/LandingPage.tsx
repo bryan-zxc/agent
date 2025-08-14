@@ -4,7 +4,7 @@ import React from 'react';
 import { MessageInput } from './MessageInput';
 import { useChatStore } from '../stores/chatStore';
 import { cn } from '@/lib/utils';
-import { DuplicateFileInfo } from '@/lib/fileUpload';
+import { DuplicateFileInfo } from '../lib/fileUpload';
 
 interface LandingPageProps {
   onFirstMessage: (message: string, files: File[]) => Promise<void>;
@@ -17,7 +17,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   onDuplicateFound,
   isConnected,
 }) => {
-  const { currentConversationId, isConversationLocked } = useChatStore();
+  const { currentRouterId, isConversationLocked } = useChatStore();
   return (
     <div 
       className={cn(
@@ -45,9 +45,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             <MessageInput 
               onSubmit={onFirstMessage}
               onDuplicateFound={onDuplicateFound}
-              disabled={!isConnected || isConversationLocked(currentConversationId)}
+              disabled={!isConnected || isConversationLocked(currentRouterId)}
               className="border-0 bg-transparent rounded-2xl"
-              placeholder={isConversationLocked(currentConversationId) ? "Processing... Please wait" : "Type your message to start a conversation..."}
+              placeholder={isConversationLocked(currentRouterId) ? "Processing... Please wait" : "Type your message to start a conversation..."}
             />
           </div>
         </div>

@@ -15,7 +15,6 @@ TOOLS = {
     "get_text_and_table_json_from_image": get_text_and_table_json_from_image,
     "get_facts_from_pdf": get_facts_from_pdf,
     "search_web_general": search_web_general,
-    "search_web_pdf": search_web_pdf,
 }
 tools_type = Literal[tuple(TOOLS)]
 
@@ -63,18 +62,6 @@ class Task(BaseModel):
     )
 
 
-class FullTask(Task):
-    task_id: str
-    task_status: Literal[
-        "pending", "in_progress", "completed", "failed_validation", "recorded"
-    ] = "pending"
-    task_result: str = ""
-    input_images: dict = {}
-    input_variables: dict = {}
-    tables: list[TableMeta] = None
-    filepaths: list[str] = []
-    output_images: dict = {}
-    output_variables: dict = {}
 
 
 class PlanValidation(BaseModel):

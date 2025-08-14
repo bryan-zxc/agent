@@ -6,7 +6,7 @@ import { FileAttachment } from './FileAttachment';
 import { Button } from './ui/button';
 import { Textarea } from './ui/textarea';
 import { Send, Paperclip } from 'lucide-react';
-import { DuplicateFileInfo } from '@/lib/fileUpload';
+import { DuplicateFileInfo } from '../lib/fileUpload';
 
 interface MessageInputProps {
   onSubmit: (message: string, files: File[]) => Promise<void>;

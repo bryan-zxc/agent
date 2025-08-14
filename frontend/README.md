@@ -37,7 +37,7 @@ frontend/
 - **WebSocket communication** - Instant messaging with automatic reconnection
 - **File upload support** - Drag-and-drop or click to upload images, PDFs, CSVs
 - **Status indicators** - Real-time agent processing status with animations
-- **Message history** - Persistent conversation display with timestamps
+- **Message history** - Persistent router display with timestamps
 - **Auto-scroll** - Automatically scrolls to latest messages with smooth behavior
 
 ### Modern User Experience
@@ -114,7 +114,7 @@ Header with connection status display:
 - Responsive design with consistent spacing
 
 ### MessageList.tsx (Message Display - 79 lines)
-Message display and conversation management:
+Message display and router management:
 - Auto-scrolling to latest messages
 - Message bubbles with proper alignment (user/assistant)
 - Timestamp display with proper time formatting

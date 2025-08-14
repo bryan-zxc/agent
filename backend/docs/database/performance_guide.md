@@ -13,13 +13,13 @@ The current schema includes these indexes:
 # Message table agent lookups (automatically created via index=True)
 planner_messages.agent_id  # Index for planner message retrieval
 worker_messages.agent_id   # Index for worker message retrieval  
-router_messages.conversation_id  # Index for conversation message retrieval
+router_messages.router_id  # Index for router message retrieval
 ```
 
 ### Primary Keys (Automatic)
 ```sql
 -- Primary key indexes (created automatically)
-conversations.id
+routers.router_id
 routers.router_id
 planners.planner_id  
 workers.worker_id
@@ -65,7 +65,7 @@ CREATE INDEX idx_workers_status ON workers(task_status);
 -- Message chronological ordering
 CREATE INDEX idx_planner_messages_agent_time ON planner_messages(agent_id, created_at);
 CREATE INDEX idx_worker_messages_agent_time ON worker_messages(agent_id, created_at);
-CREATE INDEX idx_router_messages_conv_time ON router_messages(conversation_id, created_at);
+CREATE INDEX idx_router_messages_router_time ON router_messages(router_id, created_at);
 ```
 
 ### Medium Priority (General Performance)
@@ -297,7 +297,7 @@ def test_task_manager_performance():
 
 ### Implementation Priority
 1. **High**: TaskManager query optimization (affects core functionality)  
-2. **Medium**: Message retrieval optimization (affects conversation loading)
+2. **Medium**: Message retrieval optimization (affects router loading)
 3. **Low**: General status filtering (nice-to-have for admin queries)
 
 ---

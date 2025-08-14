@@ -2,7 +2,7 @@
 
 ## Overview
 
-This directory contains comprehensive documentation for the Agent State Database system, a unified SQLite database that persists conversation messages, agent states, and task management for the AI agent system.
+This directory contains comprehensive documentation for the Agent State Database system, a unified SQLite database that persists router messages, agent states, and task management for the AI agent system.
 
 ## Architecture Summary
 
@@ -15,16 +15,16 @@ The database implements a hybrid Data Vault approach, combining:
 ## Quick Reference
 
 ### Core Tables
-- **conversations** - Chat conversation metadata
+- **routers** - Chat router metadata
 - **routers** - Router agent state and configuration
 - **planners** - Planner agent execution plans and status
 - **workers** - Task/worker execution details and results
 - **router_planner_links** - Router-planner relationships
-- **router_messages**, **planner_messages**, **worker_messages** - Agent conversation history
+- **router_messages**, **planner_messages**, **worker_messages** - Agent router history
 
 ### Key Relationships
 ```
-conversation (1:1) router (1:n) planner (1:n) worker
+router (1:n) planner (1:n) worker
                       ↘         ↗
                    router_planner_links
 ```

@@ -22,16 +22,16 @@ backend/
 ## Key Components
 
 ### FastAPI Server (main.py)
-- **WebSocket endpoint** (`/chat/{conversation_id}`) - Real-time conversation interface
+- **WebSocket endpoint** (`/chat`) - Real-time router interface
 - **File upload** (`/upload`) - Handle file uploads for analysis
 - **Health check** (`/health`) - Service status monitoring
-- **Conversation API** (`/conversations/{conversation_id}`) - Get conversation history
+- **Router API** (`/routers/{router_id}`) - Get router history
 
 ### Agent System (src/agent/)
 - **RouterAgent** - WebSocket-enabled chat interface with intelligent routing
 - **PlannerAgent** - Breaks down complex tasks into subtasks (activated automatically)
 - **WorkerAgents** - Execute individual tasks (general and SQL-specialized)
-- **Database Layer** - SQLite-based conversation persistence
+- **Database Layer** - SQLite-based router persistence
 
 ## Development Setup
 
@@ -65,14 +65,14 @@ python main.py
 
 Server will be available at:
 - **HTTP API**: http://localhost:8000
-- **WebSocket**: ws://localhost:8000/chat/{conversation_id}
+- **WebSocket**: ws://localhost:8000/chat
 - **Docs**: http://localhost:8000/docs (FastAPI auto-generated)
 
 ## API Reference
 
 ### WebSocket Communication
 
-Connect to `ws://localhost:8000/chat/{conversation_id}` and send JSON messages:
+Connect to `ws://localhost:8000/chat` and send JSON messages:
 
 ```json
 {
@@ -82,16 +82,16 @@ Connect to `ws://localhost:8000/chat/{conversation_id}` and send JSON messages:
 ```
 
 Response types:
-- `{"type": "conversation_history", "messages": [...], "conversation_id": "..."}` - On connect
+- `{"type": "message_history", "messages": [...], "router_id": "..."}` - On connect
 - `{"type": "status", "message": "Processing..."}` - Status updates
-- `{"type": "message", "role": "assistant", "content": "Analysis result", "conversation_id": "..."}` - Chat messages
+- `{"type": "message", "role": "assistant", "content": "Analysis result", "router_id": "..."}` - Chat messages
 - `{"type": "error", "message": "Error details"}` - Error messages
 
 ### HTTP Endpoints
 
 - `POST /upload` - Upload files for analysis
 - `GET /health` - Health check
-- `GET /conversations/{conversation_id}` - Get specific conversation history
+- `GET /routers/{router_id}` - Get specific router history
 
 ## Agent Flow
 
@@ -100,7 +100,7 @@ The RouterAgent automatically switches between simple chat and complex analysis 
 
 **Simple Chat Mode:**
 - Direct LLM conversation for general questions
-- Stored in database with conversation history
+- Stored in database with router history
 - Fast response times
 
 **Analysis Mode (Auto-triggered by):**
@@ -109,7 +109,7 @@ The RouterAgent automatically switches between simple chat and complex analysis 
 3. **Complex requests** - Multi-step tasks requiring planning
 
 ### Processing Pipeline
-1. **WebSocket Connection** - Frontend connects with conversation ID
+1. **WebSocket Connection** - Frontend connects with router ID
 2. **Message Handling** - RouterAgent receives and stores user message
 3. **Route Decision** - Simple chat OR complex analysis
 4. **Processing** - Direct LLM response OR PlannerAgent → WorkerAgents
@@ -142,8 +142,8 @@ The RouterAgent automatically switches between simple chat and complex analysis 
 3. Create specialized `WorkerAgent` subclasses
 
 ### Database Integration
-- **SQLite**: Default database with conversation persistence
-- **Tables**: Conversations, RouterMessage, PlannerMessage, WorkerMessage
+- **SQLite**: Default database with router persistence
+- **Tables**: Routers, RouterMessage, PlannerMessage, WorkerMessage
 - **Location**: `/Users/bryanye/agent/db/agent_messages.db` (configurable)
 - **Migration**: Can be upgraded to PostgreSQL for production scalability
 

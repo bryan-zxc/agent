@@ -185,9 +185,9 @@ NODE_ENV=development
 - `POST /upload` - File upload endpoint with duplicate detection
 - `POST /upload/resolve-duplicate` - Handle duplicate file resolution
 - `GET /health` - Health check
-- `GET /conversations` - Get conversation history
+- `GET /routers` - Get router history
 - `GET /messages/{message_id}/planner-info` - Get planner execution plan for specific message
-- `DELETE /conversations` - Clear conversation history
+- `DELETE /routers` - Clear router history
 
 ## How It Works
 

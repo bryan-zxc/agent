@@ -106,40 +106,34 @@ const isAgentsAssembleMessage = (message: ChatMessage) => {
          message.messageId;
 };
 
-// Special component for planner messages
-const AgentsAssembleMessage: React.FC<{
-  message: ChatMessage;
+// Separate component for execution plans (no longer nested in message bubbles)
+const ExecutionPlanDisplay: React.FC<{
+  messageId: number;
   isExpanded: boolean;
   onToggleExpansion: () => void;
-}> = ({ message, isExpanded, onToggleExpansion }) => {
-  const { plannerInfo, loading } = usePlannerInfo(message.messageId || null);
+}> = ({ messageId, isExpanded, onToggleExpansion }) => {
+  const { plannerInfo, loading } = usePlannerInfo(messageId);
+  
+  if (!plannerInfo?.has_planner || !plannerInfo.execution_plan) {
+    return null;
+  }
   
   return (
-    <article className="flex gap-3 justify-start">
-      {/* Bandit avatar and message */}
-      <div className="bg-card text-card-foreground px-4 py-3 rounded-xl">
-        <div className="flex items-center justify-between">
-          <span className="text-sm font-medium text-primary">
-            {message.message}
-          </span>
-          <time className="text-xs text-muted-foreground">
-            {message.timestamp.toLocaleTimeString()}
-          </time>
-        </div>
-        
-        {/* Expandable execution plan */}
-        {plannerInfo?.has_planner && plannerInfo.execution_plan && (
-          <Collapsible open={isExpanded} onOpenChange={onToggleExpansion}>
-            <CollapsibleTrigger>
-              {isExpanded ? <ChevronUp /> : <ChevronDown />}
-              <span>{isExpanded ? 'Hide' : 'Show'} execution plan</span>
-            </CollapsibleTrigger>
-            <CollapsibleContent>
-              <RichMarkdownRenderer content={plannerInfo.execution_plan} />
-            </CollapsibleContent>
-          </Collapsible>
-        )}
-      </div>
+    <article className="w-full">
+      <Collapsible open={isExpanded} onOpenChange={onToggleExpansion}>
+        <CollapsibleTrigger className="flex items-center space-x-2 p-3">
+          {isExpanded ? <ChevronUp /> : <ChevronDown />}
+          <span>{isExpanded ? 'Hide' : 'Show'} execution plan</span>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <div className="bg-muted/50 rounded-md p-4 w-full">
+            <div className="text-muted-foreground mb-2 font-medium">
+              Execution Plan:
+            </div>
+            <RichMarkdownRenderer content={plannerInfo.execution_plan} />
+          </div>
+        </CollapsibleContent>
+      </Collapsible>
     </article>
   );
 };
@@ -149,28 +143,33 @@ const AgentsAssembleMessage: React.FC<{
 ```typescript
 <main className="flex-1 overflow-y-auto p-4" role="main" aria-live="polite">
   {messages.map((message) => {
-    // Special handling for planner activation messages
-    if (isAgentsAssembleMessage(message)) {
-      return (
-        <AgentsAssembleMessage
-          key={message.id}
-          message={message}
-          isExpanded={expandedMessages.has(message.id)}
-          onToggleExpansion={() => toggleMessageExpansion(message.id)}
-        />
-      );
-    }
+    const isAgentsAssemble = isAgentsAssembleMessage(message);
     
-    // Regular message rendering
     return (
-      <article key={message.id} role="article" aria-label={`Message from ${message.sender}`}>
-        <div className={cn("message-bubble", message.sender === 'user' ? 'user-styles' : 'assistant-styles')}>
-          <RichMarkdownRenderer content={message.message} />
-          <time dateTime={message.timestamp.toISOString()}>
-            {message.timestamp.toLocaleTimeString()}
-          </time>
-        </div>
-      </article>
+      <div key={message.id} className="space-y-4">
+        {/* All messages now render as regular messages */}
+        <article role="article" aria-label={`Message from ${message.sender}`}>
+          <div className={cn(
+            "message-bubble", 
+            message.sender === 'user' ? 'user-styles' : 
+            isAgentsAssemble ? 'agents-assemble-styles' : 'assistant-styles'
+          )}>
+            <RichMarkdownRenderer content={message.message} />
+            <time dateTime={message.timestamp.toISOString()}>
+              {message.timestamp.toLocaleTimeString()}
+            </time>
+          </div>
+        </article>
+        
+        {/* Execution plan rendered separately after agents assemble messages */}
+        {isAgentsAssemble && message.messageId && (
+          <ExecutionPlanDisplay
+            messageId={message.messageId}
+            isExpanded={expandedMessages.has(message.id)}
+            onToggleExpansion={() => toggleMessageExpansion(message.id)}
+          />
+        )}
+      </div>
     );
   })}
 </main>
@@ -442,13 +441,18 @@ The components integrate with custom React hooks for enhanced functionality:
 
 **Usage in Components**:
 ```typescript
-const AgentsAssembleMessage = ({ message }) => {
-  const { plannerInfo, loading, error, refetch } = usePlannerInfo(message.messageId || null);
+const ExecutionPlanDisplay = ({ messageId }) => {
+  const { plannerInfo, loading, error, refetch } = usePlannerInfo(messageId);
   
   // Display execution plan if available
   if (plannerInfo?.has_planner && plannerInfo.execution_plan) {
-    return <CollapsibleExecutionPlan plan={plannerInfo.execution_plan} />;
+    return (
+      <div className="bg-muted/50 rounded-md p-4">
+        <RichMarkdownRenderer content={plannerInfo.execution_plan} />
+      </div>
+    );
   }
+  return null;
 };
 ```
 
@@ -480,14 +484,14 @@ export const usePlannerInfo = (messageId: number | null): UsePlannerInfoResult =
 - **MessageBubble**: Extracted individual message component
 - **TypingIndicator**: Real-time typing status display
 - **ChatSettings**: Model and temperature controls
-- **ConversationList**: Multiple conversation management
+- **RouterList**: Multiple router management
 - **VoiceInput**: Speech-to-text functionality
 
 ### Component Improvements
 - **Virtual scrolling** for large message lists
 - **Message reactions** (like/dislike functionality)
 - **Message editing** capabilities
-- **Export functionality** for conversations
+- **Export functionality** for routers
 - **Advanced file preview** with thumbnails
 
 ### Accessibility Enhancements

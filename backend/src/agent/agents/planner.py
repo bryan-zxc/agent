@@ -1,4 +1,3 @@
-import asyncio
 import uuid
 import logging
 import duckdb
@@ -256,13 +255,31 @@ class PlannerAgent(BaseAgent):
         temperature: float = 0,
         failed_task_limit: int = settings.failed_task_limit,
         planner_name: str = None,
+        message_id: int = None,
+        router_id: str = None,
+        websocket = None,
     ):
         super().__init__(id=id, agent_type="planner")
+
+        # Store WebSocket communication parameters FIRST (before creating new planner)
+        self.message_id = message_id
+        self.router_id = router_id
+        self.websocket = websocket
 
         state = self._agent_db.get_planner(self.id) if self._init_by_id else None
         if state:
             self._load_existing_state(state)
         else:
+            # Create message-planner link BEFORE creating new planner
+            if message_id and router_id:
+                self._agent_db.link_message_planner(
+                    router_id=router_id,
+                    message_id=message_id,
+                    planner_id=self.id,
+                    relationship_type="initiated"
+                )
+                logger.info(f"Created message-planner link: message {message_id} -> planner {self.id}")
+            
             self._create_new_planner(
                 user_question,
                 instruction,
@@ -283,7 +300,6 @@ class PlannerAgent(BaseAgent):
         self.tables = []
         self.docs = []
         self.execution_plan_model = None
-        self.execution_plan_callback = None
         self.tools_text = "\n\n---\n\n".join(
             [f"# {name}\n{tool.__doc__}" for name, tool in TOOLS.items()]
         )
@@ -445,14 +461,9 @@ class PlannerAgent(BaseAgent):
     def execution_plan(self, value):
         self._execution_plan = value
         self.update_agent_state(execution_plan=value)
-        
-        # Notify callback if set (for real-time updates)
-        if self.execution_plan_callback and value:
-            asyncio.create_task(self.execution_plan_callback(self.id, value))
     
-    def set_execution_plan_callback(self, callback):
-        """Set callback function for execution plan updates"""
-        self.execution_plan_callback = callback
+    # send_execution_plan_update method removed - execution plan updates now handled by frontend polling
+
 
     @property
     def failed_task_limit(self):
@@ -689,6 +700,9 @@ class PlannerAgent(BaseAgent):
                     logger.info(
                         f"Execution plan updated successfully after {retry_count + 1} attempts:\n\n{self.execution_plan}"
                     )
+                    
+                    # Note: Execution plan updates now handled by frontend polling instead of WebSocket
+                    
                     break
                 else:
                     retry_count += 1
