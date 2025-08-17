@@ -275,8 +275,6 @@ CREATE TABLE task_queue (
     payload JSON,                 -- Function parameters
     status TEXT NOT NULL,         -- 'PENDING', 'IN_PROGRESS', 'COMPLETED', 'FAILED'
     error_message TEXT,           -- Error details if failed
-    retry_count INTEGER DEFAULT 0,
-    max_retries INTEGER DEFAULT 3,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -346,7 +344,6 @@ except Exception as e:
     # 1. Updates task status to 'FAILED'
     # 2. Stores error message in database
     # 3. Logs error details
-    # 4. Optionally implements retry logic
     pass
 ```
 
@@ -383,14 +380,6 @@ The system provides robust error handling and recovery:
 2. **Status Updates**: Failed tasks marked in database with error details
 3. **Logging**: Comprehensive error logging for debugging
 4. **Isolation**: Failed tasks don't affect other entities
-
-### Retry Logic (Future Enhancement)
-
-The database schema supports retry logic:
-
-- `retry_count`: Tracks number of retry attempts
-- `max_retries`: Configurable retry limit per task
-- `error_message`: Stores failure details for analysis
 
 ### System Recovery
 

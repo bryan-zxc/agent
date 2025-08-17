@@ -151,8 +151,6 @@ Database models and service for agent message persistence and state management.
   - `payload`: JSON function parameters
   - `status`: Task status ('PENDING', 'IN_PROGRESS', 'COMPLETED', 'FAILED')
   - `error_message`: Error details if failed
-  - `retry_count`: Number of retry attempts
-  - `max_retries`: Maximum retry attempts allowed
   - `created_at`: Task queue timestamp
   - `updated_at`: Last status update timestamp
 

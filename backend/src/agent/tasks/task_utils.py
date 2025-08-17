@@ -124,14 +124,3 @@ def is_router_busy(router_id: str) -> bool:
     return router_id in pending_tasks
 
 
-def get_task_status(task_id: str) -> Optional[str]:
-    """Get the status of a specific task"""
-    db = AgentDatabase()
-    task = db.get_task(task_id)
-    return task.get("status") if task else None
-
-
-def cleanup_router_tasks(router_id: str) -> int:
-    """Clean up completed/failed tasks for a router"""
-    db = AgentDatabase()
-    return db.remove_completed_tasks(router_id)

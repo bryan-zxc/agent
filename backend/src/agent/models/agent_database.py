@@ -903,47 +903,9 @@ class AgentDatabase:
                 task.completed_at = datetime.utcnow()
                 if status == 'FAILED':
                     task.error_message = error_message
-                    task.retry_count += 1
             
             session.commit()
             return True
-    
-    def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
-        """Get task by ID"""
-        with self.SessionLocal() as session:
-            task = session.query(TaskQueue).filter(TaskQueue.task_id == task_id).first()
-            if task:
-                return {
-                    'task_id': task.task_id,
-                    'entity_type': task.entity_type,
-                    'entity_id': task.entity_id,
-                    'router_id': task.router_id,
-                    'function_name': task.function_name,
-                    'status': task.status,
-                    'created_at': task.created_at,
-                    'started_at': task.started_at,
-                    'completed_at': task.completed_at,
-                    'retry_count': task.retry_count,
-                    'max_retries': task.max_retries,
-                    'error_message': task.error_message
-                }
-            return None
-    
-    def remove_completed_tasks(self, router_id: str) -> int:
-        """Remove completed/failed tasks for a router"""
-        with self.SessionLocal() as session:
-            count = session.query(TaskQueue).filter(
-                TaskQueue.router_id == router_id,
-                TaskQueue.status.in_(['COMPLETED', 'FAILED'])
-            ).count()
-            
-            session.query(TaskQueue).filter(
-                TaskQueue.router_id == router_id,
-                TaskQueue.status.in_(['COMPLETED', 'FAILED'])
-            ).delete()
-            
-            session.commit()
-            return count
     
     # Planner Task Management Methods
     
