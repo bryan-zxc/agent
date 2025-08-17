@@ -21,6 +21,7 @@ from ..models import (
     TOOLS,
     Task,
     ExecutionPlanModel,
+    TaskResponseModel,
 )
 from ..services.llm_service import LLM
 from ..config.settings import settings
@@ -41,6 +42,8 @@ from .file_manager import (
     load_variable_from_file,
     load_image_from_file,
     cleanup_planner_files,
+    append_to_worker_message_history,
+    load_worker_message_history,
 )
 from .task_utils import update_planner_next_task_and_queue, queue_worker_task
 
@@ -395,6 +398,20 @@ async def execute_task_creation(task_data: dict):
             }
         )
 
+        # Add latest 10 task responses if available (worker context)
+        task_responses = load_worker_message_history(planner_id)
+        if task_responses:
+            latest_responses = task_responses[-10:]  # Get latest 10 items
+            responses_content = "\n\n---\n\n".join(
+                [response.model_dump_json(indent=2) for response in latest_responses]
+            )
+            appending_msgs.append(
+                {
+                    "role": "developer",
+                    "content": f"For additional context, the detailed outcomes of the previous {len(latest_responses)} tasks are as follows:\n\n{responses_content}",
+                }
+            )
+
         appending_msgs.append(
             {
                 "role": "developer",
@@ -494,6 +511,15 @@ async def execute_synthesis(task_data: dict):
                 f"**Task Status**: {task_status}\n\n"
                 f"**Worker Responses**:\n\n{task_message_combined}",
             )
+
+            # Append to worker message history for future worker context
+            task_response = TaskResponseModel(
+                task_id=worker_id,
+                task_description=task_description,
+                task_status=task_status,
+                assistance_responses=task_message_combined,
+            )
+            append_to_worker_message_history(planner_id, task_response)
 
             # 2. Update execution plan with retry logic (simplified from original)
             try:

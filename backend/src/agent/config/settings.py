@@ -58,6 +58,9 @@ class AgentSettings(BaseSettings):
     current_task_filename: str = Field(
         default="current_task.json", description="Filename for current task in planner directory"
     )
+    worker_message_history_filename: str = Field(
+        default="worker_message_history.json", description="Filename for worker message history in planner directory"
+    )
 
     # Environment
     environment: str = Field(default="development", description="Current environment")

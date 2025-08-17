@@ -34,6 +34,7 @@ from .tasks import (
     TodoItem,
     ExecutionPlanModel,
     InitialExecutionPlan,
+    TaskResponseModel,
 )
 
 from .responses import (

@@ -219,3 +219,17 @@ class ExecutionPlanModel(BaseModel):
 class InitialExecutionPlan(BaseModel):
     objective: str = Field(description="Overall goal description")
     todos: list[str] = Field(description="Simple list of task descriptions")
+
+
+class TaskResponseModel(BaseModel):
+    """Model for storing completed worker task information in message history"""
+    task_id: str = Field(description="The ID of the completed task")
+    task_description: str = Field(
+        description="Description of the task that was executed"
+    )
+    task_status: str = Field(
+        description="Status of the task (completed, failed validation, etc.)"
+    )
+    assistance_responses: str = Field(
+        description="The assistant responses from the worker during task execution"
+    )

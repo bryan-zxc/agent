@@ -45,25 +45,27 @@ Creates execution plan from user request and queues task creation.
 - Automatic progression to task creation phase
 
 #### `execute_task_creation(task_data: Dict[str, Any])`
-Breaks down execution plan into individual worker tasks.
+Breaks down execution plan into individual worker tasks with historical context.
 
 **Parameters:**
 - `task_data`: Contains planner context and execution plan
 
 **Process:**
 1. Loads execution plan model from filesystem
-2. Analyses plan and generates individual worker tasks
-3. Creates worker records in database for each task
-4. Queues `worker_initialisation` for each worker
-5. Queues `execute_synthesis` when all workers are created
+2. Loads worker message history for context (last 10 completed tasks)
+3. Analyses plan and generates individual worker tasks with historical context
+4. Creates worker records in database for each task
+5. Queues `worker_initialisation` for each worker
+6. Queues `execute_synthesis` when all workers are created
 
 **Key Features:**
 - Dynamic task generation based on plan complexity
+- Worker context from previous task completions
 - Worker task distribution and queuing
 - Parallel worker initialisation
 
 #### `execute_synthesis(task_data: Dict[str, Any])`
-Processes worker results and generates final user response.
+Processes worker results, appends to message history, and generates final user response.
 
 **Parameters:**
 - `task_data`: Contains planner context and worker results
@@ -71,13 +73,15 @@ Processes worker results and generates final user response.
 **Process:**
 1. Checks if all workers have completed successfully
 2. Collects worker results and execution context
-3. Generates final user response using LLM synthesis
-4. Updates planner status to completed
-5. Triggers cleanup of planner files
-6. Notifies router of completion for WebSocket delivery
+3. Appends completed worker responses to message history for future context
+4. Generates final user response using LLM synthesis
+5. Updates planner status to completed
+6. Triggers cleanup of planner files
+7. Notifies router of completion for WebSocket delivery
 
 **Key Features:**
 - Worker result aggregation
+- Worker message history persistence for future tasks
 - Final response generation
 - Automatic file cleanup
 - Router notification for real-time delivery
@@ -174,6 +178,32 @@ file_path, final_name = save_planner_image(
 chart_data = get_planner_image("abc123", "sales_chart_2024")
 ```
 
+### Worker Message History Functions
+
+#### `save_worker_message_history(planner_id, task_responses) -> bool`
+Save complete list of worker task responses to JSON file.
+
+#### `load_worker_message_history(planner_id) -> List[TaskResponseModel]`
+Load all worker task responses from JSON file, returns empty list if file doesn't exist.
+
+#### `append_to_worker_message_history(planner_id, task_response) -> bool`
+Append single task response to existing history, automatically loads and saves complete file.
+
+```python
+# Example usage in planner synthesis
+from agent.models import TaskResponseModel
+from agent.tasks.file_manager import append_to_worker_message_history
+
+task_response = TaskResponseModel(
+    task_id="worker_123",
+    task_description="Generate sales report with charts", 
+    task_status="completed",
+    assistance_responses="Created 3 charts showing revenue trends..."
+)
+
+success = append_to_worker_message_history("planner_456", task_response)
+```
+
 ### Collision Avoidance System
 
 The system automatically handles naming conflicts using hex suffixes:
@@ -183,6 +213,31 @@ The system automatically handles naming conflicts using hex suffixes:
 - **Second collision**: `analysis_results_b72.pkl`
 
 This ensures data integrity whilst maintaining predictable naming patterns.
+
+### Worker Message History
+
+The system maintains a persistent history of completed worker tasks to provide context for future workers:
+
+```python
+# Save worker message history (automatic during synthesis)
+task_response = TaskResponseModel(
+    task_id=worker_id,
+    task_description="Analyse sales data trends",
+    task_status="completed", 
+    assistance_responses="Worker generated detailed analysis..."
+)
+append_to_worker_message_history(planner_id, task_response)
+
+# Load history for context (automatic during task creation)
+task_responses = load_worker_message_history(planner_id)
+latest_responses = task_responses[-10:]  # Last 10 workers
+```
+
+**Storage Format:**
+- **File**: `worker_message_history.json` in planner directory
+- **Structure**: Array of TaskResponseModel objects
+- **Retention**: Last 10 completed tasks (configurable)
+- **Context**: Provided to future workers during task creation
 
 ### File Cleanup
 

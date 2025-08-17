@@ -7,12 +7,13 @@ from the filesystem using file paths stored in the database with lazy loading.
 
 import pickle
 import secrets
+import json
 from pathlib import Path
 from typing import Dict, Any, Optional
 import logging
 from ..config.settings import settings
 from ..models.agent_database import AgentDatabase
-from ..models import ExecutionPlanModel, Task
+from ..models import ExecutionPlanModel, Task, TaskResponseModel
 
 logger = logging.getLogger(__name__)
 
@@ -463,3 +464,63 @@ def load_current_task(planner_id: str) -> Optional[Task]:
     except Exception as e:
         logger.error(f"Failed to load current task for planner {planner_id}: {e}")
         return None
+
+
+def save_worker_message_history(planner_id: str, task_responses: list[TaskResponseModel]) -> bool:
+    """Save worker message history to dedicated JSON file"""
+    try:
+        planner_dir = get_planner_path(planner_id)
+        planner_dir.mkdir(parents=True, exist_ok=True)
+        
+        file_path = planner_dir / settings.worker_message_history_filename
+        
+        # Convert list of TaskResponseModel to JSON-serialisable format
+        json_data = [task_response.model_dump() for task_response in task_responses]
+        
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(json_data, f, indent=2, ensure_ascii=False)
+        
+        logger.info(f"Saved worker message history to {file_path}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to save worker message history for planner {planner_id}: {e}")
+        return False
+
+
+def load_worker_message_history(planner_id: str) -> list[TaskResponseModel]:
+    """Load worker message history from dedicated JSON file"""
+    try:
+        planner_dir = get_planner_path(planner_id)
+        file_path = planner_dir / settings.worker_message_history_filename
+        
+        if not file_path.exists():
+            logger.debug(f"Worker message history file not found: {file_path}, returning empty list")
+            return []
+        
+        with open(file_path, 'r', encoding='utf-8') as f:
+            json_data = json.load(f)
+        
+        # Convert JSON data to list of TaskResponseModel
+        task_responses = [TaskResponseModel.model_validate(item) for item in json_data]
+        
+        logger.debug(f"Loaded {len(task_responses)} task responses from {file_path}")
+        return task_responses
+    except Exception as e:
+        logger.error(f"Failed to load worker message history for planner {planner_id}: {e}")
+        return []
+
+
+def append_to_worker_message_history(planner_id: str, task_response: TaskResponseModel) -> bool:
+    """Append a single task response to the worker message history"""
+    try:
+        # Load existing history
+        existing_history = load_worker_message_history(planner_id)
+        
+        # Append new response
+        existing_history.append(task_response)
+        
+        # Save updated history
+        return save_worker_message_history(planner_id, existing_history)
+    except Exception as e:
+        logger.error(f"Failed to append to worker message history for planner {planner_id}: {e}")
+        return False
