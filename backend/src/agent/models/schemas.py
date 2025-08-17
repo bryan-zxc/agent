@@ -146,10 +146,13 @@ class ImageDescriptions(BaseModel):
     descriptions: list[ImageDescription]
 
 
-class SinglevsMultiRequest(BaseModel):
-    request_type: Literal["single", "multiple"] = Field(
-        description="If the user is looking for a single response to be compiled after reviewing all files, use 'single'. "
-        "If the user wants one answer per file when there are multiple files, use 'multiple'."
+class FileGrouping(BaseModel):
+    file_groups: list[list[str]] = Field(
+        description="List of file groups. Each group is a list of file paths that should be processed together. "
+        "By default, in case of doubt, there should only be one group with all the files in it. "
+        "For example, files A, B, C and D should be grouped as [[A, B, C, D]]. "
+        "However, if the user request is looking for multiple responses, one per file, the groupings should look like [[A], [B], [C], [D]]. "
+        "If the user's request (for example) specifically asks for a file A to be referenced in actioning each of the other files B, C and D, the groups would be [[A, B], [A, C], [A, D]]. "
     )
 
 

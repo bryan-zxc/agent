@@ -34,7 +34,7 @@ from .models import (
     # Data models
     TableMeta,
     ColumnMeta,
-    SinglevsMultiRequest,
+    FileGrouping,
 )
 from .config.settings import settings, AgentSettings
 from .utils.tools import (
@@ -70,7 +70,7 @@ __all__ = [
     "ImageContent",
     "TableMeta",
     "ColumnMeta",
-    "SinglevsMultiRequest",
+    "FileGrouping",
     
     # Configuration
     "settings",

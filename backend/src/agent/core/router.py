@@ -10,7 +10,7 @@ import duckdb
 from ..config.settings import settings
 from ..models import File, DocumentContext
 from ..models.responses import RequireAgent
-from ..models.schemas import SinglevsMultiRequest
+from ..models.schemas import FileGrouping
 from ..models.agent_database import AgentDatabase, AgentType, Router
 from ..services.image_service import process_image_file, is_image
 from ..services.llm_service import LLM
@@ -470,35 +470,27 @@ class RouterAgent:
         )
         if files:
             logger.info(f"DEBUG: Files found - processing files: {files}")
-            # Determine question type
-            question_type = await self.determine_question_type(user_question, files)
-            logger.info(f"DEBUG: Question type determined: {question_type}")
+            # Determine file groups
+            file_groups = await self.determine_file_groups(user_question, files)
+            logger.info(f"DEBUG: File groups determined: {file_groups}")
 
-            if question_type == "multiple":
-                logger.info(f"DEBUG: Processing multiple files sequentially")
+            # Process each file group sequentially
+            for i, file_group in enumerate(file_groups, 1):
+                if len(file_groups) > 1:
+                    await self.send_status(f"Processing file group {i}/{len(file_groups)}: {', '.join(file_group)}")
+                else:
+                    logger.info(f"DEBUG: Processing single file group with files: {file_group}")
 
-                # Process each file sequentially - each runs as separate planner in background
-                for i, file in enumerate(files, 1):
-                    await self.send_status(f"Processing file {i}/{len(files)}: {file}")
-
-                    # Start background task for this file - no return value, runs asynchronously
-                    await self._invoke_single(
-                        [file], user_question, instructions, agent_requirements
-                    )
-                    logger.info(
-                        f"DEBUG: File {i} planner queued for background processing"
-                    )
-
-                # All files processed sequentially - no return value needed
-                logger.info(f"Queued sequential processing of all {len(files)} files.")
-            else:
-                logger.info(
-                    f"DEBUG: Processing all files together - calling _invoke_single with files: {files}"
-                )
-                # Process all files together
+                # Start background task for this file group - no return value, runs asynchronously
                 await self._invoke_single(
-                    files, user_question, instructions, agent_requirements
+                    file_group, user_question, instructions, agent_requirements
                 )
+                logger.info(
+                    f"DEBUG: File group {i} planner queued for background processing"
+                )
+
+            # All file groups processed sequentially - no return value needed
+            logger.info(f"Queued sequential processing of all {len(file_groups)} file groups.")
 
         else:
             logger.info(f"DEBUG: No files - using _invoke_single with empty files list")
@@ -648,27 +640,34 @@ class RouterAgent:
         )
         return processed_files, errors, instructions
 
-    async def determine_question_type(self, user_question: str, files: list) -> str:
-        """Determine if user wants single response or multiple responses for files"""
-        if len(files) == 1:
-            return "single"
+    async def determine_file_groups(self, user_question: str, files: list) -> list[list[str]]:
+        """Determine how files should be grouped for processing"""
+        if not files:
+            return []
+        elif len(files) == 1:
+            return [files]  # Single group with all files
         else:
-            response = await self.llm.a_get_response(
+            # Use LLM to determine file groupings
+            file_grouping_response = await self.llm.a_get_response(
                 messages=[
                     {
                         "role": "user",
-                        "content": f"{user_question}\n\nFiles: {','.join(files)}",
+                        "content": f"User question/request:\n\n{user_question}\n\nFiles: {', '.join(files)}",
                     },
                     {
                         "role": "developer",
-                        "content": "Is the user looking for a single response or multiple responses - one for each file?",
+                        "content": "Restructure the files to a list of groups of files that need to be processed one by one. "
+                        "By default, in case of doubt, there should only be one group with all the files in it. "
+                        "If the user's question indicates that they want to process files independently from each other, looking for one response per file (as opposed to a single response using all files), "
+                        "then by default, each group should contain only one file unless there is evidence to suggest otherwise. "
+                        "In the case where the user specifically instructs to repeatedly use a particular file (for example) when processing other files one by one, the groups should reflect that and have the file repeat across groups.",
                     },
                 ],
                 model=self.model,
                 temperature=0.0,
-                response_format=SinglevsMultiRequest,
+                response_format=FileGrouping,
             )
-            return response.request_type
+            return file_grouping_response.file_groups
 
     async def _invoke_single(
         self,

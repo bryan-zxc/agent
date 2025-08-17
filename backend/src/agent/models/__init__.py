@@ -18,7 +18,7 @@ from .schemas import (
     TableMeta,
     ImageDescription,
     ImageDescriptions,
-    SinglevsMultiRequest,
+    FileGrouping,
     Variable,
 )
 
@@ -63,7 +63,7 @@ __all__ = [
     "TableMeta",
     "ImageDescription",
     "ImageDescriptions",
-    "SinglevsMultiRequest",
+    "FileGrouping",
     "Variable",
     # Tasks
     "TOOLS",
