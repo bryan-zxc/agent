@@ -992,3 +992,16 @@ class AgentDatabase:
                     'status': task.status
                 }
             return None
+    
+    def clear_task_queue(self) -> int:
+        """Clear all tasks from the task queue on startup and return count of cleared tasks"""
+        with self.SessionLocal() as session:
+            # Get count of tasks to be cleared for logging
+            task_count = session.query(TaskQueue).count()
+            
+            # Delete all tasks in the queue
+            session.query(TaskQueue).delete()
+            session.commit()
+            
+            logger.info(f"Cleared {task_count} tasks from task queue on startup")
+            return task_count

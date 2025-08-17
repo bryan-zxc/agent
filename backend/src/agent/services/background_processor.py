@@ -9,6 +9,7 @@ import asyncio
 import logging
 from typing import Dict, Any, Callable
 from ..models.agent_database import AgentDatabase
+from ..utils.async_error_utils import log_taskgroup_errors, TaskGroupWithLogging, AsyncErrorLogger
 
 logger = logging.getLogger(__name__)
 
@@ -96,16 +97,18 @@ class BackgroundTaskProcessor:
                 if pending_tasks:
                     logger.debug(f"Found {len(pending_tasks)} pending task(s)")
                     
-                    # Execute all tasks concurrently using TaskGroup
-                    async with asyncio.TaskGroup() as tg:
+                    # Execute all tasks concurrently using enhanced TaskGroup with logging
+                    async with TaskGroupWithLogging("background_task_processor") as tg:
                         for task_data in pending_tasks:
-                            tg.create_task(self.execute_task(task_data))
+                            task_name = f"task_{task_data['task_id']}_{task_data['function_name']}"
+                            tg.create_task(self.execute_task(task_data), name=task_name)
                 
                 # Sleep for 1 second before next scan
                 await asyncio.sleep(1)
                 
             except Exception as e:
-                logger.error(f"Error in process loop: {e}")
+                # Log detailed error information using enhanced logging
+                log_taskgroup_errors(e, "background_processor.process_loop")
                 # Continue processing after brief delay
                 await asyncio.sleep(5)
     
@@ -140,10 +143,14 @@ class BackgroundTaskProcessor:
             logger.info(f"Task {task_id} completed successfully")
             
         except Exception as e:
-            # Mark task as failed
+            # Log detailed error information for task failure
+            error_logger = AsyncErrorLogger(f"execute_task_{function_name}")
+            error_logger.log_detailed_exception(e, f"Task {task_id} execution")
+            
+            # Mark task as failed with detailed error message
             error_message = f"{type(e).__name__}: {str(e)}"
             self.db.update_task_status(task_id, "FAILED", error_message)
-            logger.error(f"Task {task_id} failed: {error_message}")
+            logger.error(f"Task {task_id} ({function_name}) failed and marked as FAILED in database")
             
             # TODO: Implement retry logic based on retry_count and max_retries
             # For now, just log the failure

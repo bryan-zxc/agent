@@ -1,6 +1,38 @@
 # Models Module
 
-Pydantic data models and schemas that define the structure of data throughout the agent system, including database models for router persistence.
+Pydantic data models and schemas that define the structure of data throughout the function-based agent system, including database models with JSON columns for file path storage and task queue management.
+
+## Organisation Guidelines
+
+The models module follows strict organisation patterns to ensure maintainability and prevent cyclic import issues:
+
+### Module Structure
+
+```
+models/
+├── agent_database.py    # SQLite database models and service
+├── responses.py         # API response and validation models  
+├── schemas.py          # Core data schemas (files, images, documents)
+├── tasks.py            # Task definition and execution models
+├── __init__.py         # Organised exports
+└── README.md           # This documentation
+```
+
+### Import Organisation Rules
+
+1. **Centralised Exports**: All external imports go through `models/__init__.py`
+2. **Prevent Cyclic Imports**: Database models import from other model files, not vice versa
+3. **Layered Dependencies**: `agent_database.py` → `schemas.py` → `tasks.py` → `responses.py`
+4. **External Access**: Other modules import via `from agent.models import ModelName`
+
+### File Path Storage Strategy
+
+Database models use JSON columns for efficient file path storage:
+
+- **Planner Table**: `variable_file_paths` and `image_file_paths` JSON columns
+- **Worker Table**: Separate input/output file path columns for better organisation
+- **Lazy Loading**: File paths stored in database, actual files loaded on demand
+- **Collision Avoidance**: Hex suffix system prevents file naming conflicts
 
 ## Modules
 
@@ -61,7 +93,7 @@ Database models and service for agent message persistence and state management.
   - `updated_at`: Last update timestamp
 
 **`Planner`**
-- Agent state for PlannerAgent instances
+- State management for function-based planner execution
 - **Fields:**
   - `planner_id`: UUID hex string (primary key)
   - `planner_name`: Human readable planner name (optional)
@@ -72,18 +104,23 @@ Database models and service for agent message persistence and state management.
   - `temperature`: LLM temperature setting
   - `failed_task_limit`: Max failed tasks allowed
   - `status`: Planner status (planning, executing, completed, failed)
+  - `user_response`: Final response generated when completed
+  - `next_task`: Next function name to execute (for resumability)
+  - `variable_file_paths`: JSON column storing {key: file_path} mappings
+  - `image_file_paths`: JSON column storing {key: file_path} mappings
   - `agent_metadata`: JSON metadata for future extensibility
   - `schema_version`: Schema evolution tracking
   - `created_at`: Planner creation timestamp
   - `updated_at`: Last update timestamp
 
 **`Worker`**
-- Agent state for WorkerAgent instances (task records)
+- State management for function-based worker execution (task records)
 - **Fields:**
   - `worker_id`: UUID hex string (primary key, same as task_id)
   - `worker_name`: Human readable worker name (optional)
   - `planner_id`: Foreign key to Planner table
   - `task_status`: Task status (pending, in_progress, completed, failed_validation, recorded)
+  - `next_task`: Next async function to execute
   - `task_description`: Detailed task description
   - `acceptance_criteria`: JSON list of success criteria
   - `task_context`: JSON TaskContext pydantic model
@@ -92,15 +129,32 @@ Database models and service for agent message persistence and state management.
   - `image_keys`: JSON list of relevant image identifiers
   - `variable_keys`: JSON list of relevant variable identifiers
   - `tools`: JSON list of required tools
-  - `input_images`: JSON input image data
-  - `input_variables`: JSON input variables
-  - `output_images`: JSON output image data
-  - `output_variables`: JSON output variables
+  - `input_variable_filepaths`: JSON column for input variables {key: file_path}
+  - `input_image_filepaths`: JSON column for input images {key: file_path}
+  - `output_variable_filepaths`: JSON column for output variables {key: file_path}
+  - `output_image_filepaths`: JSON column for output images {key: file_path}
+  - `current_attempt`: Current retry attempt number
   - `tables`: JSON TableMeta objects
+  - `filepaths`: JSON list of PDF file paths available for use
   - `agent_metadata`: JSON metadata for future extensibility
   - `schema_version`: Schema evolution tracking
   - `created_at`: Worker/task creation timestamp
   - `updated_at`: Last update timestamp
+
+**`TaskQueue`** *(New for Function-Based Architecture)*
+- Manages async task execution queue for background processor
+- **Fields:**
+  - `task_id`: UUID hex string (primary key)
+  - `entity_type`: Entity type ('planner' or 'worker')
+  - `entity_id`: Links to planners/workers table
+  - `function_name`: Function to execute (must be in background processor registry)
+  - `payload`: JSON function parameters
+  - `status`: Task status ('PENDING', 'IN_PROGRESS', 'COMPLETED', 'FAILED')
+  - `error_message`: Error details if failed
+  - `retry_count`: Number of retry attempts
+  - `max_retries`: Maximum retry attempts allowed
+  - `created_at`: Task queue timestamp
+  - `updated_at`: Last status update timestamp
 
 **`RouterPlannerLink`**
 - Links between routers and planners for relationship tracking

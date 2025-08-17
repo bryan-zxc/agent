@@ -30,16 +30,12 @@ interface ChatStore {
   setCurrentConversation: (routerId: string) => void;
   setConversations: (conversations: Conversation[]) => void;
   createNewConversation: () => Promise<string>;
-  createNewConversationInBackend: () => Promise<string>;
   loadConversation: (routerId: string, messages: ChatMessage[]) => void;
   lockConversation: (routerId: string) => void;
   unlockConversation: (routerId: string) => void;
   isConversationLocked: (routerId: string) => boolean;
 }
 
-const generateRouterId = () => {
-  return Date.now().toString(36) + Math.random().toString(36).substr(2);
-};
 
 export const useChatStore = create<ChatStore>((set, get) => ({
   messages: [],
@@ -48,7 +44,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   isConnecting: true, // Start as connecting to avoid showing offline immediately
   currentModel: 'gpt-4',
   temperature: 0.7,
-  currentRouterId: generateRouterId(),
+  currentRouterId: '', // Start with empty router_id - backend will provide one
   conversations: [],
   lockedConversations: new Set(),
   
@@ -82,52 +78,14 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     set({ conversations }),
     
   createNewConversation: async () => {
-    // Generate client-side ID only, don't create in backend yet
-    const newId = generateRouterId();
+    // Clear current conversation - backend will provide router_id when first message is sent
     set({ 
-      currentRouterId: newId,
+      currentRouterId: '',
       messages: []
     });
-    return newId;
+    return ''; // Backend will provide the actual router_id
   },
   
-  createNewConversationInBackend: async () => {
-    const currentState = useChatStore.getState();
-    try {
-      // Call backend to create conversation
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/routers`, {
-        method: 'POST',
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        const newId = data.router_id;
-        console.log('Creating new conversation in backend - old ID:', currentState.currentRouterId, '-> new ID:', newId);
-        set({ 
-          currentRouterId: newId,
-          messages: []
-        });
-        return newId;
-      } else {
-        // Fallback to client-side generation
-        const newId = generateRouterId();
-        set({ 
-          currentRouterId: newId,
-          messages: []
-        });
-        return newId;
-      }
-    } catch (error) {
-      console.error('Error creating conversation:', error);
-      // Fallback to client-side generation
-      const newId = generateRouterId();
-      set({ 
-        currentRouterId: newId,
-        messages: [] 
-      });
-      return newId;
-    }
-  },
   
   loadConversation: (routerId, messages) =>
     set({ 

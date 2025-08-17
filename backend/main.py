@@ -23,6 +23,8 @@ from pydantic import BaseModel
 from src.agent.core.router import RouterAgent
 from src.agent.models.agent_database import AgentDatabase
 from src.agent.utils.file_utils import calculate_file_hash, generate_unique_filename, sanitise_filename
+from src.agent.services.background_processor import start_background_processor
+from src.agent.utils.async_error_utils import AsyncErrorLogger
 
 # Load environment variables
 # Load .env first (shared config), then .env.local (secrets) to override
@@ -50,6 +52,20 @@ user_connections = {}  # websocket -> user_session
 
 # Initialize database
 db = AgentDatabase()
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize background processor on FastAPI startup"""
+    logger.info("Starting background processor...")
+    
+    # Clear task queue on startup to prevent stale tasks from previous runs
+    logger.info("Clearing task queue...")
+    cleared_count = db.clear_task_queue()
+    logger.info(f"Cleared {cleared_count} tasks from task queue")
+    
+    await start_background_processor()
+    logger.info("Background processor started successfully")
 
 
 # Pydantic models for API
@@ -141,47 +157,65 @@ async def handle_websocket_message(websocket: WebSocket, data: dict):
         elif message_type == "message":
             # Regular chat message
             router_id = data.get("router_id")
-            if not router_id:
-                await websocket.send_json(
-                    {"type": "error", "message": "router_id is required"}
-                )
-                return
-
+            is_new_conversation = not router_id
+            
             # Get or create router for this router session
-            if router_id not in active_connections:
-                logger.info(f"Creating new router for router {router_id}")
-                router = RouterAgent(router_id=router_id)
-                await router.connect_websocket(websocket)
-                active_connections[router_id] = router
-                
-                # Log active connection mapping
-                logger.info(f"Stored router {router_id} with WebSocket ID {id(websocket)} in active_connections")
-                
-                # For new routers, use activate_conversation
-                user_message = data.get("message", "")
-                files = data.get("files", [])
-                await router.activate_conversation(user_message, files)
-            else:
+            if router_id and router_id in active_connections:
+                # Existing conversation - update WebSocket and handle message
                 logger.info(f"Using existing router for router {router_id}")
                 router = active_connections[router_id]
                 
                 # Log WebSocket connection update
                 old_websocket_id = id(router.websocket) if router.websocket else "None"
                 new_websocket_id = id(websocket)
-                
                 logger.info(f"Updating WebSocket for router {router_id}: {old_websocket_id} -> {new_websocket_id}")
                 
                 # Update websocket connection for existing router
                 router.websocket = websocket
-
-                # Update current router for this session
                 user_connections[websocket]["current_router"] = router_id
-
+                
                 # Handle the message for existing routers
                 await router.handle_message(data)
+            else:
+                # New conversation or router not in active connections
+                if is_new_conversation:
+                    # Brand new conversation - create RouterAgent without router_id
+                    logger.info(f"Creating new router for new conversation")
+                    router = RouterAgent()  # Let RouterAgent generate its own ID
+                    router_id = router.id   # Get the generated ID
+                    logger.info(f"Generated new router_id: {router_id}")
+                    
+                    await router.connect_websocket(websocket)
+                    active_connections[router_id] = router
+                    user_connections[websocket]["current_router"] = router_id
+                    
+                    # Log active connection mapping
+                    logger.info(f"Stored router {router_id} with WebSocket ID {id(websocket)} in active_connections")
+                    
+                    # For truly new conversations, use activate_conversation
+                    user_message = data.get("message", "")
+                    files = data.get("files", [])
+                    await router.activate_conversation(user_message, files)
+                else:
+                    # Existing conversation but router not in active connections - load from DB
+                    logger.info(f"Creating router for existing conversation {router_id}")
+                    router = RouterAgent(router_id=router_id)
+                    
+                    await router.connect_websocket(websocket)
+                    active_connections[router_id] = router
+                    user_connections[websocket]["current_router"] = router_id
+                    
+                    # Log active connection mapping
+                    logger.info(f"Stored router {router_id} with WebSocket ID {id(websocket)} in active_connections")
+                    
+                    # For existing conversations, handle message normally
+                    await router.handle_message(data)
 
     except Exception as e:
-        logger.error(f"Error handling WebSocket message: {str(e)}")
+        # Log detailed error information for WebSocket message handling
+        error_logger = AsyncErrorLogger("websocket_message_handler")
+        error_logger.log_detailed_exception(e, "WebSocket message processing")
+        
         await websocket.send_json(
             {"type": "error", "message": f"Error processing message: {str(e)}"}
         )
@@ -423,17 +457,6 @@ async def get_router(router_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/routers")
-async def create_router():
-    """Create a new router"""
-    try:
-        import uuid
-
-        router_id = uuid.uuid4().hex
-        return {"router_id": router_id}
-    except Exception as e:
-        logger.error(f"Error creating router: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/routers/{router_id}/activate")

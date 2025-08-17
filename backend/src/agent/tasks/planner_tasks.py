@@ -15,7 +15,6 @@ from PIL import Image
 from datetime import datetime
 from ..models.agent_database import AgentDatabase
 from ..models import (
-    File,
     InitialExecutionPlan,
     TableMeta,
     ColumnMeta,
@@ -23,7 +22,7 @@ from ..models import (
     Task,
     ExecutionPlanModel,
 )
-from ..services.llm_service import LLMService
+from ..services.llm_service import LLM
 from ..config.settings import settings
 from ..config.agent_names import get_random_planner_name
 from ..utils.execution_plan_converter import (
@@ -39,15 +38,15 @@ from .file_manager import (
     save_execution_plan_model,
     load_execution_plan_model,
     save_current_task,
-    load_current_task,
-    get_planner_variables,
-    get_planner_images,
     load_variable_from_file,
     load_image_from_file,
+    cleanup_planner_files,
 )
 from .task_utils import update_planner_next_task_and_queue, queue_worker_task
 
 logger = logging.getLogger(__name__)
+
+llm = LLM(caller="planner")
 
 
 def clean_table_name(input_string: str):
@@ -279,9 +278,6 @@ async def execute_initial_planning(task_data: dict):
         # Get messages for LLM call
         messages = db.get_messages_by_agent_id(planner_id, "planner")
 
-        # Create LLM service instance
-        llm = LLMService()
-
         # Get initial execution plan from LLM
         initial_plan = await llm.a_get_response(
             messages=messages + [{"role": "user", "content": plan_prompt}],
@@ -408,7 +404,6 @@ async def execute_task_creation(task_data: dict):
         )
 
         # Generate task from LLM
-        llm = LLMService()
         task = await llm.a_get_response(
             messages=messages + appending_msgs,
             model=planner_data["model"],
@@ -550,7 +545,6 @@ async def execute_synthesis(task_data: dict):
                 ]
 
                 # Get LLM response
-                llm = LLMService()
                 llm_updated_model = await llm.a_get_response(
                     messages=update_messages,
                     model=planner_data["model"],
@@ -566,7 +560,12 @@ async def execute_synthesis(task_data: dict):
                         final_todos.append(todo)
 
                 # Add updated open todos from LLM
-                final_todos.extend(llm_updated_model.todos)
+                for todo in llm_updated_model.todos:
+                    if todo.updated_description.strip():
+                        # Update description if provided
+                        todo.description = todo.updated_description.strip()
+                        todo.updated_description = ""
+                    final_todos.append(todo)
 
                 final_model = ExecutionPlanModel(
                     objective=execution_plan_model.objective, todos=final_todos
@@ -592,8 +591,10 @@ async def execute_synthesis(task_data: dict):
                     )
 
                     # Generate final user response (like original PlannerAgent completion)
-                    planner_messages = db.get_messages_by_agent_id(planner_id, "planner")
-                    
+                    planner_messages = db.get_messages_by_agent_id(
+                        planner_id, "planner"
+                    )
+
                     # Filter to get messages after initial system message (context_message_len equivalent)
                     user_response_messages = planner_messages[1:] + [
                         {
@@ -601,36 +602,50 @@ async def execute_synthesis(task_data: dict):
                             "content": "Using the above information only without creating any information, "
                             "either copy or create the response/answer to the user's original question/request and format the result in markdown.\n\n"
                             "Return only the markdown answer and nothing else, do not use the user's question as a title. Do not wrap the response in ```markdown ... ``` block. "
-                            "Aggressively use inline citations where possible. "
-                            "Remember the user will only see the next response with zero visibility over the message history, so make sure the finalised response is repeated in full here."
+                            "Aggressively use inline citations such that the citing references (if provided) are used individually whenever possible as opposed to making multiple citations at the end. "
+                            "Remember the user will only see the next response with zero visibility over the message history, so make sure the finalised response is repeated in full here.",
                         }
                     ]
-                    
+
                     # Generate final response using LLM
-                    llm = LLMService()
                     response = await llm.a_get_response(
                         messages=user_response_messages,
                         model=planner_data["model"],
-                        temperature=planner_data["temperature"]
+                        temperature=planner_data["temperature"],
                     )
                     user_response = response.content.strip()
                     logger.info(f"User response generated in planner: {user_response}")
 
                     # Save final execution plan and mark planner as completed with user response
                     save_execution_plan_model(planner_id, final_model)
-                    execution_plan_markdown = execution_plan_model_to_markdown(final_model)
+                    execution_plan_markdown = execution_plan_model_to_markdown(
+                        final_model
+                    )
                     db.update_planner(
                         planner_id,
                         execution_plan=execution_plan_markdown,
                         status="completed",
                         next_task="completed",
-                        user_response=user_response  # Store final response
+                        user_response=user_response,  # Store final response
                     )
 
                     # Mark worker as recorded and skip variable processing - no future tasks need them
                     db.update_worker_status(worker_id, "recorded")
-                    logger.info(f"Planner {planner_id} completed with user response generated")
-                    
+                    logger.info(
+                        f"Planner {planner_id} completed with user response generated"
+                    )
+
+                    # Clean up planner files since planning is complete
+                    cleanup_success = cleanup_planner_files(planner_id)
+                    if cleanup_success:
+                        logger.info(
+                            f"Successfully cleaned up files for completed planner {planner_id}"
+                        )
+                    else:
+                        logger.warning(
+                            f"Failed to clean up files for completed planner {planner_id}"
+                        )
+
                     return  # Exit synthesis completely
 
                 # Save updated execution plan (only if not completed)

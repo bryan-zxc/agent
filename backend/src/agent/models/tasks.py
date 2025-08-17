@@ -62,8 +62,6 @@ class Task(BaseModel):
     )
 
 
-
-
 class PlanValidation(BaseModel):
     is_context_sufficient: bool = Field(
         description="Is the provided context sufficient to allow all acceptance criteria to be verified? If not, set this to False."
@@ -126,13 +124,16 @@ class TaskArtefact(BaseModel):
         description="Executable and error free python code that needs to be executed to perform the task. "
         "You must use functions provided where possible, do not ever create code to perform a similar purpose to an existing function. "
         "If provided with a useable function for the task, this python_code field must be populated to use the supplied function accordingly even if the outcome can be achieved without code. "
-        "The output of the code that addresses the task must be stored in a variable. If the output is an image, then save the output as PIL.Image object. "
+        "You must use `print` to print out every relevant output from the code, unless the output is an image, in which case, simply save the output as PIL.Image object. "
         "The name of the outputs must provide a context of the task being executed, to avoid naming conflicts from similar outputs in other tasks. "
         "Leave the field empty if no code is required.\n"
         "If the previous outcome failed validation, do not simply repeat the previous code, but make adjustments based on the reason of the previous failure."
     )
     output_variables: list[Variable] = Field(
-        description="The output variable name(s) (if there is more than one output), from the code."
+        description="The output variable name(s) (if there is more than one output), from the code. "
+        "Note, once a variable is printed, it doesn't need to be considered an output variable. "
+        "The only required output is when you expect future tasks to need to directly access the output as a variable as opposed to the print. "
+        "For example, images can't be printed."
     )
     is_malicious: bool = Field(description=guardrail_prompt)
 
@@ -150,7 +151,8 @@ class TaskArtefactSQL(BaseModel):
     sql_code: str = Field(
         description="Executable and error free DuckDB compliant SQL query to access information that can address the task. "
         "Do not ever make up table names, column names, or values in columns. "
-        "If the context did not provide sufficient information to create the correct query, leave this field blank."
+        "If the context did not provide sufficient information to create the correct query, leave this field blank. "
+        "If suspecting that the query will return many rows of data (for reference, more than 50 rows), then try to apply aggregation techniques that can help the question at hand rather than brute force printing all data. "
     )
     reason_code_not_created: str = Field(
         description="If SQL code cannot be generated, explain why that is the case."

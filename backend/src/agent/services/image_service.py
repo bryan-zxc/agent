@@ -1,6 +1,6 @@
 from pathlib import Path
 from PIL import Image
-from ..utils.tools import encode_image, get_img_breakdown
+from ..utils.image_utils import encode_image, get_img_breakdown
 
 
 def is_image(file_path: str) -> tuple[bool, str]:

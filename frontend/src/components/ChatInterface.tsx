@@ -16,7 +16,7 @@ import { SidebarProvider, SidebarInset } from './ui/sidebar';
 import { fileUploadService, DuplicateFileInfo } from '../lib/fileUpload';
 
 export const ChatInterface: React.FC = () => {
-  const { messages, status, currentRouterId, createNewConversationInBackend, createNewConversation, setCurrentConversation, isConversationLocked } = useChatStore();
+  const { messages, status, currentRouterId, createNewConversation, setCurrentConversation, isConversationLocked } = useChatStore();
   console.log('ChatInterface render - currentRouterId:', currentRouterId);
   const [conversationStarted, setConversationStarted] = useState(false);
   const [, setPendingRouterId] = useState<string | null>(null);
@@ -92,13 +92,7 @@ export const ChatInterface: React.FC = () => {
     if (!message.trim()) return;
 
     try {
-      console.log('Creating new conversation in backend...');
-      // Create new conversation in backend first
-      const newRouterId = await createNewConversationInBackend();
-      console.log('New router created:', newRouterId);
-      
-      setPendingRouterId(newRouterId);
-      setCurrentConversation(newRouterId);
+      console.log('Starting new conversation...');
       setConversationStarted(true);
       
       // Upload files using the optimised method that handles resolved duplicates
@@ -118,18 +112,9 @@ export const ChatInterface: React.FC = () => {
       await waitForWebSocketConnection();
       console.log('WebSocket connection ready!');
 
-      // Send first message via WebSocket instead of REST API
+      // Send first message via WebSocket with no router_id - backend will create router
       console.log('Sending first message via WebSocket...');
-      sendMessage(message, filePaths, newRouterId);
-      
-      // Trigger title update asynchronously (fire and forget)
-      setTimeout(() => {
-        fetch(`${process.env.NEXT_PUBLIC_API_URL}/routers/${newRouterId}/update-title`, {
-          method: 'POST',
-        }).catch(error => {
-          console.warn('Failed to update conversation title:', error);
-        });
-      }, 2000); // Wait 2 seconds for the conversation to be established
+      sendMessage(message, filePaths, null); // null router_id for new conversation
       
       // Trigger sidebar refresh to show new conversation
       setRefreshTrigger(prev => prev + 1);
@@ -209,10 +194,15 @@ export const ChatInterface: React.FC = () => {
             </ResizablePanelGroup>
             
             {/* Duplicate File Dialog */}
-            {duplicateDialog.open && duplicateDialog.duplicateInfo && (
+            {duplicateDialog.open && duplicateDialog.duplicateInfo && duplicateDialog.duplicateInfo.existing_file && (
               <DuplicateFileDialog
                 open={duplicateDialog.open}
-                duplicateInfo={duplicateDialog.duplicateInfo}
+                duplicateInfo={{
+                  ...duplicateDialog.duplicateInfo,
+                  existing_file: duplicateDialog.duplicateInfo.existing_file,
+                  new_filename: duplicateDialog.duplicateInfo.new_filename || '',
+                  options: duplicateDialog.duplicateInfo.options || []
+                }}
                 onResolve={handleDuplicateResolve}
                 onClose={handleDuplicateClose}
               />
@@ -271,10 +261,15 @@ export const ChatInterface: React.FC = () => {
           </ResizablePanelGroup>
           
           {/* Duplicate File Dialog */}
-          {duplicateDialog.open && duplicateDialog.duplicateInfo && (
+          {duplicateDialog.open && duplicateDialog.duplicateInfo && duplicateDialog.duplicateInfo.existing_file && (
             <DuplicateFileDialog
               open={duplicateDialog.open}
-              duplicateInfo={duplicateDialog.duplicateInfo}
+              duplicateInfo={{
+                ...duplicateDialog.duplicateInfo,
+                existing_file: duplicateDialog.duplicateInfo.existing_file,
+                new_filename: duplicateDialog.duplicateInfo.new_filename || '',
+                options: duplicateDialog.duplicateInfo.options || []
+              }}
               onResolve={handleDuplicateResolve}
               onClose={handleDuplicateClose}
             />

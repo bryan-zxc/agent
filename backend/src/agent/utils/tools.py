@@ -1,5 +1,3 @@
-import io
-import base64
 import json
 import string
 import logging
@@ -12,31 +10,11 @@ from typing import Union, Literal
 from pydantic import BaseModel, Field
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from ..services.llm_service import LLM
+from .image_utils import encode_image, decode_image
 
 logger = logging.getLogger(__name__)
 
 
-def encode_image(image: Union[str, Path, Image.Image]):
-    if isinstance(image, str):
-        image = Path(image)  # better handling of windows for unix file systems
-    if isinstance(image, Path):
-        with open(image, "rb") as image_file:
-            return base64.b64encode(image_file.read()).decode("utf-8")
-
-    buffered = io.BytesIO()
-    image.save(buffered, format="PNG")
-    return base64.b64encode(buffered.getvalue()).decode("utf-8")
-
-
-def decode_image(image_base64: str) -> Image.Image:
-    """
-    Decodes a base64 encoded image string into a PIL Image object.
-
-    :param image_base64: Base64 encoded image string.
-    :return: PIL Image object.
-    """
-    image_data = base64.b64decode(image_base64)
-    return Image.open(io.BytesIO(image_data))
 
 
 def is_serialisable(obj) -> tuple[bool, bool]:
@@ -893,28 +871,6 @@ def get_images_from_doc(doc):
     return images
 
 
-def get_img_breakdown(base64_image: str):
-    llm = LLM(caller="tools")
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "What type of image is this?"},
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/pgn;base64,{base64_image}"},
-                },
-            ],
-        }
-    ]
-    from ..models.schemas import ImageBreakdown
-
-    image_breakdown = llm.get_response(
-        messages=messages,
-        model="gemini-2.5-pro",
-        response_format=ImageBreakdown,
-    )
-    return image_breakdown
 
 
 class QnA(BaseModel):

@@ -34,6 +34,12 @@ export const useWebSocket = (url?: string) => {
               
             case 'status':
               store.updateStatus({ status: 'processing', message: data.message });
+              
+              // If this status includes a router_id and we don't have one yet, store it
+              if (data.router_id && !store.currentRouterId) {
+                console.log('Setting router_id from status message:', data.router_id);
+                store.setCurrentConversation(data.router_id);
+              }
               break;
               
             case 'message':
@@ -56,6 +62,12 @@ export const useWebSocket = (url?: string) => {
               };
               store.addMessage(assistantMessage);
               store.updateStatus({ status: 'idle' });
+              
+              // If this response includes a router_id and we don't have one yet, store it
+              if (data.router_id && !store.currentRouterId) {
+                console.log('Setting router_id from backend response:', data.router_id);
+                store.setCurrentConversation(data.router_id);
+              }
               break;
               
             case 'message_history':
@@ -142,14 +154,18 @@ export const useWebSocket = (url?: string) => {
       const { currentModel, temperature, currentRouterId } = useChatStore.getState();
       const targetRouterId = routerId || currentRouterId;
       
-      const payload = {
+      const payload: any = {
         type: 'message',
         message,
-        router_id: targetRouterId,
         files,
         model: currentModel,
         temperature,
       };
+      
+      // Only include router_id if we have one (for continuing conversations)
+      if (targetRouterId) {
+        payload.router_id = targetRouterId;
+      }
       
       console.log('Sending message via WebSocket:', payload);
       ws.current.send(JSON.stringify(payload));

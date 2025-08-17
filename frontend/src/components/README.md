@@ -8,9 +8,10 @@ The frontend uses a **component-driven architecture** with 6 focused components 
 
 ```
 components/
-├── ChatInterface.tsx      # Main orchestrator (70 lines)
+├── ChatInterface.tsx      # Main orchestrator (280 lines)
+├── ConversationSidebar.tsx # Conversation history and navigation (320 lines)
 ├── ChatHeader.tsx         # Header with connection status (29 lines)
-├── MessageList.tsx        # Message display and scrolling (79 lines)
+├── MessageList.tsx        # Message display and scrolling (250 lines)
 ├── MessageInput.tsx       # Auto-resizing input with shortcuts (99 lines)
 ├── FileAttachment.tsx     # File upload with drag-and-drop (78 lines)
 └── ErrorBoundary.tsx      # Error handling and recovery (69 lines)
@@ -49,6 +50,158 @@ export const ChatInterface: React.FC = () => {
   );
 };
 ```
+
+### ConversationSidebar.tsx - Router History Navigation
+**Purpose**: Display and manage conversation history with enhanced error handling  
+**Size**: 320 lines  
+**Features**: Loading states, error recovery, responsive design, comprehensive debugging
+
+**Enhanced Error Handling & Debugging**:
+- **Comprehensive logging**: Detailed console output for all API calls and state changes
+- **Error recovery**: Inline error display with retry functionality for failed operations
+- **Loading indicators**: Visual feedback with spinning icons during conversation loading
+- **Environment validation**: Automatic fallback to localhost:8001 when API URL not configured
+- **Response validation**: Structured validation of API responses to catch malformed data
+
+**Key Features**:
+```typescript
+export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({
+  onNewConversation,
+  onConversationSelect,
+  refreshTrigger
+}) => {
+  // Enhanced state management
+  const [loading, setLoading] = useState(false);
+  const [loadingConversationId, setLoadingConversationId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // Robust API calls with comprehensive error handling
+  const fetchConversations = async (silent: boolean = false) => {
+    console.log('fetchConversations called, silent:', silent);
+    setError(null); // Clear previous errors
+    
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001';
+      const requestUrl = `${apiUrl}/routers`;
+      console.log('Making API request to:', requestUrl);
+      
+      const response = await fetch(requestUrl);
+      console.log('API response status:', response.status);
+      
+      if (response.ok) {
+        const data = await response.json();
+        console.log('Received conversations:', data.length);
+        
+        // Validate response structure
+        if (!Array.isArray(data)) {
+          throw new Error('Invalid response format from server');
+        }
+        
+        setConversations(data);
+      } else {
+        const errorText = await response.text();
+        throw new Error(`Failed to fetch conversations: ${response.status} ${response.statusText}`);
+      }
+    } catch (error) {
+      console.error('Error fetching conversations:', error);
+      setError(`Error loading conversations: ${error.message}`);
+    } finally {
+      if (!silent) setLoading(false);
+    }
+  };
+
+  // Enhanced conversation selection with loading states
+  const handleSelectConversation = async (routerId: string) => {
+    if (routerId === currentRouterId || loadingConversationId) return;
+    
+    setLoadingConversationId(routerId);
+    setError(null);
+    
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001';
+      const response = await fetch(`${apiUrl}/routers/${routerId}`);
+      
+      if (response.ok) {
+        const data = await response.json();
+        
+        // Validate response structure
+        if (!data.messages || !Array.isArray(data.messages)) {
+          throw new Error('Invalid response format from server');
+        }
+        
+        const hasMessages = data.messages.filter(msg => msg.role !== 'system').length > 0;
+        setCurrentConversation(routerId);
+        
+        if (onConversationSelect) {
+          onConversationSelect(routerId, hasMessages);
+        }
+      } else {
+        throw new Error(`Failed to load conversation: ${response.status}`);
+      }
+    } catch (error) {
+      console.error('Error loading conversation:', error);
+      setError(`Error selecting conversation: ${error.message}`);
+    } finally {
+      setLoadingConversationId(null);
+    }
+  };
+
+  return (
+    <Sidebar>
+      <SidebarContent>
+        {/* Error display with retry functionality */}
+        {error && (
+          <div className="p-4 text-center text-red-500 text-sm">
+            {error}
+            <Button onClick={() => fetchConversations()} variant="outline" size="sm" className="mt-2 w-full">
+              Retry
+            </Button>
+          </div>
+        )}
+        
+        {/* Conversation list with loading states */}
+        <SidebarMenu>
+          {conversations.map((conversation) => {
+            const isLoading = loadingConversationId === conversation.id;
+            const isSelected = currentRouterId === conversation.id;
+            
+            return (
+              <SidebarMenuItem key={conversation.id}>
+                <Button
+                  onClick={() => handleSelectConversation(conversation.id)}
+                  variant={isSelected ? "secondary" : "ghost"}
+                  disabled={isLoading || (loadingConversationId !== null && !isLoading)}
+                  className="h-auto p-3 w-full justify-start"
+                >
+                  <div className="flex items-start gap-3 w-full">
+                    {isLoading ? (
+                      <Loader2 className="h-4 w-4 mt-1 animate-spin text-primary" />
+                    ) : (
+                      <MessageSquare className="h-4 w-4 mt-1 text-gray-500" />
+                    )}
+                    <div className="flex-1 min-w-0 text-left">
+                      <div className="font-medium text-sm truncate">{conversation.title}</div>
+                      <div className="text-xs text-gray-500 mt-1 truncate">{conversation.preview}</div>
+                      <div className="text-xs text-gray-500 mt-1">{formatTimestamp(conversation.timestamp)}</div>
+                    </div>
+                  </div>
+                </Button>
+              </SidebarMenuItem>
+            );
+          })}
+        </SidebarMenu>
+      </SidebarContent>
+    </Sidebar>
+  );
+};
+```
+
+**Debugging Features**:
+- **Console logging**: All API calls, state changes, and user interactions are logged with detailed context
+- **Error context**: Failed operations include full error details, request URLs, and environment configuration
+- **Response validation**: API responses are validated for structure and content before processing
+- **Loading state management**: Visual indicators prevent multiple concurrent operations and provide user feedback
+- **Environment fallbacks**: Graceful handling of missing configuration with automatic fallbacks
 
 ### ChatHeader.tsx - Connection Status Header
 **Purpose**: Display connection status and app title  

@@ -6,11 +6,9 @@ background task processor. Each function operates on a worker_id and manages
 worker execution state through the file system and database.
 """
 
-import uuid
 import logging
 import json
 import duckdb
-from typing import Optional
 from pydantic import BaseModel, Field
 from PIL import Image
 

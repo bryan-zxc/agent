@@ -2,6 +2,21 @@
 
 **Architecture**: Planning-worker system with multi-modal file processing capabilities.
 
+## GitHub Issue Management
+
+**ALWAYS assign issues to bryan-zxc when creating GitHub issues** - use the `assignees` parameter with `["bryan-zxc"]`.
+
+**WHEN CREATING TODO LISTS**: Always integrate with GitHub
+1. Create GitHub issues using MCP GitHub tools instead of just TodoWrite
+2. Use `gh project item-add` to automatically add created issues to the project board
+3. Check existing issues first with `gh issue list` to get correct next issue numbers
+
+**PROJECT BOARD STATUS WORKFLOW**:
+- **Issue Creation**: Always set initial status as "ready" when auto-adding to project board
+- **Starting Work**: When beginning work on an issue, mark it as "in progress"
+- **Work Focus**: Only ONE issue should be marked as "in progress" at any time
+- **Multiple Issues**: When loading multiple issues into todo list, only mark the current working issue as "in progress", others stay "ready"
+
 ## Code Workflow
 
 **ALWAYS read README files first** before examining code:
