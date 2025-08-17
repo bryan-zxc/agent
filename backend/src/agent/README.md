@@ -105,7 +105,7 @@ success = update_planner_next_task_and_queue(
 - **Code Execution**: Safe sandboxed Python code execution
 - **SQL Queries**: DuckDB integration for data analysis
 - **Image Analysis**: Chart reading, table extraction, and visual content analysis
-- **Document Processing**: PDF parsing with text and image extraction
+- **Document Processing**: PDF parsing and text document processing with multi-encoding support
 - **Database Persistence**: SQLite-based storage with JSON columns for file paths
 - **File Storage System**: Organised file management with lazy loading and collision avoidance
 - **Concurrent Processing**: Multiple conversations and planners execute simultaneously

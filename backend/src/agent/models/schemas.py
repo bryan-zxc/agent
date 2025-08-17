@@ -108,12 +108,18 @@ class DocSearchCriteria(BaseModel):
     )
 
 
+class DocumentContext(BaseModel):
+    file_type: Literal["pdf", "text"]
+    encoding: str = None  # For text files
+    pdf_content: PDFFull = None  # For PDF files
+
+
 class File(BaseModel):
     filepath: str
     file_type: Literal["image", "data", "document"]
     image_context: list[ImageElement] = None
     data_context: Literal["csv", "excel", "other"] = None
-    document_context: str = None
+    document_context: DocumentContext = None
 
 
 class ColumnMeta(BaseModel):

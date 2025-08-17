@@ -212,7 +212,7 @@ async def execute_initial_planning(task_data: dict):
 
                     # Save image with cleaned name (using collision avoidance)
                     raw_image_name = Path(f.filepath).stem
-                    file_path, image_name = save_planner_image(
+                    _, image_name = save_planner_image(
                         planner_id, raw_image_name, encoded_image, check_existing=True
                     )
 
@@ -233,11 +233,32 @@ async def execute_initial_planning(task_data: dict):
                     if duck_conn is None:
                         duck_conn = duckdb.connect(database=str(db_path))
 
-                    # Create table from CSV (exact copy from PlannerAgent)
+                    # Create table from CSV with fallback to all_varchar on failure
                     table_name = clean_table_name(Path(f.filepath).stem)
-                    duck_conn.sql(
-                        f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM read_csv('{f.filepath}',strict_mode=false)"
-                    )
+                    try:
+                        # First attempt: normal CSV reading
+                        duck_conn.sql(
+                            f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM read_csv('{f.filepath}',strict_mode=false)"
+                        )
+                        logger.info(f"Created table {table_name} from CSV: {f.filepath}")
+                    except Exception as e:
+                        logger.warning(f"Failed to create table {table_name} with normal CSV read, trying all_varchar: {e}")
+                        try:
+                            # Fallback: try with all_varchar=true
+                            duck_conn.sql(
+                                f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM read_csv('{f.filepath}',strict_mode=false,all_varchar=true)"
+                            )
+                            logger.info(f"Created table {table_name} from CSV using all_varchar fallback: {f.filepath}")
+                        except Exception as e2:
+                            logger.error(f"Failed to create table {table_name} even with all_varchar: {e2}")
+                            # Add error message instead of table creation message
+                            db.add_message(
+                                agent_id=planner_id,
+                                agent_type="planner",
+                                role="user",
+                                content=f"CSV file `{f.filepath}` could not be processed into a database table. Error: {str(e2)}",
+                            )
+                            continue  # Skip metadata processing for failed CSV
 
                     # Get table metadata
                     table_meta = get_table_metadata(duck_conn, table_name)
@@ -250,7 +271,43 @@ async def execute_initial_planning(task_data: dict):
                         role="user",
                         content=f"Data file `{f.filepath}` converted to table `{table_name}` in database. Below is table metadata:\n\n{table_meta.model_dump_json(indent=2)}",
                     )
-                    logger.info(f"Created table {table_name} from CSV: {f.filepath}")
+
+                elif f.file_type == "document" and f.document_context.file_type == "text":
+                    # Read the text file content using the stored encoding
+                    try:
+                        text_content = Path(f.filepath).read_text(
+                            encoding=f.document_context.encoding
+                        )
+                        # Limit to first 1 million characters
+                        limited_content = text_content[:1000000]
+                        if len(text_content) > 1000000:
+                            limited_content += "...\n\n[Content truncated to first 1 million characters]"
+
+                        db.add_message(
+                            agent_id=planner_id,
+                            agent_type="planner",
+                            role="user",
+                            content=f"Text file `{Path(f.filepath).name}` contains the following content:\n\n{limited_content}",
+                        )
+                        logger.info(f"Processed text file: {f.filepath} with encoding {f.document_context.encoding}")
+                    except Exception as e:
+                        db.add_message(
+                            agent_id=planner_id,
+                            agent_type="planner",
+                            role="user",
+                            content=f"Text file `{Path(f.filepath).name}` could not be read with encoding `{f.document_context.encoding}`. Error: {str(e)}",
+                        )
+                        logger.error(f"Failed to read text file {f.filepath}: {e}")
+
+                elif f.file_type == "document" and f.document_context.file_type == "pdf":
+                    # Add message about PDF file being available for processing
+                    db.add_message(
+                        agent_id=planner_id,
+                        agent_type="planner",
+                        role="user",
+                        content=f"PDF document `{Path(f.filepath).name}` is available for processing at: {f.filepath}",
+                    )
+                    logger.info(f"Registered PDF file for processing: {f.filepath}")
 
         # Close DuckDB connection after table creation
         if duck_conn:

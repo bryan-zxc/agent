@@ -67,6 +67,9 @@ WebSocket-enabled router for real-time chat and file processing orchestration.
   - `table`: Table content extraction as JSON
   - `diagram`: Diagram interpretation and mermaid conversion
   - `text`: Text extraction from images
+- **Document Instructions**: Document processing guidance for:
+  - `pdf`: Fact extraction using question-answer pairs with citations
+  - `text`: Content analysis with inline citations from loaded text
 
 ## Usage Patterns
 
@@ -119,10 +122,18 @@ agent.add_message("user", "Analyze this image", image="path/to/image.png")
 - Column name sanitization and metadata extraction
 - SQL query interface through DuckDB
 
-### Document Files (PDF)
+### Document Files 
+**PDF Documents:**
 - Content extraction with text and images
 - Metadata analysis (page count, text length, image count)
 - Image-based PDF detection
+- Tool-based fact extraction using question-answer pairs
+
+**Text Documents:**
+- Multi-encoding detection (UTF-8, UTF-16, Windows-1252)
+- Content truncation to 1 million characters for performance
+- Direct content loading into planner message history
+- Support for various text file formats
 
 ### Image Files
 - Content analysis and element categorization

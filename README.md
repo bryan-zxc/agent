@@ -41,6 +41,7 @@ agent/
 ### Multi-Modal Processing
 - Image analysis and chart reading
 - PDF document processing
+- Text document processing with multi-encoding support
 - CSV data analysis with SQL queries
 - Table extraction and data visualisation
 

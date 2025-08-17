@@ -6,8 +6,9 @@ from datetime import datetime, timezone
 import asyncio
 import logging
 import uuid
+import duckdb
 from ..config.settings import settings
-from ..models import File
+from ..models import File, DocumentContext
 from ..models.responses import RequireAgent
 from ..models.schemas import SinglevsMultiRequest
 from ..models.agent_database import AgentDatabase, AgentType, Router
@@ -38,7 +39,8 @@ INSTRUCTION_LIBRARY = {
         "pdf": "You must first use the provided tool get_facts_from_pdf to extract relevant facts in the form of question answer pairs from each document until there are no longer any unanswered questions (ie missing facts to answer the user's original question). "
         "Extracting from each file must be a standalone task.\n"
         "When compiling the final response, you must aggressively use in-line citations, and your answer should be in markdown format."
-        "If the document(s) do not contain all necessary information, in other words there are still unanswered questions, you can use the search_web_general tool to search the web for information that can answer the user's question."
+        "If the document(s) do not contain all necessary information, in other words there are still unanswered questions, you can use the search_web_general tool to search the web for information that can answer the user's question.",
+        "text": "(No specific instructions)",
     },
     "non_file": {
         # "chilli_request": "You must first use search_web_pdf tool to find annual report and sustainability report and extract the facts as question and answer pairs, as most questions can be answered by these documents. "
@@ -53,7 +55,7 @@ class RouterAgent:
     def __init__(self, router_id: str = None):
         # Use "router" as the caller for LLM usage tracking
         self.llm = LLM(caller="router")
-        
+
         # Initialize database connection first
         self.agent_type = "router"
         self._agent_db = AgentDatabase()
@@ -191,11 +193,7 @@ class RouterAgent:
         # Build dynamic update query
         with self._agent_db.SessionLocal() as session:
             # Get the router record
-            record = (
-                session.query(Router)
-                .filter(Router.router_id == self.id)
-                .first()
-            )
+            record = session.query(Router).filter(Router.router_id == self.id).first()
 
             if record:
                 # Update all provided fields
@@ -229,9 +227,9 @@ class RouterAgent:
             model=settings.router_model,
             temperature=0.0,
             title=title,
-            preview=preview
+            preview=preview,
         )
-        
+
         # Set instance variables after DB creation
         self._model = settings.router_model
         self._temperature = 0.0
@@ -295,17 +293,17 @@ class RouterAgent:
         websocket_info = {
             "websocket_id": id(websocket),
             "websocket_type": type(websocket).__name__,
-            "router_id": self.id
+            "router_id": self.id,
         }
-        
-        if hasattr(websocket, 'client_state'):
+
+        if hasattr(websocket, "client_state"):
             websocket_info["client_state"] = str(websocket.client_state)
-        if hasattr(websocket, 'scope'):
-            websocket_info["scope_path"] = websocket.scope.get('path', 'unknown')
-            websocket_info["scope_client"] = websocket.scope.get('client', 'unknown')
-            
+        if hasattr(websocket, "scope"):
+            websocket_info["scope_path"] = websocket.scope.get("path", "unknown")
+            websocket_info["scope_client"] = websocket.scope.get("client", "unknown")
+
         logger.info(f"Connecting WebSocket to router {self.id}: {websocket_info}")
-        
+
         self.websocket = websocket
 
         # Send message history to frontend
@@ -373,7 +371,9 @@ class RouterAgent:
                     await self.send_assistant_message(response)
 
         except Exception as e:
-            logger.error(f"Error handling message in router {self.id}: {str(e)}", exc_info=True)
+            logger.error(
+                f"Error handling message in router {self.id}: {str(e)}", exc_info=True
+            )
             await self.send_error(f"Error: {str(e)}")
         finally:
             # Always unlock input for this router, even if processing failed
@@ -476,16 +476,18 @@ class RouterAgent:
 
             if question_type == "multiple":
                 logger.info(f"DEBUG: Processing multiple files sequentially")
-                
+
                 # Process each file sequentially - each runs as separate planner in background
                 for i, file in enumerate(files, 1):
                     await self.send_status(f"Processing file {i}/{len(files)}: {file}")
-                    
+
                     # Start background task for this file - no return value, runs asynchronously
                     await self._invoke_single(
                         [file], user_question, instructions, agent_requirements
                     )
-                    logger.info(f"DEBUG: File {i} planner queued for background processing")
+                    logger.info(
+                        f"DEBUG: File {i} planner queued for background processing"
+                    )
 
                 # All files processed sequentially - no return value needed
                 logger.info(f"Queued sequential processing of all {len(files)} files.")
@@ -518,23 +520,74 @@ class RouterAgent:
             logger.info(f"DEBUG: Processing file: {file_path}")
             file_obj = Path(file_path)
 
+            # Check CSV files first
             if file_obj.suffix == ".csv":
                 logger.info(f"DEBUG: Processing CSV file: {file_path}")
-                processed_files.append(
-                    File(filepath=file_path, file_type="data", data_context="csv")
-                )
-                data_types.append("csv")
-            elif file_obj.suffix == ".pdf":
+                # Test CSV file readability before adding to file_list
+                try:
+                    duckdb.sql(
+                        f"SELECT * FROM read_csv('{file_path}', strict_mode=false, all_varchar=true) LIMIT 100000"
+                    )
+                    processed_files.append(
+                        File(filepath=file_path, file_type="data", data_context="csv")
+                    )
+                    data_types.append("csv")
+                    logger.info(f"CSV file {file_path} validated successfully")
+                except Exception as e:
+                    logger.error(f"CSV file {file_path} cannot be read: {e}")
+                    errors.append(
+                        f"The CSV file `{file_obj.name}` cannot be processed due to format issues. "
+                        f"Error: {str(e)[:250]}..."
+                    )
+                continue
+
+            # Check PDF files
+            if file_obj.suffix == ".pdf":
                 logger.info(f"DEBUG: Processing PDF file: {file_path}")
-                # Process PDF
+                # Process PDF - create simplified DocumentContext for now
                 processed_files.append(
                     File(
-                        filepath=file_path, file_type="document", document_context="pdf"
+                        filepath=file_path,
+                        file_type="document",
+                        document_context=DocumentContext(file_type="pdf"),
                     )
                 )
                 document_types.append("pdf")
                 logger.info(f"DEBUG: document_types: {document_types}")
-            elif is_image(file_path)[0]:
+                continue
+
+            # Try to read as text file with multiple encodings
+            encodings_to_try = ["utf-8", "utf-16", "windows-1252"]
+            text_processed = False
+            for encoding in encodings_to_try:
+                try:
+                    Path(file_path).read_text(encoding=encoding)
+                    logger.info(
+                        f"DEBUG: Processing text file: {file_path} with encoding: {encoding}"
+                    )
+                    processed_files.append(
+                        File(
+                            filepath=file_path,
+                            file_type="document",
+                            document_context=DocumentContext(
+                                file_type="text",
+                                encoding=encoding,
+                            ),
+                        )
+                    )
+                    document_types.append("text")
+                    text_processed = True
+                    break  # Successfully read, exit the encoding loop
+                except (UnicodeDecodeError, UnicodeError):
+                    continue  # Try next encoding
+                except OSError:
+                    break  # File system error, don't try other encodings
+
+            if text_processed:
+                continue
+
+            # Check if it's an image file
+            if is_image(file_path)[0]:
                 # Process image
                 breakdown, error = process_image_file(file_path)
                 if not error:
@@ -550,11 +603,12 @@ class RouterAgent:
                     )
                 else:
                     errors.append(f"Error processing image '{file_obj.name}': {error}")
-            else:
-                # Unsupported file type
-                errors.append(
-                    f"Unsupported file type '{file_obj.suffix}' for file '{file_obj.name}'"
-                )
+                continue
+
+            # Unsupported file type
+            errors.append(
+                f"Unsupported file type '{file_obj.suffix}' for file '{file_obj.name}'"
+            )
         # Remove duplicates
         image_types = list(set(image_types))
         data_types = list(set(data_types))
@@ -672,26 +726,31 @@ class RouterAgent:
 
         # Send "Agents assemble!" message first and capture its ID
         agents_assemble_message_id = self.add_message("assistant", "Agents assemble!")
-        await self.send_assistant_message("Agents assemble!", agents_assemble_message_id)
-        
+        await self.send_assistant_message(
+            "Agents assemble!", agents_assemble_message_id
+        )
+
         logger.info(
             f"DEBUG: Creating planner using function-based approach with processed_files: {processed_files}"
         )
-        
+
         # Create planner using function-based task queue system
         planner_id = uuid.uuid4().hex
         logger.info(f"DEBUG: Generated planner_id: {planner_id}")
-        
+
         # Queue initial planning task with complete payload
         payload = {
             "user_question": user_question,
             "instruction": "\n\n---\n\n".join(all_instructions),
-            "files": [f.model_dump() if hasattr(f, 'model_dump') else f for f in processed_files],
+            "files": [
+                f.model_dump() if hasattr(f, "model_dump") else f
+                for f in processed_files
+            ],
             "planner_name": planner_name,
             "message_id": agents_assemble_message_id,
-            "router_id": self.id
+            "router_id": self.id,
         }
-        
+
         logger.info(f"DEBUG: Queuing initial planning task for planner {planner_id}")
         task_id = uuid.uuid4().hex
         success = self._agent_db.enqueue_task(
@@ -699,15 +758,19 @@ class RouterAgent:
             entity_type="planner",
             entity_id=planner_id,
             function_name="execute_initial_planning",
-            payload=payload
+            payload=payload,
         )
-        
+
         if not success:
-            logger.error(f"Failed to queue initial planning task for planner {planner_id}")
+            logger.error(
+                f"Failed to queue initial planning task for planner {planner_id}"
+            )
             return
-            
-        logger.info(f"DEBUG: Successfully queued initial planning task for planner {planner_id}")
-        
+
+        logger.info(
+            f"DEBUG: Successfully queued initial planning task for planner {planner_id}"
+        )
+
         # Note: Planner execution now handled asynchronously by background processor
         # Frontend will poll for completion and call completion handler
         # No return value - planner runs in background
@@ -728,12 +791,20 @@ class RouterAgent:
     async def send_status(self, status: str):
         """Send status update to frontend"""
         if self.websocket:
-            await self.websocket.send_json({"type": "status", "message": status, "router_id": self.id})
+            await self.websocket.send_json(
+                {"type": "status", "message": status, "router_id": self.id}
+            )
 
-    async def send_assistant_message(self, content: str, message_id: Optional[int] = None):
+    async def send_assistant_message(
+        self, content: str, message_id: Optional[int] = None
+    ):
         """Send assistant message to frontend"""
         if self.websocket:
-            response_data = {"type": "response", "message": content, "router_id": self.id}
+            response_data = {
+                "type": "response",
+                "message": content,
+                "router_id": self.id,
+            }
             if message_id is not None:
                 response_data["message_id"] = message_id
             await self.websocket.send_json(response_data)
@@ -741,8 +812,9 @@ class RouterAgent:
     async def send_error(self, error: str):
         """Send error message to frontend"""
         if self.websocket:
-            await self.websocket.send_json({"type": "error", "message": error, "router_id": self.id})
-    
+            await self.websocket.send_json(
+                {"type": "error", "message": error, "router_id": self.id}
+            )
 
     async def send_message_history(self):
         """Send message history to frontend on connect"""
@@ -784,38 +856,46 @@ class RouterAgent:
                     "router_id": self.id,
                 }
             )
-    
+
     async def handle_planner_completion(self, planner_id: str):
         """Handle completed planner - add response to message chain and send to frontend"""
         logger.info(f"Handling planner completion for planner {planner_id}")
-        
+
         try:
             # Get planner data
             planner = self._agent_db.get_planner(planner_id)
             if not planner:
                 logger.error(f"Planner {planner_id} not found")
                 return
-            
-            user_response = planner.get('user_response')
+
+            user_response = planner.get("user_response")
             if not user_response:
-                logger.error(f"No user response found for completed planner {planner_id}")
+                logger.error(
+                    f"No user response found for completed planner {planner_id}"
+                )
                 return
-            
+
             # Add to router's message chain
             self.add_message("assistant", user_response)
-            
+
             # Send to frontend via WebSocket (if connected) - no message_id needed for final response
             if self.websocket:
                 await self.send_assistant_message(user_response)
                 logger.info(f"Sent planner completion response to frontend")
             else:
-                logger.warning(f"No WebSocket connection for router {self.id} - response not sent")
-            
+                logger.warning(
+                    f"No WebSocket connection for router {self.id} - response not sent"
+                )
+
             # Update router status back to active
             self.status = "active"
-            
-            logger.info(f"Successfully handled planner completion for planner {planner_id}")
-            
+
+            logger.info(
+                f"Successfully handled planner completion for planner {planner_id}"
+            )
+
         except Exception as e:
-            logger.error(f"Error handling planner completion for planner {planner_id}: {e}")
+            logger.error(
+                f"Error handling planner completion for planner {planner_id}: {e}"
+            )
             raise
