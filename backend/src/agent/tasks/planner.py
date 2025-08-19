@@ -53,6 +53,22 @@ class AnswerTemplate(BaseModel):
         "Do NOT EVER perform any calculations, you must leave that as a placeholder so a task can be created to perform the calculation. "
         "If python code has been ran to generate the outcome of a calculation, you MUST use that answer whether you agree or not as the final answer - DO NOT CHANGE IT.",
     )
+
+class ExecutionPlanModel(BaseModel):
+    """Structured execution plan with objective and todo items"""
+
+    objective: str = Field(description="Overall objective of the execution plan")
+    remaining_information_required: str = Field(
+        default="",
+        description="Review the answer template and the partly filled answer carefully and think through what additional information is still required before achieving the objective. "
+        "This should drive and guide how to change the next todo's (if required) to obtain the information. "
+        "Missing information can be because you haven't exhausted your search in available context provided, it could also be the absence of available information in your context, "
+        "you need to make a determination of whether information is already exhausted and give the user the best answer based on what is available, or to keep digging for more information by adding to or going through the todo list.\n"
+        "Note: Calculations required must be considered as information required and must be assigned a corresponding todo item. "
+        "Even if the answer template has already done its own calculation and pre-filled the answer, still have a calculation todo item.",
+    )
+    todos: list[TodoItem] = Field(description="List of todo items")
+
 def clean_table_name(input_string: str):
     """
     Clean input string to create a valid SQL table name.
