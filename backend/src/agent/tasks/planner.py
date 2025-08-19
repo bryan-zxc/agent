@@ -36,7 +36,23 @@ from agent.execution_plan_utils import (
 # Set up logging
 logger = logging.getLogger(__name__)
 
+class AnswerTemplate(BaseModel):
+    """Answer template for the final response"""
 
+    template: str = Field(
+        description="The answer template in markdown format that will be filled to provide the final answer to the user's question."
+        "Based on new information available, update the above template if required. "
+        "Remember that if you choose not to update the template just return the same template as is. "
+        "If you do update the template, make sure that you continue to use placeholders even if you have the information, this should be just a template, not the actual answer. "
+    )
+    wip_filled_template: str = Field(
+        description="The work in progress filled answer template, which is the latest population of placeholders with information currently available."
+        "Where information is not available, leave unknown placeholders untouched. "
+        "You must stay completely faithful to the template, do not change the structure, do not remove sections you don't have information for, just keep them with corresponding placeholders. "
+        "Agressively use inline citation such that the citing references provided are used individually whenever possible as opposed to making multiple citings at the end. "
+        "Do NOT EVER perform any calculations, you must leave that as a placeholder so a task can be created to perform the calculation. "
+        "If python code has been ran to generate the outcome of a calculation, you MUST use that answer whether you agree or not as the final answer - DO NOT CHANGE IT.",
+    )
 def clean_table_name(input_string: str):
     """
     Clean input string to create a valid SQL table name.
