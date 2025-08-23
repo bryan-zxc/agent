@@ -53,6 +53,16 @@ export const useWebSocket = (url?: string) => {
               break;
               
             case 'response':
+              // Debug logging for Agents assemble messages
+              if (data.message === 'Agents assemble!') {
+                console.log('[DEBUG] Agents assemble WebSocket response:', {
+                  message_id: data.message_id,
+                  message_id_type: typeof data.message_id,
+                  has_message_id: data.hasOwnProperty('message_id'),
+                  full_data: data
+                });
+              }
+              
               const assistantMessage: ChatMessage = {
                 id: Date.now().toString(),
                 message: data.message,

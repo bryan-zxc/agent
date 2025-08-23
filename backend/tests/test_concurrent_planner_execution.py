@@ -37,11 +37,9 @@ class TestConcurrentPlannerExecution(unittest.TestCase):
         # Mock settings to use test directory
         settings.collaterals_base_path = self.test_dir
         
-        # Set up in-memory database for testing
-        self.db = AgentDatabase()
-        self.db.engine = self.db.create_engine("sqlite:///:memory:")
-        self.db.Base.metadata.create_all(self.db.engine)
-        self.db.SessionLocal = self.db.sessionmaker(bind=self.db.engine)
+        # Set up temporary database for testing
+        self.temp_db_file = tempfile.NamedTemporaryFile(delete=False)
+        self.db = AgentDatabase(self.temp_db_file.name)
         
         # Test data
         self.test_planners = []
@@ -63,6 +61,13 @@ class TestConcurrentPlannerExecution(unittest.TestCase):
         
         # Remove test directory
         shutil.rmtree(self.test_dir, ignore_errors=True)
+        
+        # Clean up temporary database file
+        import os
+        try:
+            os.unlink(self.temp_db_file.name)
+        except (OSError, AttributeError):
+            pass  # File already deleted or doesn't exist
 
     def create_test_planner(self, suffix: str) -> str:
         """Create a test planner with unique ID."""
@@ -255,7 +260,7 @@ class TestConcurrentPlannerExecution(unittest.TestCase):
             self.assertEqual(planner_data["execution_plan"], f"Final plan {i}")
             
             # Check messages were added
-            messages = self.db.get_messages_by_agent_id(planner_id, "planner")
+            messages = self.db.get_messages("planner", planner_id)
             assistant_messages = [msg for msg in messages if msg["role"] == "assistant"]
             self.assertEqual(len(assistant_messages), 3, f"Planner {planner_id} should have 3 assistant messages")
 

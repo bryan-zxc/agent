@@ -103,19 +103,20 @@ const ChatComponent = () => {
 ```
 
 ### usePlannerInfo.ts
-Custom hook that fetches and manages planner execution plan information for routers.
+Custom hook that fetches and manages planner execution plan information for specific messages with real-time polling capabilities.
 
 #### Purpose
-- **Plan Fetching** - Retrieve execution plans from planner agents
+- **Execution Plan Fetching** - Retrieve execution plans from completed planners
+- **Real-time Polling** - Automatically poll for planner status updates during execution
 - **Loading States** - Handle loading and error states for API requests
-- **Cache Management** - Avoid unnecessary API calls
-- **Integration** - Works with router state to show relevant plans
+- **Completion Detection** - Automatically stop polling when planner completes
+- **Message Refresh** - Automatically refresh router messages when planner completes to show new assistant responses
 
 #### API
 ```typescript
 const usePlannerInfo = (
-  routerId: string | null,
-  isProcessing: boolean
+  messageId: number | null,
+  shouldPoll: boolean = true
 ) => {
   // Returns
   plannerInfo: PlannerInfo | null;
@@ -126,8 +127,8 @@ const usePlannerInfo = (
 ```
 
 #### Parameters
-- `routerId`: Current router ID to fetch planner info for
-- `isProcessing`: Whether the agent is currently processing (triggers fetching)
+- `messageId`: Message ID associated with the "Agents assemble!" message
+- `shouldPoll`: Whether to enable automatic polling for real-time updates (defaults to `true`)
 
 #### Return Values
 - `plannerInfo`: Planner data including execution plan and status
@@ -137,54 +138,93 @@ const usePlannerInfo = (
 
 #### Features
 
-**Conditional Fetching:**
+**Automatic Polling for Real-time Updates with Message Refresh:**
 ```typescript
 useEffect(() => {
-  // Only fetch when we have a router ID and system is processing
-  if (routerId && isProcessing) {
-    fetchPlannerInfo();
-  } else if (!isProcessing) {
-    // Clear planner info when not processing
-    setPlannerInfo(null);
-  }
-}, [routerId, isProcessing]);
+  if (!messageId || !shouldPoll) return;
+  if (plannerInfo?.status === 'completed' || hasCalledCompletion) return;
+
+  const pollInterval = setInterval(async () => {
+    try {
+      const response = await fetch(`/messages/${messageId}/planner-info`);
+      if (response.ok) {
+        const data: PlannerInfo = await response.json();
+        setPlannerInfo(data);
+        
+        // When planner completes, refresh router messages and stop polling
+        if (data.status === 'completed') {
+          // Refresh conversation messages to show new assistant response
+          if (!hasRefreshedMessages && currentRouterId && loadConversation) {
+            loadConversation(currentRouterId);
+            setHasRefreshedMessages(true);
+          }
+          
+          setHasCalledCompletion(true);
+          clearInterval(pollInterval);
+        }
+      }
+    } catch (error) {
+      console.error('Error polling for planner updates:', error);
+    }
+  }, 2000); // Poll every 2 seconds
+
+  return () => clearInterval(pollInterval);
+}, [messageId, shouldPoll, hasCalledCompletion, hasRefreshedMessages, currentRouterId, loadConversation]);
 ```
 
-**Error Handling:**
+**State Reset for New Messages:**
 ```typescript
-try {
-  const response = await fetch(`/api/routers/${routerId}/planner-info`);
-  if (!response.ok) throw new Error('Failed to fetch planner information');
-  const data: PlannerInfo = await response.json();
-  setPlannerInfo(data);
-} catch (err) {
-  setError(err instanceof Error ? err.message : 'Unknown error occurred');
-}
+useEffect(() => {
+  if (messageId) {
+    fetchPlannerInfo();
+    setHasCalledCompletion(false); // Reset completion flag for new message
+    setHasRefreshedMessages(false); // Reset refresh flag for new message
+  } else {
+    setPlannerInfo(null);
+  }
+}, [messageId]);
 ```
 
 #### Usage Example
 ```typescript
 import { usePlannerInfo } from '../hooks/usePlannerInfo';
-import { useChatStore } from '../stores/chatStore';
 
-const MessageList = () => {
-  const { currentRouterId } = useChatStore();
-  const isProcessing = status.status === 'processing';
+// Automatic polling enabled (default)
+const ExecutionPlanDisplay = ({ messageId }) => {
+  const { plannerInfo, loading } = usePlannerInfo(messageId);
   
-  const { plannerInfo, loading } = usePlannerInfo(
-    currentRouterId, 
-    isProcessing
-  );
+  if (!plannerInfo?.has_planner || !plannerInfo.execution_plan) {
+    return null;
+  }
   
   return (
-    <>
-      {plannerInfo?.has_planner && plannerInfo.execution_plan && (
-        <ExecutionPlanDisplay plan={plannerInfo.execution_plan} />
-      )}
-    </>
+    <div className="bg-muted/50 rounded-md p-4">
+      <div className="text-muted-foreground mb-2 font-medium">
+        Execution Plan:
+      </div>
+      <RichMarkdownRenderer content={plannerInfo.execution_plan} />
+    </div>
   );
 };
+
+// Polling disabled (one-time fetch only)
+const StaticPlanDisplay = ({ messageId }) => {
+  const { plannerInfo, loading } = usePlannerInfo(messageId, false);
+  
+  return <div>{plannerInfo?.execution_plan}</div>;
+};
 ```
+
+#### Polling Behaviour
+- **Polling starts**: When ExecutionPlanDisplay renders after "Agents assemble!" message
+- **Polling continues**: Every 2 seconds until planner status becomes 'completed'
+- **Completion handling**: When completion is detected:
+  1. Automatically refreshes router messages via `loadConversation()` to show new assistant responses
+  2. Stops polling to prevent further requests
+  3. Preserves execution plan display functionality
+- **Message refresh**: Full conversation reload ensures frontend synchronisation with database state
+- **State management**: Prevents duplicate refresh calls and polling restarts
+- **Multiple planners**: Each messageId creates an independent polling cycle with separate refresh state
 
 ## Hook Development Patterns
 

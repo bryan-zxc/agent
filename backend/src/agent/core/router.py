@@ -59,7 +59,7 @@ class RouterAgent:
         # Initialize database connection first
         self.agent_type = "router"
         self._agent_db = AgentDatabase()
-        self.websocket = None
+        # PHASE 2: WebSocket detachment - no longer stored in class
 
         if router_id:
             self.id = router_id
@@ -70,14 +70,39 @@ class RouterAgent:
             # Note: For new routers, initialization happens in activate_conversation()
 
     def _load_existing_state(self):
-        """Load router-specific state from database"""
-        state = self._agent_db.get_router(self.id)
-        if state:
-            self._model = state["model"]
-            self._temperature = state["temperature"]
-            self._status = state["status"]
-        else:
-            raise ValueError(f"Router {self.id} not found in database")
+        """PHASE 5: Enhanced database state loading for ephemeral router architecture
+        
+        Critical for ephemeral instances - must load complete router state from database.
+        Every router creation depends on this method for conversation continuity.
+        """
+        try:
+            state = self._agent_db.get_router(self.id)
+            if not state:
+                raise ValueError(f"Router {self.id} not found in database - cannot load state")
+                
+            # Load core router configuration
+            self._model = state.get("model")
+            self._temperature = state.get("temperature")
+            self._status = state.get("status")
+            
+            # Validate critical properties were loaded
+            if self._model is None:
+                logger.warning(f"Router {self.id} loaded with null model - using default")
+                self._model = settings.router_model
+                
+            if self._temperature is None:
+                logger.warning(f"Router {self.id} loaded with null temperature - using default")
+                self._temperature = 0.0
+                
+            if self._status is None:
+                logger.warning(f"Router {self.id} loaded with null status - using default")
+                self._status = "active"
+                
+            logger.info(f"Router {self.id} state loaded successfully - model: {self._model}, temp: {self._temperature}, status: {self._status}")
+            
+        except Exception as e:
+            logger.error(f"Failed to load router {self.id} state from database: {e}")
+            raise ValueError(f"Router {self.id} state loading failed: {e}") from e
 
     # Common agent properties with database sync
 
@@ -111,7 +136,10 @@ class RouterAgent:
         self._agent_db.clear_messages(self.agent_type, self.id)
         for msg in value:
             self._agent_db.add_message(
-                self.agent_type, self.id, msg["role"], msg["content"]
+                agent_type=self.agent_type, 
+                agent_id=self.id, 
+                role=msg["role"], 
+                content=msg["content"]
             )
 
     def add_message(
@@ -178,7 +206,12 @@ class RouterAgent:
                         ).show()
 
         # Store in database and return message ID
-        return self._agent_db.add_message(self.agent_type, self.id, role, content)
+        return self._agent_db.add_message(
+            agent_type=self.agent_type, 
+            agent_id=self.id, 
+            role=role, 
+            content=content
+        )
 
     # Agent State Management
 
@@ -214,7 +247,7 @@ class RouterAgent:
         self._status = value
         self.update_agent_state(status=value)
 
-    async def activate_conversation(self, user_message: str, files: list = None):
+    async def activate_conversation(self, user_message: str, websocket: WebSocket, files: list = None):
         """Activate a new router with system message and process first user message"""
         # Create default title (truncated if over 30 chars) and preview
         title = user_message[:30] if len(user_message) > 30 else user_message
@@ -252,7 +285,7 @@ class RouterAgent:
         logger.info(f"DEBUG: message_data prepared: {message_data}")
 
         # Process the main message
-        await self.handle_message(message_data)
+        await self.handle_message(message_data=message_data, websocket=websocket)
 
     async def generate_and_update_title(self):
         """Generate LLM title using existing message chain and update database"""
@@ -287,32 +320,12 @@ class RouterAgent:
             # Log error but don't fail
             logger.error(f"Failed to generate LLM title for {self.id}: {e}")
 
-    async def connect_websocket(self, websocket: WebSocket):
-        """Connect WebSocket for real-time communication with enhanced tracking"""
-        # Log WebSocket connection details
-        websocket_info = {
-            "websocket_id": id(websocket),
-            "websocket_type": type(websocket).__name__,
-            "router_id": self.id,
-        }
+    # PHASE 2: connect_websocket method removed - WebSocket now passed as parameter to methods
 
-        if hasattr(websocket, "client_state"):
-            websocket_info["client_state"] = str(websocket.client_state)
-        if hasattr(websocket, "scope"):
-            websocket_info["scope_path"] = websocket.scope.get("path", "unknown")
-            websocket_info["scope_client"] = websocket.scope.get("client", "unknown")
-
-        logger.info(f"Connecting WebSocket to router {self.id}: {websocket_info}")
-
-        self.websocket = websocket
-
-        # Send message history to frontend
-        await self.send_message_history()
-
-    async def handle_message(self, message_data: dict):
+    async def handle_message(self, message_data: dict, websocket: WebSocket):
         """Main message handler - processes user messages"""
         # Lock input for this router immediately
-        await self.send_input_lock()
+        await self.send_input_lock(websocket=websocket)
 
         user_message = message_data.get("message", "")
         files = message_data.get("files", [])
@@ -323,11 +336,11 @@ class RouterAgent:
         )
 
         # Store user message
-        self.add_message("user", user_message)
+        self.add_message(role="user", content=user_message)
 
         try:
             # Send processing status
-            await self.send_status("Thinking")
+            await self.send_status(status="Thinking", websocket=websocket)
 
             # Determine response type
             logger.info(
@@ -335,7 +348,7 @@ class RouterAgent:
             )
             if files:
                 logger.info(f"DEBUG: Taking complex request path with files: {files}")
-                await self.handle_complex_request(files=files)
+                await self.handle_complex_request(websocket=websocket, files=files)
                 # Complex request handles its own messaging - no response to send
             else:
                 logger.info(f"DEBUG: Taking simple chat path - no files provided")
@@ -359,7 +372,7 @@ class RouterAgent:
                 if any(boolean_requirements):
                     # We need complex handling - simple chat result is discarded
                     await self.handle_complex_request(
-                        agent_requirements=agent_requirements
+                        websocket=websocket, agent_requirements=agent_requirements
                     )
                     # Complex request handles its own messaging - no response to send
                 else:
@@ -367,17 +380,17 @@ class RouterAgent:
                     response = simple_chat_task.result()
                     logger.info(f"Response generated in router:\n{response}")
                     # Store and send response for simple chat only
-                    self.add_message("assistant", response)
-                    await self.send_assistant_message(response)
+                    self.add_message(role="assistant", content=response)
+                    await self.send_assistant_message(content=response, websocket=websocket)
 
         except Exception as e:
             logger.error(
                 f"Error handling message in router {self.id}: {str(e)}", exc_info=True
             )
-            await self.send_error(f"Error: {str(e)}")
+            await self.send_error(error=f"Error: {str(e)}", websocket=websocket)
         finally:
             # Always unlock input for this router, even if processing failed
-            await self.send_input_unlock()
+            await self.send_input_unlock(websocket=websocket)
 
     async def handle_simple_chat(self) -> str:
         """Handle simple conversational messages"""
@@ -407,7 +420,7 @@ class RouterAgent:
         return response
 
     async def handle_complex_request(
-        self, files: list = None, agent_requirements: RequireAgent = None
+        self, websocket: WebSocket, files: list = None, agent_requirements: RequireAgent = None
     ):
         """Handle complex requests requiring planner - runs asynchronously in background"""
         logger.info(
@@ -477,13 +490,13 @@ class RouterAgent:
             # Process each file group sequentially
             for i, file_group in enumerate(file_groups, 1):
                 if len(file_groups) > 1:
-                    await self.send_status(f"Processing file group {i}/{len(file_groups)}: {', '.join(file_group)}")
+                    await self.send_status(status=f"Processing file group {i}/{len(file_groups)}: {', '.join(file_group)}", websocket=websocket)
                 else:
                     logger.info(f"DEBUG: Processing single file group with files: {file_group}")
 
                 # Start background task for this file group - no return value, runs asynchronously
                 await self._invoke_single(
-                    file_group, user_question, instructions, agent_requirements
+                    files=file_group, user_question=user_question, instructions=instructions, websocket=websocket, agent_requirements=agent_requirements
                 )
                 logger.info(
                     f"DEBUG: File group {i} planner queued for background processing"
@@ -496,7 +509,7 @@ class RouterAgent:
             logger.info(f"DEBUG: No files - using _invoke_single with empty files list")
             # No files, use _invoke_single with empty files list
             await self._invoke_single(
-                [], user_question, instructions, agent_requirements
+                [], user_question, instructions, websocket, agent_requirements
             )
 
     async def process_files(self, file_paths: list) -> tuple[list, list]:
@@ -674,6 +687,7 @@ class RouterAgent:
         files: list,
         user_question: str,
         instructions: list,
+        websocket: WebSocket,
         agent_requirements: RequireAgent = None,
     ):
         """Invoke planner for single file, combined, or non-file processing - runs asynchronously in background"""
@@ -724,9 +738,11 @@ class RouterAgent:
             logger.info(f"DEBUG: Using default planner (no special name)")
 
         # Send "Agents assemble!" message first and capture its ID
-        agents_assemble_message_id = self.add_message("assistant", "Agents assemble!")
+        agents_assemble_message_id = self.add_message(role="assistant", content="Agents assemble!")
+        logger.info(f"DEBUG: Agents assemble message_id from add_message: {agents_assemble_message_id} (type: {type(agents_assemble_message_id)})")
+        logger.info(f"DEBUG: WebSocket parameter is: {websocket} (None: {websocket is None})")
         await self.send_assistant_message(
-            "Agents assemble!", agents_assemble_message_id
+            content="Agents assemble!", websocket=websocket, message_id=agents_assemble_message_id
         )
 
         logger.info(
@@ -737,14 +753,20 @@ class RouterAgent:
         planner_id = uuid.uuid4().hex
         logger.info(f"DEBUG: Generated planner_id: {planner_id}")
 
+        # Prepare files for payload - handle None case
+        if processed_files is None:
+            files = []
+        else:
+            files = [
+                f.model_dump() if hasattr(f, "model_dump") else f
+                for f in processed_files
+            ]
+
         # Queue initial planning task with complete payload
         payload = {
             "user_question": user_question,
             "instruction": "\n\n---\n\n".join(all_instructions),
-            "files": [
-                f.model_dump() if hasattr(f, "model_dump") else f
-                for f in processed_files
-            ],
+            "files": files,
             "planner_name": planner_name,
             "message_id": agents_assemble_message_id,
             "router_id": self.id,
@@ -775,10 +797,10 @@ class RouterAgent:
         # No return value - planner runs in background
 
     # WebSocket communication methods
-    async def send_user_message(self, content: str):
+    async def send_user_message(self, content: str, websocket: WebSocket):
         """Send user message to frontend"""
-        if self.websocket:
-            await self.websocket.send_json(
+        if websocket:
+            await websocket.send_json(
                 {
                     "type": "message",
                     "role": "user",
@@ -787,18 +809,22 @@ class RouterAgent:
                 }
             )
 
-    async def send_status(self, status: str):
+    async def send_status(self, status: str, websocket: WebSocket):
         """Send status update to frontend"""
-        if self.websocket:
-            await self.websocket.send_json(
+        if websocket:
+            await websocket.send_json(
                 {"type": "status", "message": status, "router_id": self.id}
             )
 
     async def send_assistant_message(
-        self, content: str, message_id: Optional[int] = None
+        self, content: str, websocket: WebSocket, message_id: Optional[int] = None
     ):
         """Send assistant message to frontend"""
-        if self.websocket:
+        # Debug logging for Agents assemble messages
+        if content == "Agents assemble!":
+            logger.info(f"DEBUG: send_assistant_message called with websocket={websocket is not None}, message_id={message_id}")
+        
+        if websocket:
             response_data = {
                 "type": "response",
                 "message": content,
@@ -806,23 +832,32 @@ class RouterAgent:
             }
             if message_id is not None:
                 response_data["message_id"] = message_id
-            await self.websocket.send_json(response_data)
+            
+            # Debug logging for Agents assemble messages
+            if content == "Agents assemble!":
+                logger.info(f"DEBUG: Sending Agents assemble WebSocket message: {response_data}")
+            
+            await websocket.send_json(response_data)
+        else:
+            # Debug logging when websocket is None
+            if content == "Agents assemble!":
+                logger.warning(f"DEBUG: Cannot send Agents assemble message - WebSocket is None!")
 
-    async def send_error(self, error: str):
+    async def send_error(self, error: str, websocket: WebSocket):
         """Send error message to frontend"""
-        if self.websocket:
-            await self.websocket.send_json(
+        if websocket:
+            await websocket.send_json(
                 {"type": "error", "message": error, "router_id": self.id}
             )
 
-    async def send_message_history(self):
+    async def send_message_history(self, websocket: WebSocket):
         """Send message history to frontend on connect"""
-        if self.websocket:
+        if websocket:
             # Only send history if there are actual messages (excluding system messages)
             router_messages = [
                 msg for msg in self.messages if msg.get("role") != "system"
             ]
-            await self.websocket.send_json(
+            await websocket.send_json(
                 {
                     "type": "message_history",
                     "messages": router_messages,
@@ -830,33 +865,33 @@ class RouterAgent:
                 }
             )
 
-    async def send_input_lock(self):
+    async def send_input_lock(self, websocket: WebSocket):
         """Lock input for this specific router"""
         # Update router status to processing
         self.status = "processing"
 
-        if self.websocket:
-            await self.websocket.send_json(
+        if websocket:
+            await websocket.send_json(
                 {
                     "type": "input_lock",
                     "router_id": self.id,
                 }
             )
 
-    async def send_input_unlock(self):
+    async def send_input_unlock(self, websocket: WebSocket):
         """Unlock input for this specific router"""
         # Update router status back to active
         self.status = "active"
 
-        if self.websocket:
-            await self.websocket.send_json(
+        if websocket:
+            await websocket.send_json(
                 {
                     "type": "input_unlock",
                     "router_id": self.id,
                 }
             )
 
-    async def handle_planner_completion(self, planner_id: str):
+    async def handle_planner_completion(self, planner_id: str, websocket: WebSocket):
         """Handle completed planner - add response to message chain and send to frontend"""
         logger.info(f"Handling planner completion for planner {planner_id}")
 
@@ -875,11 +910,11 @@ class RouterAgent:
                 return
 
             # Add to router's message chain
-            self.add_message("assistant", user_response)
+            self.add_message(role="assistant", content=user_response)
 
             # Send to frontend via WebSocket (if connected) - no message_id needed for final response
-            if self.websocket:
-                await self.send_assistant_message(user_response)
+            if websocket:
+                await self.send_assistant_message(content=user_response, websocket=websocket)
                 logger.info(f"Sent planner completion response to frontend")
             else:
                 logger.warning(

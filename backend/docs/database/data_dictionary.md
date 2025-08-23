@@ -79,7 +79,8 @@ Task/worker execution details and lifecycle management.
 | task_status | VARCHAR(50) | NOT NULL | Task execution state | Values: pending, in_progress, completed, failed_validation, recorded |
 | task_description | TEXT | | Detailed task description | Human-readable task definition |
 | acceptance_criteria | JSON | | Success criteria list | Array of validation requirements |
-| task_context | JSON | | TaskContext pydantic model | Structured context including user_request, context, previous_outputs |
+| user_request | TEXT | | Original user request | Simplified context from user's question |
+| wip_answer_template | TEXT | | Work-in-progress answer template | Progressively filled markdown template |
 | task_result | TEXT | | Execution outcome | Detailed result description |
 | querying_structured_data | BOOLEAN | DEFAULT FALSE | Data file query flag | Determines WorkerAgent vs WorkerAgentSQL |
 | image_keys | JSON | | Relevant image identifiers | Array of image keys from planner |
@@ -105,12 +106,11 @@ Task/worker execution details and lifecycle management.
 **JSON Field Structures:**
 
 ```json
-// task_context example
-{
-  "user_request": "Analyse the sales data",
-  "context": "Previous analysis showed declining Q3 trends",
-  "previous_outputs": "CSV data loaded as sales_table"
-}
+// user_request example
+"Analyse the sales data to identify trends and create visualisations"
+
+// wip_answer_template example
+"# Sales Analysis Results\n\n## Overview\n[Analysis summary to be filled]\n\n## Key Findings\n- Q3 trends: [To be determined]\n- Top products: [To be filled]"
 
 // acceptance_criteria example
 [

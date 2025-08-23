@@ -82,9 +82,22 @@ export const MessageList: React.FC<MessageListProps> = ({
   
   // Helper function to check if message is "Agents assemble!" and has planner
   const isAgentsAssembleMessage = (message: ChatMessage) => {
-    return message.sender === 'assistant' && 
-           message.message === 'Agents assemble!' && 
-           message.messageId;
+    const isAgents = message.sender === 'assistant' && 
+                     message.message === 'Agents assemble!' && 
+                     message.messageId;
+    
+    // Debug logging for agents assemble messages
+    if (message.sender === 'assistant' && message.message === 'Agents assemble!') {
+      console.log('[DEBUG] Agents assemble message detected:', {
+        messageId: message.messageId,
+        hasMessageId: !!message.messageId,
+        messageIdType: typeof message.messageId,
+        isAgents,
+        fullMessage: message
+      });
+    }
+    
+    return isAgents;
   };
   
   // Helper function to toggle expansion of a message

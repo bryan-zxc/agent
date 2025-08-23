@@ -184,7 +184,7 @@ Database models and service for agent message persistence and state management.
   - `clear_messages(agent_type, agent_id)`: Clear router history
 - **Planner Linking Methods (Schema V2):**
   - `link_message_planner(router_id, message_id, planner_id)`: Associate planner with specific message
-  - `get_planner_by_message(message_id)`: Retrieve planner info for a specific message
+  - `get_planner_by_message(message_id)`: Retrieve planner info for a specific message (async)
   - `get_planner_by_router(router_id)`: Get all planners for router (legacy)
 - **Migration Features:**
   - `_migrate_v1_to_v2()`: Automatic schema migration on startup
@@ -336,8 +336,8 @@ Task definition and execution models.
   - `task_id`: Unique identifier
   - `task_status`: Execution status (new, completed, failed, recorded)
   - `task_result`: Execution outcome
-  - `input_images/variables`: Input data
-  - `output_images/variables`: Output data
+  - `input_image_filepaths/input_variable_filepaths`: Input data file paths
+  - `output_image_filepaths/output_variable_filepaths`: Output data file paths
   - `tables`: Database table metadata
 
 #### Execution Models

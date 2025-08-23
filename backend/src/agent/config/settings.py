@@ -61,6 +61,12 @@ class AgentSettings(BaseSettings):
     worker_message_history_filename: str = Field(
         default="worker_message_history.json", description="Filename for worker message history in planner directory"
     )
+    answer_template_filename: str = Field(
+        default="answer_template.md", description="Filename for answer template in planner directory"
+    )
+    wip_answer_template_filename: str = Field(
+        default="wip_answer_template.md", description="Filename for work-in-progress answer template in planner directory"
+    )
 
     # Environment
     environment: str = Field(default="development", description="Current environment")

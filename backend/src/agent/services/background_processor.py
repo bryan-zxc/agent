@@ -44,7 +44,6 @@ class BackgroundTaskProcessor:
                 "execute_initial_planning": planner_tasks.execute_initial_planning,
                 "execute_task_creation": planner_tasks.execute_task_creation,
                 "execute_synthesis": planner_tasks.execute_synthesis,
-                "execute_completion_check": planner_tasks.execute_completion_check,
             })
             
             # Import worker task functions  
@@ -91,8 +90,8 @@ class BackgroundTaskProcessor:
         """
         while self.running:
             try:
-                # Get all pending tasks
-                pending_tasks = self.db.get_pending_tasks()
+                # Get all pending tasks (now async)
+                pending_tasks = await self.db.get_pending_tasks()
                 
                 if pending_tasks:
                     logger.debug(f"Found {len(pending_tasks)} pending task(s)")
@@ -155,9 +154,9 @@ class BackgroundTaskProcessor:
             # TODO: Implement retry logic based on retry_count and max_retries
             # For now, just log the failure
     
-    def get_status(self) -> Dict[str, Any]:
+    async def get_status(self) -> Dict[str, Any]:
         """Get processor status information"""
-        pending_tasks = self.db.get_pending_tasks()
+        pending_tasks = await self.db.get_pending_tasks()
         
         return {
             "running": self.running,

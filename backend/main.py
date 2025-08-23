@@ -46,9 +46,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Store active connections
-active_connections = {}  # router_id -> RouterAgent
-user_connections = {}  # websocket -> user_session
+# PHASE 3: Ephemeral router architecture - removed active_connections
+# Simple session tracking only
+websocket_sessions = {}  # websocket -> {session_id, user_info}
 
 # Initialize database
 db = AgentDatabase()
@@ -100,15 +100,13 @@ async def websocket_endpoint(websocket: WebSocket):
         
     logger.info(f"WebSocket connection established: {connection_info}")
 
-    # Store connection with a session ID
+    # PHASE 3: Simplified session tracking
     import uuid
 
     session_id = uuid.uuid4().hex
-    user_connections[websocket] = {
+    websocket_sessions[websocket] = {
         "session_id": session_id,
-        "current_router": None,
         "connection_info": connection_info,
-        "established_at": logger.info.__globals__.get('datetime', __import__('datetime')).datetime.now().isoformat() if 'datetime' in logger.info.__globals__ else "unknown"
     }
 
     try:
@@ -125,91 +123,58 @@ async def websocket_endpoint(websocket: WebSocket):
             asyncio.create_task(handle_websocket_message(websocket, data))
 
     except WebSocketDisconnect:
-        # Clean up connection
-        if websocket in user_connections:
-            session_info = user_connections[websocket]
-            del user_connections[websocket]
+        # PHASE 3: Simple session cleanup
+        if websocket in websocket_sessions:
+            session_info = websocket_sessions[websocket]
+            del websocket_sessions[websocket]
             logger.info(f"Client session {session_info['session_id']} disconnected - connection info: {session_info.get('connection_info', {})}")
+        # No router cleanup needed - routers are ephemeral
 
 
 async def handle_websocket_message(websocket: WebSocket, data: dict):
-    """Handle incoming WebSocket messages with router routing"""
+    """PHASE 3: Ephemeral router message handling - create router on-demand"""
     try:
         message_type = data.get("type", "message")
 
         if message_type == "load_router":
-            # Load router history
+            # Load router history - create ephemeral router instance
             router_id = data.get("router_id")
             if router_id:
-                router = RouterAgent(router_id=router_id)
-                # Update current router for this session
-                user_connections[websocket]["current_router"] = router_id
-
-                # Send message history
-                await websocket.send_json(
-                    {
-                        "type": "message_history",
-                        "router_id": router_id,
-                        "messages": router.messages,
-                    }
-                )
+                logger.info(f"Loading router history for {router_id}")
+                router = RouterAgent(router_id=router_id)  # Load from database
+                
+                # Send message history using WebSocket parameter
+                await router.send_message_history(websocket=websocket)
+                logger.info(f"Sent message history for router {router_id}")
+                # Router instance discarded after use
 
         elif message_type == "message":
-            # Regular chat message
+            # Regular chat message - ephemeral router creation
             router_id = data.get("router_id")
             is_new_conversation = not router_id
             
-            # Get or create router for this router session
-            if router_id and router_id in active_connections:
-                # Existing conversation - update WebSocket and handle message
-                logger.info(f"Using existing router for router {router_id}")
-                router = active_connections[router_id]
+            if is_new_conversation:
+                # Brand new conversation - create fresh RouterAgent
+                logger.info(f"Creating new ephemeral router for new conversation")
+                router = RouterAgent()  # Let RouterAgent generate its own ID
+                router_id = router.id   # Get the generated ID
+                logger.info(f"Generated new router_id: {router_id}")
                 
-                # Log WebSocket connection update
-                old_websocket_id = id(router.websocket) if router.websocket else "None"
-                new_websocket_id = id(websocket)
-                logger.info(f"Updating WebSocket for router {router_id}: {old_websocket_id} -> {new_websocket_id}")
+                # For new conversations, use activate_conversation with WebSocket
+                user_message = data.get("message", "")
+                files = data.get("files", [])
+                await router.activate_conversation(user_message=user_message, files=files, websocket=websocket)
                 
-                # Update websocket connection for existing router
-                router.websocket = websocket
-                user_connections[websocket]["current_router"] = router_id
-                
-                # Handle the message for existing routers
-                await router.handle_message(data)
             else:
-                # New conversation or router not in active connections
-                if is_new_conversation:
-                    # Brand new conversation - create RouterAgent without router_id
-                    logger.info(f"Creating new router for new conversation")
-                    router = RouterAgent()  # Let RouterAgent generate its own ID
-                    router_id = router.id   # Get the generated ID
-                    logger.info(f"Generated new router_id: {router_id}")
-                    
-                    await router.connect_websocket(websocket)
-                    active_connections[router_id] = router
-                    user_connections[websocket]["current_router"] = router_id
-                    
-                    # Log active connection mapping
-                    logger.info(f"Stored router {router_id} with WebSocket ID {id(websocket)} in active_connections")
-                    
-                    # For truly new conversations, use activate_conversation
-                    user_message = data.get("message", "")
-                    files = data.get("files", [])
-                    await router.activate_conversation(user_message, files)
-                else:
-                    # Existing conversation but router not in active connections - load from DB
-                    logger.info(f"Creating router for existing conversation {router_id}")
-                    router = RouterAgent(router_id=router_id)
-                    
-                    await router.connect_websocket(websocket)
-                    active_connections[router_id] = router
-                    user_connections[websocket]["current_router"] = router_id
-                    
-                    # Log active connection mapping
-                    logger.info(f"Stored router {router_id} with WebSocket ID {id(websocket)} in active_connections")
-                    
-                    # For existing conversations, handle message normally
-                    await router.handle_message(data)
+                # Existing conversation - create ephemeral router from database
+                logger.info(f"Creating ephemeral router for existing conversation {router_id}")
+                router = RouterAgent(router_id=router_id)  # Load state from database
+                
+                # Handle message with WebSocket parameter
+                await router.handle_message(message_data=data, websocket=websocket)
+                
+            logger.info(f"Message processed by ephemeral router {router_id} - instance discarded")
+            # Router instance automatically discarded after handling
 
     except Exception as e:
         # Log detailed error information for WebSocket message handling
@@ -475,8 +440,8 @@ async def activate_router(router_id: str, request: dict):
         # Activate the router (this will add system message and process user message)
         await router.activate_conversation(user_message, files)
 
-        # Store the router for WebSocket connections
-        active_connections[router_id] = router
+        # PHASE 3: No need to store router - ephemeral architecture
+        # Router state is persisted in database, not memory
 
         # Get the conversation messages to return the assistant's response
         messages = router.messages
@@ -510,46 +475,14 @@ async def update_router_title(router_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/routers/{planner_id}/handle-planner-completion")
-async def handle_planner_completion(planner_id: str):
-    """Handle planner completion - get router_id from planner and call completion handler"""
-    try:
-        # Get planner to extract router_id
-        planner = db.get_planner(planner_id)
-        if not planner:
-            raise HTTPException(status_code=404, detail=f"Planner {planner_id} not found")
-        
-        # Get router_id from planner data (from message link)
-        planner_by_message = db.get_planner_by_message(planner.get("message_id"))
-        if not planner_by_message:
-            raise HTTPException(status_code=404, detail=f"Router link not found for planner {planner_id}")
-        
-        router_id = planner_by_message.get("router_id")
-        if not router_id:
-            raise HTTPException(status_code=404, detail=f"Router ID not found for planner {planner_id}")
-        
-        # Get existing RouterAgent instance with WebSocket connection
-        router = active_connections.get(router_id)
-        if not router:
-            raise HTTPException(status_code=404, detail=f"Active router connection not found for router {router_id}")
-        
-        # Call completion handler on existing router instance
-        await router.handle_planner_completion(planner_id)
-
-        return {"status": "completed", "planner_id": planner_id, "router_id": router_id}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error handling planner completion: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/messages/{message_id}/planner-info")
 async def get_message_planner_info(message_id: int):
     """Get planner information for a specific message"""
     try:
-        # Get planner associated with this specific message
-        planner = db.get_planner_by_message(message_id)
+        # Get planner associated with this specific message (now async)
+        planner = await db.get_planner_by_message(message_id)
         
         if not planner:
             return {
@@ -583,9 +516,22 @@ async def get_usage_stats():
         from sqlalchemy.orm import sessionmaker
         from src.agent.services.llm_service import LLMUsage, Base
         
-        # Database setup
+        # Database setup with WAL mode optimisations (same as LLM service)
         db_path = Path("/app/db/llm_usage.db")
-        engine = create_engine(f"sqlite:///{db_path}")
+        engine = create_engine(
+            f"sqlite:///{db_path}",
+            connect_args={
+                "check_same_thread": False,
+                "timeout": 30,
+            },
+        )
+        
+        # Configure WAL mode for this connection
+        with engine.connect() as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+            conn.commit()
+        
         Base.metadata.create_all(engine)
         Session = sessionmaker(bind=engine)
         

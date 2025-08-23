@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { PlannerInfo } from '../../../shared/types';
+import { useWebSocket } from './useWebSocket';
+import { useChatStore } from '../stores/chatStore';
 
 interface UsePlannerInfoResult {
   plannerInfo: PlannerInfo | null;
@@ -9,12 +11,18 @@ interface UsePlannerInfoResult {
 }
 
 export const usePlannerInfo = (
-  messageId: number | null
+  messageId: number | null,
+  shouldPoll: boolean = true
 ): UsePlannerInfoResult => {
   const [plannerInfo, setPlannerInfo] = useState<PlannerInfo | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [hasCalledCompletion, setHasCalledCompletion] = useState(false);
+  const [hasRefreshedMessages, setHasRefreshedMessages] = useState(false);
   
+  // Get WebSocket and store access for conversation refresh
+  const { loadConversation } = useWebSocket();
+  const currentRouterId = useChatStore(state => state.currentRouterId);
 
   const fetchPlannerInfo = useCallback(async () => {
     if (!messageId) {
@@ -48,6 +56,8 @@ export const usePlannerInfo = (
     // Always fetch from API since we should always have a messageId
     if (messageId) {
       fetchPlannerInfo();
+      setHasCalledCompletion(false); // Reset completion flag for new message
+      setHasRefreshedMessages(false); // Reset refresh flag for new message
     } else {
       setPlannerInfo(null);
     }
@@ -57,13 +67,16 @@ export const usePlannerInfo = (
   useEffect(() => {
     if (!messageId) return;
     
-    // Don't poll if planner is already completed
-    if (plannerInfo?.status === 'completed') return;
+    // Don't poll unless explicitly requested
+    if (!shouldPoll) return;
+    
+    // Don't poll if planner is already completed or completion handler already called
+    if (plannerInfo?.status === 'completed' || hasCalledCompletion) return;
 
     console.log(`[FRONTEND] Starting polling for planner updates - message ${messageId}`);
     
     const pollInterval = setInterval(async () => {
-      console.log(`[FRONTEND] Polling for planner updates - message ${messageId}, current status: ${plannerInfo?.status}`);
+      console.log(`[FRONTEND] Polling for planner updates - message ${messageId}, current status: ${plannerInfo?.status}, completion called: ${hasCalledCompletion}`);
       
       try {
         const response = await fetch(
@@ -74,32 +87,21 @@ export const usePlannerInfo = (
           const data: PlannerInfo = await response.json();
           setPlannerInfo(data);
           
-          // If planner is completed, trigger completion handler and stop polling
-          if (data.status === 'completed' && data.planner_id) {
-            console.log(`[FRONTEND] Planner ${data.planner_id} completed - triggering completion handler`);
+          // PHASE 1: Simplified completion detection with message refresh
+          if (data.status === 'completed') {
+            console.log(`[FRONTEND] Planner ${data.planner_id} completed - refreshing messages and stopping polling`);
             
-            // Call router completion API
-            try {
-              const completionResponse = await fetch(
-                `${process.env.NEXT_PUBLIC_API_URL}/routers/${data.planner_id}/handle-planner-completion`,
-                {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                  },
-                }
-              );
-              
-              if (completionResponse.ok) {
-                console.log(`[FRONTEND] Planner completion handler called successfully`);
-              } else {
-                console.error(`[FRONTEND] Failed to call planner completion handler:`, completionResponse.statusText);
-              }
-            } catch (completionError) {
-              console.error(`[FRONTEND] Error calling planner completion handler:`, completionError);
+            // Refresh conversation messages if we haven't already and have router ID
+            if (!hasRefreshedMessages && currentRouterId && loadConversation) {
+              console.log(`[FRONTEND] Triggering conversation refresh for router ${currentRouterId}`);
+              loadConversation(currentRouterId);
+              setHasRefreshedMessages(true);
             }
             
-            return; // Stop polling
+            // Set completion flag and stop polling
+            setHasCalledCompletion(true);
+            clearInterval(pollInterval);
+            return;
           }
         }
       } catch (error) {
@@ -107,12 +109,12 @@ export const usePlannerInfo = (
       }
     }, 2000); // Poll every 2 seconds
 
-    // Cleanup polling on unmount or when planner is completed
+    // Cleanup polling on unmount
     return () => {
       console.log(`[FRONTEND] Stopping polling for message ${messageId}`);
       clearInterval(pollInterval);
     };
-  }, [messageId, plannerInfo?.status]);
+  }, [messageId, shouldPoll, hasCalledCompletion, hasRefreshedMessages, currentRouterId, loadConversation]);
 
   return {
     plannerInfo,

@@ -22,6 +22,8 @@ from ..models import (
     Task,
     ExecutionPlanModel,
     TaskResponseModel,
+    AnswerTemplate,
+    File,
 )
 from ..services.llm_service import LLM
 from ..config.settings import settings
@@ -37,6 +39,10 @@ from .file_manager import (
     save_planner_variable,
     save_planner_image,
     save_execution_plan_model,
+    save_answer_template,
+    save_wip_answer_template,
+    load_answer_template,
+    load_wip_answer_template,
     load_execution_plan_model,
     save_current_task,
     load_variable_from_file,
@@ -46,6 +52,7 @@ from .file_manager import (
     load_worker_message_history,
 )
 from .task_utils import update_planner_next_task_and_queue, queue_worker_task
+from .message_manager import MessageManager
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +144,16 @@ async def execute_initial_planning(task_data: dict):
     user_question = payload["user_question"]
     instruction = payload.get("instruction")
     files = payload.get("files", [])
+    # Convert dictionary files back to File objects, filtering None values to allow Pydantic defaults
+    cleaned_files = []
+    for f in files:
+        if isinstance(f, dict):
+            # Remove None values so Pydantic can use default values (e.g., image_context = [])
+            cleaned_f = {k: v for k, v in f.items() if v is not None}
+            cleaned_files.append(File.model_validate(cleaned_f))
+        else:
+            cleaned_files.append(f)
+    files = cleaned_files
     planner_name = payload.get("planner_name")
     message_id = payload.get("message_id")
     router_id = payload.get("router_id")
@@ -177,8 +194,14 @@ async def execute_initial_planning(task_data: dict):
             temperature=temperature,
             failed_task_limit=failed_task_limit,
             status="planning",
-            next_task="execute_task_creation",  # Set next task for continuation
+            next_task="execute_initial_planning",  # Current task for restart/resumability
         )
+
+        # Create message manager for this planner (now that planner exists)
+        message_manager = MessageManager(db, "planner", planner_id)
+
+        # Initialize messages variable for consistent state tracking
+        messages = message_manager.get_messages()
 
         # Initialize planner collections (following PlannerAgent.__init__ pattern)
         tables = []
@@ -190,9 +213,7 @@ async def execute_initial_planning(task_data: dict):
         db_path = planner_dir / "database.db"
 
         # Add system message for new planners only (exact copy from PlannerAgent)
-        db.add_message(
-            agent_id=planner_id,
-            agent_type="planner",
+        messages = message_manager.add_message(
             role="system",
             content="You are an expert planner. "
             "Your objective is to break down the user's instruction into a list of tasks that can be individually executed."
@@ -201,6 +222,12 @@ async def execute_initial_planning(task_data: dict):
             "If there still are analysis especially calculations that is required to be applied to the facts, then you need to create further tasks to complete. "
             "Typically facts are pre-extracted and likely to be in the form of question and answer pairs, "
             "if the questions don't seem to be fully aligned to what is required for analysis, you can activate relevant tools to re-extract facts. ",
+        )
+
+        # Add user question to planner message history so it has user context for answer template creation
+        messages = message_manager.add_message(
+            role="user",
+            content=user_question,
         )
 
         # Process files following the exact pattern from PlannerAgent.__init__
@@ -220,9 +247,7 @@ async def execute_initial_planning(task_data: dict):
                     f.filename = image_name
 
                     # Add message about image processing (exact copy from PlannerAgent)
-                    db.add_message(
-                        agent_id=planner_id,
-                        agent_type="planner",
+                    messages = message_manager.add_message(
                         role="user",
                         content=f.model_dump_json(indent=2, include={"image_context"}),
                     )
@@ -240,17 +265,25 @@ async def execute_initial_planning(task_data: dict):
                         duck_conn.sql(
                             f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM read_csv('{f.filepath}',strict_mode=false)"
                         )
-                        logger.info(f"Created table {table_name} from CSV: {f.filepath}")
+                        logger.info(
+                            f"Created table {table_name} from CSV: {f.filepath}"
+                        )
                     except Exception as e:
-                        logger.warning(f"Failed to create table {table_name} with normal CSV read, trying all_varchar: {e}")
+                        logger.warning(
+                            f"Failed to create table {table_name} with normal CSV read, trying all_varchar: {e}"
+                        )
                         try:
                             # Fallback: try with all_varchar=true
                             duck_conn.sql(
                                 f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM read_csv('{f.filepath}',strict_mode=false,all_varchar=true)"
                             )
-                            logger.info(f"Created table {table_name} from CSV using all_varchar fallback: {f.filepath}")
+                            logger.info(
+                                f"Created table {table_name} from CSV using all_varchar fallback: {f.filepath}"
+                            )
                         except Exception as e2:
-                            logger.error(f"Failed to create table {table_name} even with all_varchar: {e2}")
+                            logger.error(
+                                f"Failed to create table {table_name} even with all_varchar: {e2}"
+                            )
                             # Add error message instead of table creation message
                             db.add_message(
                                 agent_id=planner_id,
@@ -272,7 +305,9 @@ async def execute_initial_planning(task_data: dict):
                         content=f"Data file `{f.filepath}` converted to table `{table_name}` in database. Below is table metadata:\n\n{table_meta.model_dump_json(indent=2)}",
                     )
 
-                elif f.file_type == "document" and f.document_context.file_type == "text":
+                elif (
+                    f.file_type == "document" and f.document_context.file_type == "text"
+                ):
                     # Read the text file content using the stored encoding
                     try:
                         text_content = Path(f.filepath).read_text(
@@ -289,7 +324,9 @@ async def execute_initial_planning(task_data: dict):
                             role="user",
                             content=f"Text file `{Path(f.filepath).name}` contains the following content:\n\n{limited_content}",
                         )
-                        logger.info(f"Processed text file: {f.filepath} with encoding {f.document_context.encoding}")
+                        logger.info(
+                            f"Processed text file: {f.filepath} with encoding {f.document_context.encoding}"
+                        )
                     except Exception as e:
                         db.add_message(
                             agent_id=planner_id,
@@ -299,7 +336,9 @@ async def execute_initial_planning(task_data: dict):
                         )
                         logger.error(f"Failed to read text file {f.filepath}: {e}")
 
-                elif f.file_type == "document" and f.document_context.file_type == "pdf":
+                elif (
+                    f.file_type == "document" and f.document_context.file_type == "pdf"
+                ):
                     # Add message about PDF file being available for processing
                     db.add_message(
                         agent_id=planner_id,
@@ -342,11 +381,11 @@ async def execute_initial_planning(task_data: dict):
         )
 
         # Get messages for LLM call
-        messages = db.get_messages_by_agent_id(planner_id, "planner")
+        messages = db.get_messages(agent_type="planner", agent_id=planner_id)
 
         # Get initial execution plan from LLM
         initial_plan = await llm.a_get_response(
-            messages=messages + [{"role": "user", "content": plan_prompt}],
+            messages=messages + [{"role": "developer", "content": plan_prompt}],
             model=model,
             temperature=temperature,
             response_format=InitialExecutionPlan,
@@ -365,6 +404,39 @@ async def execute_initial_planning(task_data: dict):
 
         # Save execution plan model to dedicated file
         save_execution_plan_model(planner_id, execution_plan_model)
+
+        # Create initial answer template
+        messages = db.get_messages(agent_type="planner", agent_id=planner_id)
+        logger.info(
+            f"DEBUG: Retrieved {len(messages)} messages for planner {planner_id}"
+        )
+
+        answer_template_prompt = (
+            "Based on the information so far, produce a first cut template in Markdown format to provide the final answer to the user's question. "
+            "This should include placeholders for facts, analysis outcomes, and any other relevant information. "
+            "Don't fill any answers into this template even if you have the information, just leave placeholders. "
+            "Do not return anything other than the template itself, don't use ```markdown ... ``` block either."
+        )
+
+        answer_template_messages = messages + [
+            {"role": "developer", "content": answer_template_prompt}
+        ]
+
+        answer_template_response = await llm.a_get_response(
+            messages=answer_template_messages,
+            model=model,
+            temperature=temperature,
+        )
+
+        initial_answer_template = answer_template_response.content.strip()
+
+        # Save both answer template and WIP template (initially the same)
+        save_answer_template(planner_id, initial_answer_template)
+        save_wip_answer_template(planner_id, initial_answer_template)
+
+        logger.info(
+            f"Created and saved initial answer template for planner {planner_id}"
+        )
 
         logger.info(f"Initial planning completed for planner {planner_id}")
         logger.info(f"Planner {planner_id}\nuser question: {user_question}")
@@ -404,8 +476,10 @@ async def execute_task_creation(task_data: dict):
 
         # Check if there are pending tasks to create
         if not has_pending_tasks(execution_plan_model):
-            logger.info(f"No pending tasks to create for planner {planner_id}")
-            update_planner_next_task_and_queue(planner_id, "execute_completion_check")
+            logger.error(
+                f"Planner {planner_id} has no pending tasks - this should not happen, marking as failed"
+            )
+            db.update_planner(planner_id, status="failed")
             return
 
         # Get next task from execution plan
@@ -417,7 +491,7 @@ async def execute_task_creation(task_data: dict):
             )
 
         # Get planner messages for context
-        messages = db.get_messages_by_agent_id(planner_id, "planner")
+        messages = db.get_messages(agent_type="planner", agent_id=planner_id)
 
         # Create tools text for context
         tools_text = "\n\n---\n\n".join(
@@ -496,14 +570,17 @@ async def execute_task_creation(task_data: dict):
         # Save task to dedicated file for worker initialisation
         save_current_task(planner_id, task)
 
+        # Generate worker_id for this task
+        worker_id = uuid.uuid4().hex
+
         # Set next_task to waiting_for_worker (no queue - planner waits for worker completion)
         db.update_planner(planner_id, next_task="waiting_for_worker")
 
-        # Queue worker initialisation (worker will load task and create FullTask)
-        queue_worker_task(task.task_id, planner_id, "worker_initialisation")
+        # Queue worker initialisation (worker will load task and create worker record)
+        queue_worker_task(worker_id, planner_id, "worker_initialisation")
 
         logger.info(
-            f"Created and queued worker initialisation for task {task.task_id}, planner {planner_id}"
+            f"Created and queued worker initialisation for worker {worker_id}, planner {planner_id}"
         )
 
     except Exception as e:
@@ -511,6 +588,90 @@ async def execute_task_creation(task_data: dict):
         # Set planner as failed
         db.update_planner(planner_id, status="failed")
         raise
+
+
+async def _complete_planner_execution(
+    planner_id: str,
+    execution_plan_model: ExecutionPlanModel,
+    worker_id: str,
+    planner_data: dict,
+    db: AgentDatabase,
+) -> None:
+    """
+    Helper function to handle planner completion logic.
+
+    Args:
+        planner_id: The planner ID
+        execution_plan_model: The current execution plan model to save
+        worker_id: The current worker ID to mark as recorded
+        planner_data: Planner data from database
+        db: Database connection
+    """
+    # Generate final user response (exactly copying planner.py lines 619-637)
+    final_wip_template = load_wip_answer_template(planner_id) or ""
+    planner_messages = db.get_messages(agent_type="planner", agent_id=planner_id)
+
+    # Filter to exclude system messages for final response generation
+    user_response_messages = [
+        msg for msg in planner_messages if msg.get("role") != "system"
+    ] + [
+        {
+            "role": "developer",
+            "content": "The current answer template to the user's original question is:"
+            f"```markdown\n{final_wip_template}\n```\n\n"
+            "Using only provided information without creating any new, complete the answer template to a state that will be seen by the user. "
+            "If there is missing information, simply explain that the information is not found in the provided context, do not try to fill it yourself. "
+            "Return only the markdown answer and nothing else, do not use the user's question as a title. Do not wrap the response in ```markdown ... ``` block. "
+            "Agressively use inline citation such that the citing references provided are used individually whenever possible as opposed to making multiple citings at the end. "
+            "Citations must not ever use information that is meaningless to the user such as task IDs. "
+            "It should be using web links, or file references including page numbers, table/illustration references, or data references. ",
+        }
+    ]
+
+    # Generate final response using LLM
+    response = await llm.a_get_response(
+        messages=user_response_messages,
+        model=planner_data["model"],
+        temperature=planner_data["temperature"],
+    )
+    user_response = response.content.strip()
+    logger.info(f"User response generated in planner: {user_response}")
+
+    # Save final execution plan and mark planner as completed with user response
+    save_execution_plan_model(planner_id, execution_plan_model)
+    execution_plan_markdown = execution_plan_model_to_markdown(execution_plan_model)
+    db.update_planner(
+        planner_id,
+        execution_plan=execution_plan_markdown,
+        status="completed",
+        next_task="completed",
+        user_response=user_response,  # Store final response
+    )
+
+    # PHASE 1: Direct database completion - add response to router messages
+    try:
+        # Get router_id from planner links
+        router_id = db.get_router_id_for_planner(planner_id)
+        if router_id:
+            # Add assistant response directly to router messages
+            message_id = db.add_message("router", router_id, "assistant", user_response)
+            logger.info(f"Added planner completion response to router {router_id} as message {message_id}")
+        else:
+            logger.warning(f"No router_id found for planner {planner_id} - response not added to router messages")
+    except Exception as e:
+        logger.error(f"Failed to add completion response to router messages for planner {planner_id}: {e}")
+        # Don't fail the entire planner - just log the error
+
+    # Mark worker as recorded and skip variable processing - no future tasks need them
+    db.update_worker(worker_id, task_status="recorded")
+    logger.info(f"Planner {planner_id} completed with user response generated")
+
+    # Clean up planner files since planning is complete
+    cleanup_success = cleanup_planner_files(planner_id)
+    if cleanup_success:
+        logger.info(f"Successfully cleaned up files for completed planner {planner_id}")
+    else:
+        logger.warning(f"Failed to clean up files for completed planner {planner_id}")
 
 
 async def execute_synthesis(task_data: dict):
@@ -541,9 +702,10 @@ async def execute_synthesis(task_data: dict):
         ]
 
         if not completed_workers:
-            logger.info(f"No completed workers to process for planner {planner_id}")
-            # Queue next task: completion check
-            update_planner_next_task_and_queue(planner_id, "execute_completion_check")
+            logger.error(
+                f"Planner {planner_id} has no completed workers to process - this should not happen, marking as failed"
+            )
+            db.update_planner(planner_id, status="failed")
             return
 
         # Process each completed worker (following task_result_synthesis pattern)
@@ -555,7 +717,7 @@ async def execute_synthesis(task_data: dict):
             logger.info(f"Processing completed worker {worker_id}: {task_description}")
 
             # 1. Add worker response to planner messages (like original task_result_synthesis)
-            worker_messages = db.get_messages_by_agent_id(worker_id, "worker")
+            worker_messages = db.get_messages(agent_type="worker", agent_id=worker_id)
             task_message_combined = "\n\n---\n\n".join(
                 [
                     msg["content"]
@@ -584,6 +746,58 @@ async def execute_synthesis(task_data: dict):
             )
             append_to_worker_message_history(planner_id, task_response)
 
+            # Update answer template after completed worker (following planner.py pattern lines 414-438)
+            if task_status == "completed":
+                try:
+                    # Load current answer templates
+                    current_answer_template = load_answer_template(planner_id) or ""
+                    current_wip_template = load_wip_answer_template(planner_id) or ""
+
+                    # Get planner messages for template update context
+                    planner_messages = db.get_messages(
+                        agent_type="planner", agent_id=planner_id
+                    )
+
+                    # Create answer template update prompt (following planner.py pattern)
+                    template_update_messages = planner_messages + [
+                        {
+                            "role": "developer",
+                            "content": "The current answer template that will be filled to provide the final answer to the user's question is:\n\n"
+                            f"```markdown\n{current_answer_template}\n```\n\n"
+                            "The latest work in progress fill of the answer template is:\n\n"
+                            f"```markdown\n{current_wip_template}\n```\n\n"
+                            "Update the template if required and further fill the WIP answer with latest information available.\n"
+                            "IMPORTANT: the original template is typically created in absence of information, if the structure should change on discovery of information, do not be restrained by the starting template. "
+                            "If different concepts identified in the data that can answer the user's question as it wasn't specific enough, be eager to include all concepts consistently across the template "
+                            "(e.g. if differing concepts are found in one document, add the concepts to the answer template and make sure you look for the same differences in other documents too). ",
+                        }
+                    ]
+
+                    # Get updated answer template from LLM
+                    answer_template_response = await llm.a_get_response(
+                        messages=template_update_messages,
+                        model=planner_data["model"],
+                        temperature=planner_data["temperature"],
+                        response_format=AnswerTemplate,
+                    )
+
+                    # Save updated templates
+                    updated_template = answer_template_response.template
+                    updated_wip_template = answer_template_response.wip_filled_template
+
+                    save_answer_template(planner_id, updated_template)
+                    save_wip_answer_template(planner_id, updated_wip_template)
+
+                    logger.info(f"Updated answer template for planner {planner_id}")
+                    logger.info(f"Updated answer template:\n{updated_template}")
+                    logger.info(f"Updated WIP answer template:\n{updated_wip_template}")
+
+                except Exception as e:
+                    logger.error(
+                        f"Error updating answer template for planner {planner_id}: {e}"
+                    )
+                    # Continue with execution plan processing even if template update fails
+
             # 2. Update execution plan with retry logic (simplified from original)
             try:
                 execution_plan_model = load_execution_plan_model(planner_id)
@@ -602,7 +816,7 @@ async def execute_synthesis(task_data: dict):
                     )
 
                 # Get planner messages for LLM context
-                messages = db.get_messages_by_agent_id(planner_id, "planner")
+                messages = db.get_messages(agent_type="planner", agent_id=planner_id)
 
                 # Create filtered model with only open todos for LLM
                 open_todos = [
@@ -610,6 +824,17 @@ async def execute_synthesis(task_data: dict):
                     for todo in execution_plan_model.todos
                     if not todo.completed and not todo.obsolete
                 ]
+
+                # Early completion check - if no open todos, activate completion immediately
+                if not open_todos:
+                    logger.info(
+                        f"No open todos found for planner {planner_id} - activating early completion"
+                    )
+                    await _complete_planner_execution(
+                        planner_id, execution_plan_model, worker_id, planner_data, db
+                    )
+                    return  # Exit synthesis completely
+
                 open_todos_model = ExecutionPlanModel(
                     objective=execution_plan_model.objective, todos=open_todos
                 )
@@ -618,18 +843,19 @@ async def execute_synthesis(task_data: dict):
                 update_messages = messages + [
                     {
                         "role": "developer",
-                        "content": f"**Current open tasks from execution plan:**\n\n{open_todos_model.model_dump_json(indent=2)}",
+                        "content": f"**Current open tasks from execution plan:**\n\n{open_todos_model.model_dump_json(indent=2)}\n\n"
+                        f"The latest answer template is:\n\n{updated_wip_template}\n\n"
+                        f"Instructions for reference:\n\n{planner_data.get('instruction', '')}",
                     },
                     {
                         "role": "developer",
                         "content": f"Based on the completed task execution details above for task `{task_description}`, "
-                        f"please update the execution plan. Instructions for reference:\n\n{planner_data.get('instruction', '')}\n\n"
-                        "Follow these rules:\n"
+                        f"please update the execution plan as follows:\n"
                         "1. Update existing task descriptions using updated_description field if needed\n"
                         "2. Add new tasks if required, marking them with '(new)' in the description field\n"
                         "3. Leave next_action as False - separate logic will determine next action\n"
                         "4. Mark unnecessary tasks as obsolete=True\n"
-                        "Return the updated ExecutionPlanModel with open tasks only.",
+                        "Do not create tasks to formulate answer, as the answer is already being formulated progressively with the answer template.",
                     },
                 ]
 
@@ -678,63 +904,9 @@ async def execute_synthesis(task_data: dict):
                     logger.info(
                         f"No more todos available for planner {planner_id} - generating final user response"
                     )
-
-                    # Generate final user response (like original PlannerAgent completion)
-                    planner_messages = db.get_messages_by_agent_id(
-                        planner_id, "planner"
+                    await _complete_planner_execution(
+                        planner_id, final_model, worker_id, planner_data, db
                     )
-
-                    # Filter to get messages after initial system message (context_message_len equivalent)
-                    user_response_messages = planner_messages[1:] + [
-                        {
-                            "role": "developer",
-                            "content": "Using the above information only without creating any information, "
-                            "either copy or create the response/answer to the user's original question/request and format the result in markdown.\n\n"
-                            "Return only the markdown answer and nothing else, do not use the user's question as a title. Do not wrap the response in ```markdown ... ``` block. "
-                            "Aggressively use inline citations such that the citing references (if provided) are used individually whenever possible as opposed to making multiple citations at the end. "
-                            "Remember the user will only see the next response with zero visibility over the message history, so make sure the finalised response is repeated in full here.",
-                        }
-                    ]
-
-                    # Generate final response using LLM
-                    response = await llm.a_get_response(
-                        messages=user_response_messages,
-                        model=planner_data["model"],
-                        temperature=planner_data["temperature"],
-                    )
-                    user_response = response.content.strip()
-                    logger.info(f"User response generated in planner: {user_response}")
-
-                    # Save final execution plan and mark planner as completed with user response
-                    save_execution_plan_model(planner_id, final_model)
-                    execution_plan_markdown = execution_plan_model_to_markdown(
-                        final_model
-                    )
-                    db.update_planner(
-                        planner_id,
-                        execution_plan=execution_plan_markdown,
-                        status="completed",
-                        next_task="completed",
-                        user_response=user_response,  # Store final response
-                    )
-
-                    # Mark worker as recorded and skip variable processing - no future tasks need them
-                    db.update_worker_status(worker_id, "recorded")
-                    logger.info(
-                        f"Planner {planner_id} completed with user response generated"
-                    )
-
-                    # Clean up planner files since planning is complete
-                    cleanup_success = cleanup_planner_files(planner_id)
-                    if cleanup_success:
-                        logger.info(
-                            f"Successfully cleaned up files for completed planner {planner_id}"
-                        )
-                    else:
-                        logger.warning(
-                            f"Failed to clean up files for completed planner {planner_id}"
-                        )
-
                     return  # Exit synthesis completely
 
                 # Save updated execution plan (only if not completed)
@@ -753,7 +925,7 @@ async def execute_synthesis(task_data: dict):
             # 3. Process output images and variables (like original task_result_synthesis)
             if task_status == "completed":
                 # Merge worker output variables
-                worker_output_vars = worker.get("output_variables", {})
+                worker_output_vars = worker.get("output_variable_filepaths", {})
                 if worker_output_vars:
                     for key, file_path in worker_output_vars.items():
                         try:
@@ -777,7 +949,7 @@ async def execute_synthesis(task_data: dict):
                             )
 
                 # Merge worker output images
-                worker_output_imgs = worker.get("output_images", {})
+                worker_output_imgs = worker.get("output_image_filepaths", {})
                 if worker_output_imgs:
                     for key, file_path in worker_output_imgs.items():
                         try:
@@ -804,7 +976,7 @@ async def execute_synthesis(task_data: dict):
                 )
 
             # 4. Mark worker as processed by updating its status to 'recorded'
-            db.update_worker_status(worker_id, "recorded")
+            db.update_worker(worker_id, task_status="recorded")
             logger.info(f"Marked worker {worker_id} as recorded")
 
         logger.info(f"Synthesis completed for planner {planner_id}")

@@ -1,6 +1,5 @@
 from sqlalchemy import Column, String, Text, DateTime, Integer, JSON, create_engine, ForeignKey, Float, Boolean, UniqueConstraint, Index, func
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
 import json
 import logging
@@ -58,6 +57,11 @@ class RouterMessage(Base):
     content = Column(Text, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     
+    # Add composite index for message history queries
+    __table_args__ = (
+        Index('idx_router_created', 'router_id', 'created_at'),
+    )
+    
     def to_message_dict(self) -> Dict[str, Any]:
         """Convert database record back to message format"""
         return {
@@ -95,7 +99,7 @@ class Planner(Base):
     model = Column(String(100))  # LLM model used
     temperature = Column(Float)  # LLM temperature setting
     failed_task_limit = Column(Integer)  # Max failed tasks allowed
-    status = Column(String(50), nullable=False)  # planning, executing, completed, failed
+    status = Column(String(50), nullable=False, index=True)  # planning, executing, completed, failed - ADDED INDEX
     user_response = Column(Text)  # Final response generated for user when completed
     
     # New fields for function-based task queue system
@@ -119,7 +123,8 @@ class Worker(Base):
     next_task = Column(String(100))  # Next async function to execute
     task_description = Column(Text)  # Detailed task description
     acceptance_criteria = Column(JSON)  # List of success criteria
-    task_context = Column(JSON)  # TaskContext pydantic model as JSON
+    user_request = Column(Text)  # Original user request or question
+    wip_answer_template = Column(Text)  # Work-in-progress answer template
     task_result = Column(Text)  # Execution outcome
     querying_structured_data = Column(Boolean, default=False)  # Whether task queries data files
     image_keys = Column(JSON)  # List of relevant image identifiers
@@ -158,7 +163,7 @@ class RouterMessagePlannerLink(Base):
     link_id = Column(Integer, primary_key=True, autoincrement=True)
     router_id = Column(String(32), ForeignKey('routers.router_id'), nullable=False)
     message_id = Column(Integer, ForeignKey('router_messages.id'), nullable=False, index=True)
-    planner_id = Column(String(32), ForeignKey('planners.planner_id'), nullable=False)
+    planner_id = Column(String(32), ForeignKey('planners.planner_id'), nullable=False, index=True)  # ADDED INDEX
     relationship_type = Column(String(50), nullable=False)  # initiated, continued, forked
     created_at = Column(DateTime, default=datetime.utcnow)
     
@@ -216,11 +221,54 @@ class AgentDatabase:
         Path(database_path).parent.mkdir(parents=True, exist_ok=True)
         
         database_url = f"sqlite:///{database_path}"
-        self.engine = create_engine(database_url)
+        
+        # Configure SQLite for concurrent access with WAL mode and connection pooling
+        self.engine = create_engine(
+            database_url,
+            # Connection pool settings for better concurrency
+            pool_size=10,
+            max_overflow=20,
+            pool_pre_ping=True,
+            pool_recycle=3600,  # Recycle connections every hour
+            # SQLite-specific connection arguments
+            connect_args={
+                "check_same_thread": False,  # Allow connections across threads
+                "timeout": 30,  # 30 second timeout for database locks
+            },
+            echo=False  # Set to True for SQL debugging
+        )
+        
+        # Configure WAL mode and other SQLite optimisations
+        self._configure_sqlite_optimisations()
+        
         self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
         
         # Initialize database with schema version checking
         self._initialize_database()
+    
+    def _configure_sqlite_optimisations(self):
+        """Configure SQLite for optimal concurrent performance"""
+        with self.engine.connect() as conn:
+            # Enable WAL mode for concurrent readers and writers
+            conn.execute("PRAGMA journal_mode=WAL")
+            
+            # Set busy timeout to handle lock contention gracefully
+            conn.execute("PRAGMA busy_timeout=5000")  # 5 second timeout
+            
+            # Enable synchronous mode for durability while maintaining performance
+            conn.execute("PRAGMA synchronous=NORMAL")  # Balance safety vs performance
+            
+            # Set cache size for better performance (negative value = KB)
+            conn.execute("PRAGMA cache_size=-64000")  # 64MB cache
+            
+            # Enable foreign key constraints
+            conn.execute("PRAGMA foreign_keys=ON")
+            
+            # Optimize temp storage
+            conn.execute("PRAGMA temp_store=MEMORY")
+            
+            conn.commit()
+            logger.info("SQLite WAL mode and optimisations enabled for agent database")
     
     def add_message(self, agent_type: AgentType, agent_id: str, role: str, content: Any) -> Optional[int]:
         """Add a message to the appropriate agent messages table"""
@@ -344,7 +392,8 @@ class AgentDatabase:
     
     def create_planner(self, planner_id: str, user_question: str, instruction: str = None, 
                       execution_plan: str = None, model: str = None, temperature: float = None,
-                      failed_task_limit: int = None, status: str = "planning", planner_name: str = None) -> None:
+                      failed_task_limit: int = None, status: str = "planning", planner_name: str = None,
+                      next_task: str = None) -> None:
         """Create a new planner state record"""
         with self.SessionLocal() as session:
             planner = Planner(
@@ -356,28 +405,13 @@ class AgentDatabase:
                 model=model,
                 temperature=temperature,
                 failed_task_limit=failed_task_limit,
-                status=status
+                status=status,
+                next_task=next_task
             )
             session.add(planner)
             session.commit()
     
-    def update_planner_status(self, planner_id: str, status: str) -> None:
-        """Update planner status"""
-        with self.SessionLocal() as session:
-            planner = session.query(Planner).filter(Planner.planner_id == planner_id).first()
-            if planner:
-                planner.status = status
-                planner.updated_at = datetime.utcnow()
-                session.commit()
     
-    def update_planner_execution_plan(self, planner_id: str, execution_plan: str) -> None:
-        """Update planner execution plan"""
-        with self.SessionLocal() as session:
-            planner = session.query(Planner).filter(Planner.planner_id == planner_id).first()
-            if planner:
-                planner.execution_plan = execution_plan
-                planner.updated_at = datetime.utcnow()
-                session.commit()
     
     def get_planner(self, planner_id: str) -> Optional[Dict[str, Any]]:
         """Get planner state by ID"""
@@ -396,6 +430,7 @@ class AgentDatabase:
                     'status': planner.status,
                     'agent_metadata': planner.agent_metadata,
                     'schema_version': planner.schema_version,
+                    'user_response': planner.user_response,
                     'created_at': planner.created_at,
                     'updated_at': planner.updated_at
                 }
@@ -403,7 +438,7 @@ class AgentDatabase:
     
     def create_worker(self, worker_id: str, planner_id: str, worker_name: str,
                      task_status: str, task_description: str, acceptance_criteria: list,
-                     task_context: dict, task_result: str, querying_structured_data: bool,
+                     user_request: str, wip_answer_template: str, task_result: str, querying_structured_data: bool,
                      image_keys: list, variable_keys: list, tools: list,
                      input_variable_filepaths: dict, input_image_filepaths: dict,
                      tables: list, filepaths: list) -> None:
@@ -416,7 +451,8 @@ class AgentDatabase:
                 task_status=task_status,
                 task_description=task_description,
                 acceptance_criteria=acceptance_criteria,
-                task_context=task_context,
+                user_request=user_request,
+                wip_answer_template=wip_answer_template,
                 task_result=task_result,
                 querying_structured_data=querying_structured_data,
                 image_keys=image_keys,
@@ -433,48 +469,34 @@ class AgentDatabase:
             session.add(worker)
             session.commit()
     
-    def update_worker_status(self, worker_id: str, status: str, result: str = None) -> None:
-        """Update worker task status and result"""
+    def update_worker(self, worker_id: str, **kwargs) -> bool:
+        """Update worker fields with arbitrary keyword arguments"""
         with self.SessionLocal() as session:
             worker = session.query(Worker).filter(Worker.worker_id == worker_id).first()
             if worker:
-                worker.task_status = status
-                if result is not None:
-                    worker.task_result = result
+                for key, value in kwargs.items():
+                    if hasattr(worker, key):
+                        setattr(worker, key, value)
                 worker.updated_at = datetime.utcnow()
                 session.commit()
+                return True
+            return False
     
-    def update_worker_outputs(self, worker_id: str, output_images: Dict = None, 
-                             output_variables: Dict = None) -> None:
-        """Update worker output data"""
+    def update_planner(self, planner_id: str, **kwargs) -> bool:
+        """Update planner fields with arbitrary keyword arguments"""
         with self.SessionLocal() as session:
-            worker = session.query(Worker).filter(Worker.worker_id == worker_id).first()
-            if worker:
-                if output_images is not None:
-                    worker.output_images = output_images
-                if output_variables is not None:
-                    worker.output_variables = output_variables
-                worker.updated_at = datetime.utcnow()
+            planner = session.query(Planner).filter(Planner.planner_id == planner_id).first()
+            if planner:
+                for key, value in kwargs.items():
+                    if hasattr(planner, key):
+                        setattr(planner, key, value)
+                planner.updated_at = datetime.utcnow()
                 session.commit()
+                return True
+            return False
     
-    def update_worker_file_paths(self, worker_id: str, variable_paths: Dict = None, 
-                                image_paths: Dict = None) -> None:
-        """Update worker output file paths"""
-        with self.SessionLocal() as session:
-            worker = session.query(Worker).filter(Worker.worker_id == worker_id).first()
-            if worker:
-                if variable_paths is not None:
-                    # Merge with existing paths
-                    current_var_paths = worker.output_variable_filepaths or {}
-                    current_var_paths.update(variable_paths)
-                    worker.output_variable_filepaths = current_var_paths
-                if image_paths is not None:
-                    # Merge with existing paths
-                    current_img_paths = worker.output_image_filepaths or {}
-                    current_img_paths.update(image_paths)
-                    worker.output_image_filepaths = current_img_paths
-                worker.updated_at = datetime.utcnow()
-                session.commit()
+    
+    
     
     def get_worker(self, worker_id: str) -> Optional[Dict[str, Any]]:
         """Get worker state by ID"""
@@ -488,16 +510,17 @@ class AgentDatabase:
                     'task_status': worker.task_status,
                     'task_description': worker.task_description,
                     'acceptance_criteria': worker.acceptance_criteria,
-                    'task_context': worker.task_context,
+                    'user_request': worker.user_request,
+                    'wip_answer_template': worker.wip_answer_template,
                     'task_result': worker.task_result,
                     'querying_structured_data': worker.querying_structured_data,
                     'image_keys': worker.image_keys,
                     'variable_keys': worker.variable_keys,
                     'tools': worker.tools,
-                    'input_images': worker.input_images,
-                    'input_variables': worker.input_variables,
-                    'output_images': worker.output_images,
-                    'output_variables': worker.output_variables,
+                    'input_image_filepaths': worker.input_image_filepaths,
+                    'input_variable_filepaths': worker.input_variable_filepaths,
+                    'output_image_filepaths': worker.output_image_filepaths,
+                    'output_variable_filepaths': worker.output_variable_filepaths,
                     'tables': worker.tables,
                     'agent_metadata': worker.agent_metadata,
                     'schema_version': worker.schema_version,
@@ -518,16 +541,17 @@ class AgentDatabase:
                     'task_status': worker.task_status,
                     'task_description': worker.task_description,
                     'acceptance_criteria': worker.acceptance_criteria,
-                    'task_context': worker.task_context,
+                    'user_request': worker.user_request,
+                    'wip_answer_template': worker.wip_answer_template,
                     'task_result': worker.task_result,
                     'querying_structured_data': worker.querying_structured_data,
                     'image_keys': worker.image_keys,
                     'variable_keys': worker.variable_keys,
                     'tools': worker.tools,
-                    'input_images': worker.input_images,
-                    'input_variables': worker.input_variables,
-                    'output_images': worker.output_images,
-                    'output_variables': worker.output_variables,
+                    'input_image_filepaths': worker.input_image_filepaths,
+                    'input_variable_filepaths': worker.input_variable_filepaths,
+                    'output_image_filepaths': worker.output_image_filepaths,
+                    'output_variable_filepaths': worker.output_variable_filepaths,
                     'tables': worker.tables,
                     'filepaths': worker.filepaths,
                     'agent_metadata': worker.agent_metadata,
@@ -640,7 +664,7 @@ class AgentDatabase:
                         })
                 return planners
     
-    def get_planner_by_message(self, message_id: int) -> Optional[Dict[str, Any]]:
+    async def get_planner_by_message(self, message_id: int) -> Optional[Dict[str, Any]]:
         """Get planner associated with a specific message (V2)"""
         with self.SessionLocal() as session:
             link = session.query(RouterMessagePlannerLink).filter(
@@ -869,7 +893,7 @@ class AgentDatabase:
             logger.info(f"Enqueued task {task_id} for {entity_type} {entity_id}")
             return True
     
-    def get_pending_tasks(self) -> List[Dict[str, Any]]:
+    async def get_pending_tasks(self) -> List[Dict[str, Any]]:
         """Get all pending tasks ordered by creation time"""
         with self.SessionLocal() as session:
             tasks = session.query(TaskQueue).filter(
@@ -916,19 +940,6 @@ class AgentDatabase:
             planner = session.query(Planner).filter(Planner.planner_id == planner_id).first()
             return planner.next_task if planner else None
     
-    def update_planner_file_paths(self, planner_id: str, variable_paths: Dict[str, str] = None, 
-                                 image_paths: Dict[str, str] = None) -> bool:
-        """Update file paths for planner variables and images"""
-        with self.SessionLocal() as session:
-            planner = session.query(Planner).filter(Planner.planner_id == planner_id).first()
-            if planner:
-                if variable_paths is not None:
-                    planner.variable_file_paths = variable_paths
-                if image_paths is not None:
-                    planner.image_file_paths = image_paths
-                session.commit()
-                return True
-            return False
     
     def get_router_id_for_planner(self, planner_id: str) -> Optional[str]:
         """Get router ID for a planner via router-message-planner links"""

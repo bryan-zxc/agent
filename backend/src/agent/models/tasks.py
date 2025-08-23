@@ -19,17 +19,22 @@ TOOLS = {
 tools_type = Literal[tuple(TOOLS)]
 
 
-class TaskContext(BaseModel):
-    user_request: str = Field(description="The original user request or question.")
-    context: str = Field(
-        description="Provide any relevant context that will help in performing the task. "
-        "The more information provided, the better. "
-        "If past tasks have been performed, extract all relevant information to be included into the context. "
-        "Note: context provided must be independently sufficient to verify all acceptance criteria without any further information."
+class AnswerTemplate(BaseModel):
+    """Answer template for the final response"""
+
+    template: str = Field(
+        description="The answer template in markdown format that will be filled to provide the final answer to the user's question."
+        "Based on new information available, update the above template if required. "
+        "Remember that if you choose not to update the template just return the same template as is. "
+        "If you do update the template, make sure that you continue to use placeholders even if you have the information, this should be just a template, not the actual answer. "
     )
-    previous_outputs: str = Field(
-        description="State all outputs from previous tasks that are required to perform this task, including a description of what they are. "
-        "For example, JSON or Mermaid outputs from previous tasks (if determined to be relevant) must be restated in full with no alteration."
+    wip_filled_template: str = Field(
+        description="The work in progress filled answer template, which is the latest population of placeholders with information currently available."
+        "Where information is not available, leave unknown placeholders untouched. "
+        "You must stay completely faithful to the template, do not change the structure, do not remove sections you don't have information for, just keep them with corresponding placeholders. "
+        "Agressively use inline citation such that the citing references provided are used individually whenever possible as opposed to making multiple citings at the end. "
+        "DO NOT EVER perform any calculations, you must leave that as a placeholder so a task can be created to perform the calculation. "
+        "If python code has been ran to generate the outcome of a calculation, you MUST use that answer whether you agree or not as the final answer - DO NOT CHANGE IT."
     )
 
 
@@ -42,7 +47,9 @@ class Task(BaseModel):
         [],
         description="List of variable keys that can be used to identify variables relevant to the task.",
     )
-    task_context: TaskContext
+    user_request: str = Field(
+        description="The original user request or question that this task contributes to answering."
+    )
     task_description: str = Field(
         description="A detailed description of the action that needs to be performed."
     )
@@ -122,9 +129,11 @@ class TaskArtefact(BaseModel):
     # )
     python_code: str = Field(
         description="Executable and error free python code that needs to be executed to perform the task. "
+        "The result of the execution must be stored in a variable and the variable must be printed. "
+        "For example\n```python\nresult = some_function()\nprint(result)\n```\n"
+        "IF the output is an image, you don't need to print it, just make sure the output variable is a PIL.Image object.\n"
         "You must use functions provided where possible, do not ever create code to perform a similar purpose to an existing function. "
         "If provided with a useable function for the task, this python_code field must be populated to use the supplied function accordingly even if the outcome can be achieved without code. "
-        "You must use `print` to print out every relevant output from the code, unless the output is an image, in which case, simply save the output as PIL.Image object. "
         "The name of the outputs must provide a context of the task being executed, to avoid naming conflicts from similar outputs in other tasks. "
         "Leave the field empty if no code is required.\n"
         "If the previous outcome failed validation, do not simply repeat the previous code, but make adjustments based on the reason of the previous failure."
@@ -212,8 +221,21 @@ class TodoItem(BaseModel):
 
 
 class ExecutionPlanModel(BaseModel):
-    objective: str = Field(description="Overall goal description")
-    todos: list[TodoItem] = Field(description="List of todo items")
+    """Structured execution plan with objective and todo items"""
+
+    objective: str = Field(description="Overall objective of the execution plan")
+    remaining_information_required: str = Field(
+        default="",
+        description="Review the answer template and the partly filled answer carefully and think through what additional information is still required before achieving the objective. "
+        "This should drive and guide how to change the next todo's (if required) to obtain the information. "
+        "Missing information can be because you haven't exhausted your search in available context provided, it could also be the absence of available information in your context, "
+        "you need to make a determination of whether information is already exhausted and give the user the best answer based on what is available, or to keep digging for more information by adding to or going through the todo list.\n"
+        "Note: Calculations required must be considered as information required and must be assigned a corresponding todo item. "
+        "Even if the answer template has already done its own calculation and pre-filled the answer, still have a calculation todo item.",
+    )
+    todos: list[TodoItem] = Field(
+        description="List of todo items. Make the list succinct - meaning all required actions to get remaining information should be done, but don't break actions that can be done in one step into multiple unnecessarily, nor create filler tasks."
+    )
 
 
 class InitialExecutionPlan(BaseModel):
@@ -223,6 +245,7 @@ class InitialExecutionPlan(BaseModel):
 
 class TaskResponseModel(BaseModel):
     """Model for storing completed worker task information in message history"""
+
     task_id: str = Field(description="The ID of the completed task")
     task_description: str = Field(
         description="Description of the task that was executed"

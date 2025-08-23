@@ -25,7 +25,7 @@ from .schemas import (
 from .tasks import (
     TOOLS,
     tools_type,
-    TaskContext,
+    AnswerTemplate,
     Task,
     PlanValidation,
     TaskResult,
@@ -68,7 +68,7 @@ __all__ = [
     # Tasks
     "TOOLS",
     "tools_type",
-    "TaskContext",
+    "AnswerTemplate",
     "Task",
     "PlanValidation",
     "TaskResult",

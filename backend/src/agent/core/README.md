@@ -35,22 +35,25 @@ WebSocket-enabled router for real-time chat and file processing orchestration.
 - Main entry point for WebSocket-based chat interface
 - Intelligently routes between simple router and complex analysis
 - Built-in database persistence for router history
+- **Architecture**: All communication methods require active WebSocket connections (no optional WebSocket parameters)
 
 **Key Methods:**
 - `__init__(router_id)`: Initialize with router ID for persistence
-- `connect_websocket(websocket)`: Connect WebSocket and send router history
-- `handle_message(message_data)`: Main message handler for user input
-- `handle_simple_chat(user_message)`: Direct LLM router
-- `handle_complex_request(user_message, files)`: Delegate to PlannerAgent
-- `needs_planner(message)`: Determine if planner activation is needed
+- `activate_conversation(user_message, websocket, files?)`: Initialize new router with first message
+- `handle_message(message_data, websocket)`: Main message handler with required WebSocket
+- `handle_simple_chat()`: Direct LLM router for simple responses
+- `handle_complex_request(websocket, files?, agent_requirements?)`: Delegate to background agents
+- `assess_agent_requirements()`: LLM-based assessment for agent assistance needs
 - `process_files(file_paths)`: Convert file paths to File objects
 
-**WebSocket Communication:**
-- `send_user_message(content)`: Send user messages to frontend
-- `send_assistant_message(content, message_id?)`: Send assistant messages to frontend
-- `send_status(status)`: Send processing status updates
-- `send_error(error)`: Send error messages
-- `send_router_history()`: Send full router history on connect
+**WebSocket Communication (Required Parameter):**
+- `send_user_message(content, websocket)`: Send user messages to frontend
+- `send_assistant_message(content, websocket, message_id?)`: Send assistant messages to frontend  
+- `send_status(status, websocket)`: Send processing status updates
+- `send_error(error, websocket)`: Send error messages
+- `send_message_history(websocket)`: Send full router history on connect
+- `send_input_lock(websocket)`: Lock input during processing
+- `send_input_unlock(websocket)`: Unlock input when processing complete
 
 **Message Flow:**
 1. **Simple Chat**: User message → LLM → Response (stored in database)
@@ -90,23 +93,25 @@ from fastapi import WebSocket
 
 async def websocket_handler(websocket: WebSocket, router_id: str):
     router = RouterAgent(router_id=router_id)
-    await router.connect_websocket(websocket)
+    await router.send_message_history(websocket=websocket)
     
     while True:
         data = await websocket.receive_json()
-        await router.handle_message(data)
+        await router.handle_message(message_data=data, websocket=websocket)
 ```
 
-### Direct Message Handling
+### New Router Activation
 ```python
 from agent.core.router import RouterAgent
+from fastapi import WebSocket
 
-router = RouterAgent(router_id="user-123")
-message_data = {
-    "content": "What's the average sales from this data?",
-    "files": ["sales_data.csv"]
-}
-await router.handle_message(message_data)
+async def start_new_conversation(websocket: WebSocket, user_message: str, files: list = None):
+    router = RouterAgent()  # Creates new router with UUID
+    await router.activate_conversation(
+        user_message=user_message, 
+        websocket=websocket, 
+        files=files
+    )
 ```
 
 ### Adding Multimodal Content

@@ -27,11 +27,13 @@ from .file_manager import (
     save_image_to_file,
     generate_variable_path,
     generate_image_path,
+    load_wip_answer_template,
 )
 from .task_utils import (
     update_planner_next_task_and_queue,
     update_worker_next_task_and_queue,
 )
+from .message_manager import MessageManager
 
 logger = logging.getLogger(__name__)
 
@@ -45,18 +47,18 @@ def convert_result_to_str(result: TaskResult) -> str:
 
 
 async def validate_worker_result(
-    worker_id: str, acceptance_criteria: str, db: AgentDatabase
+    worker_id: str,
+    acceptance_criteria: str,
+    db: AgentDatabase,
+    message_manager: MessageManager,
 ) -> bool:
     """Validate if worker task is completed based on acceptance criteria"""
-    # Add validation message to database
-    db.add_worker_message(
-        worker_id=worker_id,
+    # Add validation message and get updated messages in one operation
+    validation_messages = message_manager.add_message(
         role="developer",
-        content=f"Determine if the task is successfully completed based on the acceptance criteria:\n{acceptance_criteria}\n\n",
+        content=f"Determine if the task is successfully completed based on the acceptance criteria:\n{acceptance_criteria}\n\n"
+        "Note: if python code is generated, the acceptance criteria will also include needing a print statement at the end of the code (unless it is an image, in which case it should be stored as a PIL.Image object).",
     )
-
-    # Get updated messages for validation
-    validation_messages = db.get_worker_messages(worker_id)
 
     validation = await llm.a_get_response(
         messages=validation_messages,
@@ -86,14 +88,17 @@ async def validate_worker_result(
         # Update task result in database (like self.task.task_result = ...)
         db.update_worker(worker_id=worker_id, task_result=task_result)
         # Add message to database (like self.add_message)
-        db.add_worker_message(
-            worker_id=worker_id, role="assistant", content=task_result
-        )
+        message_manager.add_message(role="assistant", content=task_result)
         return False
 
 
 async def process_image_variable(
-    image: Image, variable_name: str, worker_id: str, planner_id: str, db: AgentDatabase
+    image: Image,
+    variable_name: str,
+    worker_id: str,
+    planner_id: str,
+    db: AgentDatabase,
+    message_manager: MessageManager,
 ) -> str:
     """Process an output image variable and save to file system
 
@@ -110,8 +115,13 @@ async def process_image_variable(
 
     # Save image to file
     if save_image_to_file(file_path, encoded_image):
-        # Update worker database with file path
-        db.update_worker_file_paths(worker_id, image_paths={final_image_key: file_path})
+        # Update worker database with file path - merge with existing paths
+        worker_data = db.get_worker(worker_id)
+        current_img_paths = (
+            worker_data.get("output_image_filepaths", {}) if worker_data else {}
+        )
+        current_img_paths.update({final_image_key: file_path})
+        db.update_worker(worker_id, output_image_filepaths=current_img_paths)
 
         # Add message to database using final key name
         content = [{"type": "text", "text": f"Image: {final_image_key}"}]
@@ -121,7 +131,7 @@ async def process_image_variable(
                 "image_url": {"url": f"data:image/png;base64,{encoded_image}"},
             }
         )
-        db.add_worker_message(worker_id=worker_id, role="user", content=content)
+        message_manager.add_message(role="user", content=content)
 
         return final_image_key
     else:
@@ -131,7 +141,12 @@ async def process_image_variable(
 
 
 async def process_variable(
-    variable, variable_name: str, worker_id: str, planner_id: str, db: AgentDatabase
+    variable,
+    variable_name: str,
+    worker_id: str,
+    planner_id: str,
+    db: AgentDatabase,
+    message_manager: MessageManager,
 ) -> str:
     """Process an output variable and save to file system
 
@@ -145,25 +160,26 @@ async def process_variable(
 
     # Save variable to file
     if save_variable_to_file(file_path, variable):
-        # Update worker database with file path
-        db.update_worker_file_paths(
-            worker_id, variable_paths={final_variable_key: file_path}
+        # Update worker database with file path - merge with existing paths
+        worker_data = db.get_worker(worker_id)
+        current_var_paths = (
+            worker_data.get("output_variable_filepaths", {}) if worker_data else {}
         )
+        current_var_paths.update({final_variable_key: file_path})
+        db.update_worker(worker_id, output_variable_filepaths=current_var_paths)
 
         # Add message to database - content depends on serialisability
         serialisable, stringable = is_serialisable(variable)
 
         if serialisable:
             # Show full variable content since it's serialisable
-            db.add_worker_message(
-                worker_id=worker_id,
+            message_manager.add_message(
                 role="assistant",
                 content=f"```python\n{final_variable_key}\n```\n\nOutput:\n```\n{variable}\n```",
             )
         elif stringable:
             # Show string representation but note it's not serialisable
-            db.add_worker_message(
-                worker_id=worker_id,
+            message_manager.add_message(
                 role="assistant",
                 content=f"```python\n{final_variable_key}\n```\n\nOutput:\n```\n{str(variable)}\n```\n\n"
                 "Note: the output is not serialisable and will not be included as an output variable.",
@@ -218,12 +234,7 @@ async def worker_initialisation(task_data: dict):
             logger.error(f"No current task found for planner {planner_id}")
             return
 
-        # Verify this worker_id matches the task_id (they should be the same)
-        if worker_id != task.task_id:
-            logger.error(f"Worker ID {worker_id} does not match task ID {task.task_id}")
-            return
-
-        logger.info(f"Loaded task for worker {worker_id}: {task.task_name}")
+        logger.info(f"Loaded task for worker {worker_id}: {task.task_description}")
 
         # Get planner data to access variables, images, and other context
         planner_data = db.get_planner(planner_id)
@@ -277,7 +288,8 @@ async def worker_initialisation(task_data: dict):
             task_status="pending",
             task_description=task.task_description,
             acceptance_criteria=task.acceptance_criteria,
-            task_context=task.task_context.model_dump(),
+            user_request=task.user_request,
+            wip_answer_template=load_wip_answer_template(planner_id) or "",
             task_result="",
             querying_structured_data=querying_structured_data,
             image_keys=task.image_keys,
@@ -291,23 +303,24 @@ async def worker_initialisation(task_data: dict):
 
         logger.info(f"Created worker database record for worker {worker_id}")
 
-        # Set up initial messages for worker (following WorkerAgent._setup_worker_messages pattern)
-        # Add initial task message
-        db.add_worker_message(
-            worker_id=worker_id,
-            role="user",
-            content=f"Perform the following task:\n{task.task_description}",
+        # Create message manager for this worker (now that worker exists)
+        message_manager = MessageManager(db, "worker", worker_id)
+
+        # Set up initial messages for worker (following worker.py pattern lines 68-80)
+        # Add system message with task goal
+        message_manager.add_message(
+            role="system",
+            content=f"Your goal is to perform the following task:\n{task.task_description}",
         )
 
-        # Add context message
-        db.add_worker_message(
-            worker_id=worker_id,
-            role="developer",
-            content=f"# Context\n{task.task_context.context}\n\n"
-            f"# Previous outputs\n{task.task_context.previous_outputs}\n\n"
-            f"# Original user request\n{task.task_context.user_request}\n\n"
-            "Unless the original user request is necessary to perform the task at hand, "
-            "DO NOT change the actions to be performed based on the knowledge of the original request.",
+        # Add developer message with broader context (following worker.py pattern)
+        wip_template = load_wip_answer_template(planner_id) or ""
+        message_manager.add_message(
+            role="user",
+            content="Below is broader level context for your task:\n\n"
+            f"**Original user request:**\n\n{task.user_request}\n\n"
+            f"**Work in progress answer template:**\n\n{wip_template}\n\n"
+            "This is not your goal for this task, make sure you stay focused on the task at hand.",
         )
 
         # Add input images if any
@@ -334,14 +347,11 @@ async def worker_initialisation(task_data: dict):
                             "If image manipulation is required, use these dimensions to produce precise coordinates for cropping or combining charts.",
                         }
                     )
-                    db.add_worker_message(
-                        worker_id=worker_id, role="user", content=content
-                    )
+                    message_manager.add_message(role="user", content=content)
 
         # Add input variables if any
         if task.variable_keys and planner_variables:
-            db.add_worker_message(
-                worker_id=worker_id,
+            message_manager.add_message(
                 role="developer",
                 content="The following variables are available for use, they already exist in the environment, "
                 f"you do not need to declare or create it: {', '.join(task.variable_keys)}",
@@ -349,8 +359,7 @@ async def worker_initialisation(task_data: dict):
             for variable_name in task.variable_keys:
                 if variable_name in planner_variables:
                     variable = planner_variables[variable_name]
-                    db.add_worker_message(
-                        worker_id=worker_id,
+                    message_manager.add_message(
                         role="developer",
                         content=f"# {variable_name}\nType: {type(variable)}\n\n"
                         f"Length of variable: {len(str(variable))}\n\n"
@@ -359,8 +368,7 @@ async def worker_initialisation(task_data: dict):
 
         # Add file paths if any
         if filepaths:
-            db.add_worker_message(
-                worker_id=worker_id,
+            message_manager.add_message(
                 role="developer",
                 content=f"The following PDF files are available for use: {', '.join(filepaths)}",
             )
@@ -370,8 +378,7 @@ async def worker_initialisation(task_data: dict):
             tools_text = "\n\n---\n\n".join(
                 [f"# {t}\n{TOOLS.get(t).__doc__}" for t in task.tools]
             )
-            db.add_worker_message(
-                worker_id=worker_id,
+            message_manager.add_message(
                 role="developer",
                 content=f"You may use the following function(s):\n\n{tools_text}\n\n"
                 "When using the function(s) you can assume that they already exists in the environment, "
@@ -413,11 +420,9 @@ async def execute_standard_worker(task_data: dict):
     Args:
         task_data: Dict containing task information:
             - entity_id: worker_id
-            - payload: dict with planner_id and other context
+            - payload: optional dict (planner_id retrieved from worker database record)
     """
     worker_id = task_data["entity_id"]
-    payload = task_data.get("payload", {})
-    planner_id = payload["planner_id"]
 
     logger.info(f"Starting standard worker execution attempt for worker {worker_id}")
 
@@ -429,12 +434,18 @@ async def execute_standard_worker(task_data: dict):
         logger.error(f"Worker {worker_id} not found in database")
         return
 
+    # Always get planner_id from worker database record for consistency
+    planner_id = worker_data["planner_id"]
+
+    # Create message manager for this worker
+    message_manager = MessageManager(db, "worker", worker_id)
+
     # Load planner variables and images for worker execution
     planner_variables = get_planner_variables(planner_id)
     planner_images = get_planner_images(planner_id)
 
     # Get worker messages from database
-    messages = db.get_worker_messages(worker_id)
+    messages = message_manager.get_messages()
 
     # Get worker configuration from settings
     max_retry = settings.max_retry_tasks
@@ -456,6 +467,13 @@ async def execute_standard_worker(task_data: dict):
             response_format=TaskArtefact,
         )
 
+        # Defensive check: Handle case where LLM service returns None
+        if task_result is None:
+            logger.error(
+                f"LLM service returned None for worker {worker_id}. This typically indicates API errors or authentication issues."
+            )
+            return
+
         logger.info(f"Task result: {task_result.model_dump_json(indent=2)}")
 
         # Update attempt counter
@@ -465,8 +483,7 @@ async def execute_standard_worker(task_data: dict):
             # Check for malicious code
             if task_result.is_malicious:
                 error_message = "The code is either making changes to the database or creating executable files - this is considered malicious and not permitted."
-                db.add_worker_message(
-                    worker_id=worker_id,
+                messages = message_manager.add_message(
                     role="assistant",
                     content=f"{error_message}\\nRewrite the python code to fix the error.",
                 )
@@ -486,8 +503,7 @@ async def execute_standard_worker(task_data: dict):
                     update_planner_next_task_and_queue(planner_id, "execute_synthesis")
                 return
 
-            db.add_worker_message(
-                worker_id=worker_id,
+            messages = message_manager.add_message(
                 role="assistant",
                 content=f"The python code to execute:\\n```python\\n{task_result.python_code}\\n```",
             )
@@ -522,15 +538,13 @@ async def execute_standard_worker(task_data: dict):
             sandbox_result = sandbox.execute(task_result.python_code)
 
             if sandbox_result["success"]:
-                db.add_worker_message(
-                    worker_id=worker_id,
+                messages = message_manager.add_message(
                     role="assistant",
                     content="Below outputs are generated on executing python code.",
                 )
 
                 if sandbox_result["output"]:
-                    db.add_worker_message(
-                        worker_id=worker_id,
+                    messages = message_manager.add_message(
                         role="assistant",
                         content=sandbox_result["output"],
                     )
@@ -559,12 +573,16 @@ async def execute_standard_worker(task_data: dict):
                                 )
                         elif isinstance(var_value, Image.Image):
                             await process_image_variable(
-                                var_value, output_var.name, worker_id, planner_id, db
+                                var_value,
+                                output_var.name,
+                                worker_id,
+                                planner_id,
+                                db,
+                                message_manager,
                             )
                         else:
                             error_message = f"Incorrect output: if {output_var.name} is an image, it must be a PIL.Image object or a list[Image] or dict[str:Image] object, no other choices are allowed."
-                            db.add_worker_message(
-                                worker_id=worker_id,
+                            messages = message_manager.add_message(
                                 role="assistant",
                                 content=f"{error_message}\\nRewrite the python code to fix the error.",
                             )
@@ -587,7 +605,12 @@ async def execute_standard_worker(task_data: dict):
                     else:
                         var_value = sandbox_result["variables"][output_var.name]
                         await process_variable(
-                            var_value, output_var.name, worker_id, planner_id, db
+                            var_value,
+                            output_var.name,
+                            worker_id,
+                            planner_id,
+                            db,
+                            message_manager,
                         )
 
                 # Process functions have already saved outputs to files and updated database paths
@@ -595,7 +618,7 @@ async def execute_standard_worker(task_data: dict):
 
                 # Validate result
                 validated = await validate_worker_result(
-                    worker_id, worker_data["acceptance_criteria"], db
+                    worker_id, worker_data["acceptance_criteria"], db, message_manager
                 )
                 if validated:
                     # Queue planner synthesis on successful completion
@@ -628,8 +651,7 @@ async def execute_standard_worker(task_data: dict):
                         task_status="failed_validation",
                         task_result=failure_message,
                     )
-                    db.add_worker_message(
-                        worker_id=worker_id,
+                    messages = message_manager.add_message(
                         role="assistant",
                         content=f"{failure_message}\\n\\n{sandbox_result['stack_trace']}\\n\\nRequired tool is not available, please supply the task with the required tool and try again.",
                     )
@@ -637,8 +659,7 @@ async def execute_standard_worker(task_data: dict):
                     update_planner_next_task_and_queue(planner_id, "execute_synthesis")
                     return
 
-                db.add_worker_message(
-                    worker_id=worker_id,
+                messages = message_manager.add_message(
                     role="assistant",
                     content=f"{error_message}\\n\\n{sandbox_result['stack_trace']}\\n\\nRewrite the python code to fix the error.",
                 )
@@ -657,7 +678,7 @@ async def execute_standard_worker(task_data: dict):
                     )
 
                 repeated_fail = await llm.a_get_response(
-                    messages=db.get_worker_messages(worker_id),
+                    messages=messages,
                     model=settings.worker_model,
                     temperature=0,
                     response_format=RepeatFail,
@@ -676,12 +697,12 @@ async def execute_standard_worker(task_data: dict):
 
         else:
             # No Python code generated, just text response
-            db.add_worker_message(
-                worker_id=worker_id, role="assistant", content=task_result.result
+            messages = message_manager.add_message(
+                role="assistant", content=task_result.result
             )
 
             validated = await validate_worker_result(
-                worker_id, worker_data["acceptance_criteria"], db
+                worker_id, worker_data["acceptance_criteria"], db, message_manager
             )
             if validated:
                 # Queue planner synthesis on successful completion
@@ -728,12 +749,10 @@ async def execute_sql_worker(task_data: dict):
     Args:
         task_data: Dict containing task information:
             - entity_id: worker_id
-            - payload: dict with planner_id and other context
+            - payload: optional dict (planner_id retrieved from worker database record)
     """
 
     worker_id = task_data["entity_id"]
-    payload = task_data.get("payload", {})
-    planner_id = payload["planner_id"]
 
     logger.info(f"Starting SQL worker execution attempt for worker {worker_id}")
 
@@ -745,8 +764,14 @@ async def execute_sql_worker(task_data: dict):
         logger.error(f"Worker {worker_id} not found in database")
         return
 
+    # Always get planner_id from worker database record for consistency
+    planner_id = worker_data["planner_id"]
+
+    # Create message manager for this worker
+    message_manager = MessageManager(db, "worker", worker_id)
+
     # Get worker messages from database
-    messages = db.get_worker_messages(worker_id)
+    messages = message_manager.get_messages()
 
     # Get worker configuration from settings
     max_retry = settings.max_retry_tasks
@@ -781,8 +806,7 @@ async def execute_sql_worker(task_data: dict):
             try:
                 # Execute SQL in DuckDB
                 sql_output = duck_conn.execute(sql_artefact.sql_code).df().to_markdown()
-                db.add_worker_message(
-                    worker_id=worker_id,
+                messages = message_manager.add_message(
                     role="assistant",
                     content=f"The following code was executed:\\n\\n```sql\\n\\n{sql_artefact.sql_code}\\n\\n```\\n\\n"
                     f"The output is:\\n\\n{sql_output}",
@@ -790,7 +814,7 @@ async def execute_sql_worker(task_data: dict):
 
                 # Validate result
                 validated = await validate_worker_result(
-                    worker_id, worker_data["acceptance_criteria"], db
+                    worker_id, worker_data["acceptance_criteria"], db, message_manager
                 )
                 if validated:
                     # Queue planner synthesis on successful completion
@@ -799,8 +823,7 @@ async def execute_sql_worker(task_data: dict):
 
             except Exception as e:
                 error_message = f"Error executing SQL code: {e}"
-                db.add_worker_message(
-                    worker_id=worker_id,
+                messages = message_manager.add_message(
                     role="assistant",
                     content=f"{error_message}\\n\\nRewrite the SQL code to fix the error.",
                 )
@@ -815,8 +838,8 @@ async def execute_sql_worker(task_data: dict):
                 task_status="failed_validation",
                 task_result=error_message,
             )
-            db.add_worker_message(
-                worker_id=worker_id, role="assistant", content=error_message
+            messages = message_manager.add_message(
+                role="assistant", content=error_message
             )
             # Queue synthesis for SQL generation failure
             update_planner_next_task_and_queue(planner_id, "execute_synthesis")

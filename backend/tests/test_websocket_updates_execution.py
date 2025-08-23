@@ -13,6 +13,7 @@ import time
 import tempfile
 import shutil
 import uuid
+import os
 from unittest.mock import MagicMock, AsyncMock, patch
 from pathlib import Path
 
@@ -76,10 +77,12 @@ class TestWebSocketUpdatesExecution(unittest.TestCase):
         settings.collaterals_base_path = self.test_dir
         
         # Set up in-memory database for testing
-        self.db = AgentDatabase()
-        self.db.engine = self.db.create_engine("sqlite:///:memory:")
-        self.db.Base.metadata.create_all(self.db.engine)
-        self.db.SessionLocal = self.db.sessionmaker(bind=self.db.engine)
+        # Create temporary database file for testing
+        db_fd, self.test_db_path = tempfile.mkstemp(suffix='.db')
+        os.close(db_fd)  # Close file descriptor, AgentDatabase will open it
+        
+        # Create AgentDatabase with test database path
+        self.db = AgentDatabase(database_path=self.test_db_path)
         
         # Test data
         self.router_id = f"test_router_{uuid.uuid4().hex[:8]}"
@@ -92,32 +95,51 @@ class TestWebSocketUpdatesExecution(unittest.TestCase):
         
         # Remove test directory
         shutil.rmtree(self.test_dir, ignore_errors=True)
+        
+        # Remove test database file
+        if hasattr(self, 'test_db_path') and os.path.exists(self.test_db_path):
+            os.unlink(self.test_db_path)
 
     def create_router_with_websocket(self):
-        """Create a router with mock WebSocket connection."""
+        """Create a router with mock WebSocket connection for ephemeral architecture."""
+        # Create router in database first (simulate activation)
+        self.db.create_router(
+            router_id=self.router_id,
+            status="active",
+            model="gpt-4.1-nano",
+            temperature=0.0,
+            title="Test Router",
+            preview="Test router for websocket testing"
+        )
+        
+        # Create ephemeral router instance that loads from database
         router = RouterAgent(self.router_id)
         router._agent_db = self.db  # Use test database
         
         mock_websocket = MockWebSocket()
-        router.websocket = mock_websocket
         
         return router, mock_websocket
 
     async def test_websocket_connection_establishment(self):
-        """Test WebSocket connection establishment and initial setup."""
+        """Test ephemeral router creation and message history sending."""
         router, mock_websocket = self.create_router_with_websocket()
         
-        # Test WebSocket connection
-        await router.connect_websocket(mock_websocket)
+        # Test message history sending with ephemeral architecture
+        await router.send_message_history(websocket=mock_websocket)
         
-        # Verify connection was established
+        # Verify connection is working
         self.assertTrue(mock_websocket.is_connected)
-        self.assertEqual(router.websocket, mock_websocket)
         
-        # Verify message history was sent on connection
+        # Verify message history was sent
         history_messages = mock_websocket.get_messages_by_type("message_history")
         self.assertEqual(len(history_messages), 1)
         
+        # Verify router state was loaded from database
+        self.assertEqual(router.id, self.router_id)
+        self.assertEqual(router.status, "active")
+        self.assertEqual(router.model, "gpt-4.1-nano")
+        
+        # Verify message history content
         history_data = history_messages[0]["data"]
         self.assertEqual(history_data["router_id"], self.router_id)
         self.assertIn("messages", history_data)
@@ -126,8 +148,8 @@ class TestWebSocketUpdatesExecution(unittest.TestCase):
         """Test that input lock/unlock sends proper WebSocket updates."""
         router, mock_websocket = self.create_router_with_websocket()
         
-        # Test input lock
-        await router.send_input_lock()
+        # Test input lock with websocket parameter
+        await router.send_input_lock(websocket=mock_websocket)
         
         lock_messages = mock_websocket.get_messages_by_type("input_lock")
         self.assertEqual(len(lock_messages), 1)
@@ -137,8 +159,8 @@ class TestWebSocketUpdatesExecution(unittest.TestCase):
         self.assertEqual(lock_data["router_id"], self.router_id)
         self.assertEqual(router.status, "processing")
         
-        # Test input unlock
-        await router.send_input_unlock()
+        # Test input unlock with websocket parameter
+        await router.send_input_unlock(websocket=mock_websocket)
         
         unlock_messages = mock_websocket.get_messages_by_type("input_unlock")
         self.assertEqual(len(unlock_messages), 1)
@@ -161,7 +183,7 @@ class TestWebSocketUpdatesExecution(unittest.TestCase):
         ]
         
         for status in status_messages:
-            await router.send_status(status)
+            await router.send_status(status=status, websocket=mock_websocket)
         
         # Verify all status messages were sent
         sent_status_messages = mock_websocket.get_messages_by_type("status")
@@ -180,7 +202,7 @@ class TestWebSocketUpdatesExecution(unittest.TestCase):
         
         # Test user message
         user_message = "Test user message"
-        await router.send_user_message(user_message)
+        await router.send_user_message(content=user_message, websocket=mock_websocket)
         
         user_messages = mock_websocket.get_messages_by_type("message")
         self.assertEqual(len(user_messages), 1)
@@ -194,7 +216,7 @@ class TestWebSocketUpdatesExecution(unittest.TestCase):
         # Test assistant message
         assistant_message = "Test assistant response"
         message_id = 123
-        await router.send_assistant_message(assistant_message, message_id)
+        await router.send_assistant_message(content=assistant_message, websocket=mock_websocket, message_id=message_id)
         
         assistant_messages = mock_websocket.get_messages_by_type("response")
         self.assertEqual(len(assistant_messages), 1)
@@ -211,7 +233,7 @@ class TestWebSocketUpdatesExecution(unittest.TestCase):
         
         # Send error message
         error_message = "Test error occurred"
-        await router.send_error(error_message)
+        await router.send_error(error=error_message, websocket=mock_websocket)
         
         error_messages = mock_websocket.get_messages_by_type("error")
         self.assertEqual(len(error_messages), 1)
@@ -310,12 +332,12 @@ class TestWebSocketUpdatesExecution(unittest.TestCase):
         router, mock_websocket = self.create_router_with_websocket()
         
         # Send sequence of messages
-        await router.send_input_lock()
-        await router.send_status("Processing")
-        await router.send_assistant_message("Working on it...")
-        await router.send_status("Almost done")
-        await router.send_assistant_message("Complete!")
-        await router.send_input_unlock()
+        await router.send_input_lock(websocket=mock_websocket)
+        await router.send_status(status="Processing", websocket=mock_websocket)
+        await router.send_assistant_message(content="Working on it...", websocket=mock_websocket)
+        await router.send_status(status="Almost done", websocket=mock_websocket)
+        await router.send_assistant_message(content="Complete!", websocket=mock_websocket)
+        await router.send_input_unlock(websocket=mock_websocket)
         
         # Verify message order
         all_messages = mock_websocket.sent_messages
@@ -338,16 +360,16 @@ class TestWebSocketUpdatesExecution(unittest.TestCase):
         router, mock_websocket = self.create_router_with_websocket()
         
         # Test normal operation
-        await router.send_status("Normal operation")
+        await router.send_status(status="Normal operation", websocket=mock_websocket)
         self.assertEqual(len(mock_websocket.get_messages_by_type("status")), 1)
         
         # Simulate connection failure
         mock_websocket.is_connected = False
         
         # These should not raise exceptions
-        await router.send_status("After disconnection")
-        await router.send_assistant_message("Should not crash")
-        await router.send_error("Error after disconnection")
+        await router.send_status(status="After disconnection", websocket=mock_websocket)
+        await router.send_assistant_message(content="Should not crash", websocket=mock_websocket)
+        await router.send_error(error="Error after disconnection", websocket=mock_websocket)
         
         # Messages should not be added when disconnected
         status_messages = mock_websocket.get_messages_by_type("status")
@@ -360,7 +382,7 @@ class TestWebSocketUpdatesExecution(unittest.TestCase):
         # Send multiple messages concurrently
         async def send_status_batch(start_idx, count):
             for i in range(count):
-                await router.send_status(f"Status {start_idx + i}")
+                await router.send_status(status=f"Status {start_idx + i}", websocket=mock_websocket)
         
         # Run concurrent status updates
         await asyncio.gather(
@@ -397,7 +419,7 @@ class TestWebSocketUpdatesExecution(unittest.TestCase):
         )
         
         # Handle planner completion
-        await router.handle_planner_completion(planner_id)
+        await router.handle_planner_completion(planner_id=planner_id, websocket=None)
         
         # Verify response was sent via WebSocket
         response_messages = mock_websocket.get_messages_by_type("response")
@@ -417,11 +439,11 @@ class TestWebSocketUpdatesExecution(unittest.TestCase):
         start_time = time.time()
         
         # Send messages with small delays
-        await router.send_status("First message")
+        await router.send_status(status="First message", websocket=mock_websocket)
         await asyncio.sleep(0.01)
-        await router.send_status("Second message")
+        await router.send_status(status="Second message", websocket=mock_websocket)
         await asyncio.sleep(0.01)
-        await router.send_status("Third message")
+        await router.send_status(status="Third message", websocket=mock_websocket)
         
         end_time = time.time()
         
@@ -446,7 +468,7 @@ class TestWebSocketUpdatesExecution(unittest.TestCase):
         large_content = "A" * 10000  # 10KB message
         
         # Send large message
-        await router.send_assistant_message(large_content)
+        await router.send_assistant_message(content=large_content, websocket=mock_websocket)
         
         # Verify message was sent correctly
         response_messages = mock_websocket.get_messages_by_type("response")
@@ -468,7 +490,7 @@ class TestWebSocketUpdatesExecution(unittest.TestCase):
         
         # Send message with complex content (converted to string for message)
         content_str = json.dumps(complex_content)
-        await router.send_assistant_message(content_str)
+        await router.send_assistant_message(content=content_str, websocket=mock_websocket)
         
         # Verify message was serialized correctly
         response_messages = mock_websocket.get_messages_by_type("response")

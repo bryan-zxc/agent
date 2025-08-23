@@ -119,7 +119,7 @@ class TestMultipleConversationsConcurrent(unittest.TestCase):
             self.assertEqual(router_data["status"], "active")
             
             # Verify messages were added
-            messages = self.db.get_messages_by_agent_id(router_id, "router")
+            messages = self.db.get_messages("router", router_id)
             self.assertEqual(len(messages), len(conversation_data["messages"]))
             
             return router_id
@@ -145,7 +145,7 @@ class TestMultipleConversationsConcurrent(unittest.TestCase):
             self.assertIsNotNone(router_data)
             self.assertEqual(router_data["status"], "active")
             
-            messages = self.db.get_messages_by_agent_id(router_id, "router")
+            messages = self.db.get_messages("router", router_id)
             self.assertGreaterEqual(len(messages), 3)  # At least 3 messages per conversation
 
     def test_concurrent_message_addition(self):
@@ -198,7 +198,7 @@ class TestMultipleConversationsConcurrent(unittest.TestCase):
         
         # Verify messages were added correctly to each conversation
         for i, router_id in enumerate(router_ids):
-            messages = self.db.get_messages_by_agent_id(router_id, "router")
+            messages = self.db.get_messages("router", router_id)
             
             # Should have original messages + newly added messages
             expected_count = len(self.test_conversations[i]["messages"]) + len(message_batches[i])
@@ -489,7 +489,7 @@ class TestMultipleConversationsConcurrent(unittest.TestCase):
         # Verify conversation isolation maintained
         for i, router_id in enumerate(router_ids):
             # Check message count
-            messages = self.db.get_messages_by_agent_id(router_id, "router")
+            messages = self.db.get_messages("router", router_id)
             expected_messages = 2 + operations_per_conversation  # Original + load test messages
             self.assertEqual(len(messages), expected_messages)
             

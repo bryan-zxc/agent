@@ -176,7 +176,7 @@ def save_planner_variable(planner_id: str, key: str, value: Any, check_existing:
         if planner:
             variable_paths = planner.get("variable_file_paths", {})
             variable_paths[final_key] = file_path
-            db.update_planner_file_paths(planner_id, variable_paths=variable_paths)
+            db.update_planner(planner_id, variable_file_paths=variable_paths)
         
         return file_path, final_key
     else:
@@ -250,7 +250,7 @@ def save_planner_image(planner_id: str, raw_image_name: str, encoded_image: str,
         if planner:
             image_paths = existing_image_paths.copy()
             image_paths[final_image_name] = file_path
-            db.update_planner_file_paths(planner_id, image_paths=image_paths)
+            db.update_planner(planner_id, image_file_paths=image_paths)
         
         return file_path, final_image_name
     else:
@@ -524,3 +524,79 @@ def append_to_worker_message_history(planner_id: str, task_response: TaskRespons
     except Exception as e:
         logger.error(f"Failed to append to worker message history for planner {planner_id}: {e}")
         return False
+
+
+def save_answer_template(planner_id: str, template_content: str) -> bool:
+    """Save answer template to dedicated markdown file"""
+    try:
+        planner_dir = get_planner_path(planner_id)
+        planner_dir.mkdir(parents=True, exist_ok=True)
+        
+        file_path = planner_dir / settings.answer_template_filename
+        
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(template_content)
+        
+        logger.info(f"Saved answer template to {file_path}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to save answer template for planner {planner_id}: {e}")
+        return False
+
+
+def load_answer_template(planner_id: str) -> Optional[str]:
+    """Load answer template from dedicated markdown file"""
+    try:
+        planner_dir = get_planner_path(planner_id)
+        file_path = planner_dir / settings.answer_template_filename
+        
+        if not file_path.exists():
+            logger.warning(f"Answer template file not found: {file_path}")
+            return None
+        
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        logger.debug(f"Loaded answer template from {file_path}")
+        return content
+    except Exception as e:
+        logger.error(f"Failed to load answer template for planner {planner_id}: {e}")
+        return None
+
+
+def save_wip_answer_template(planner_id: str, template_content: str) -> bool:
+    """Save work-in-progress answer template to dedicated markdown file"""
+    try:
+        planner_dir = get_planner_path(planner_id)
+        planner_dir.mkdir(parents=True, exist_ok=True)
+        
+        file_path = planner_dir / settings.wip_answer_template_filename
+        
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(template_content)
+        
+        logger.info(f"Saved WIP answer template to {file_path}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to save WIP answer template for planner {planner_id}: {e}")
+        return False
+
+
+def load_wip_answer_template(planner_id: str) -> Optional[str]:
+    """Load work-in-progress answer template from dedicated markdown file"""
+    try:
+        planner_dir = get_planner_path(planner_id)
+        file_path = planner_dir / settings.wip_answer_template_filename
+        
+        if not file_path.exists():
+            logger.warning(f"WIP answer template file not found: {file_path}")
+            return None
+        
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        logger.debug(f"Loaded WIP answer template from {file_path}")
+        return content
+    except Exception as e:
+        logger.error(f"Failed to load WIP answer template for planner {planner_id}: {e}")
+        return None

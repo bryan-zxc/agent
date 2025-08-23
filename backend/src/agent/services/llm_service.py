@@ -23,9 +23,9 @@ from sqlalchemy import (
     Float,
     DateTime,
     Enum,
+    Index,
 )
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import declarative_base, sessionmaker
 
 from ..config.settings import AgentSettings
 
@@ -68,13 +68,18 @@ class LLMUsage(Base):
     __tablename__ = "llm_usage"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    timestamp = Column(DateTime, nullable=False, default=datetime.now)
+    timestamp = Column(DateTime, nullable=False, default=datetime.now, index=True)  # ADDED INDEX for cost queries
     model = Column(String(100), nullable=False)
     input_tokens = Column(Integer, nullable=False)
     output_tokens = Column(Integer, nullable=False)
     cost = Column(Float, nullable=False)
     request_type = Column(Enum(RequestType), nullable=False)
-    caller = Column(String(100), nullable=False)
+    caller = Column(String(100), nullable=False, index=True)  # ADDED INDEX for caller filtering
+    
+    # Add composite index for cost card queries
+    __table_args__ = (
+        Index('idx_caller_timestamp', 'caller', 'timestamp'),  # For filtering by caller and time range
+    )
 
 
 def delay_exp(e, x):
@@ -113,10 +118,53 @@ class LLM:
         # Store caller for usage tracking
         self.caller = caller
 
-        # SQLAlchemy setup
-        self.engine = create_engine(f"sqlite:///{db_path}")
+        # SQLAlchemy setup with WAL mode and connection pooling
+        self.db_path = Path(db_path)
+        
+        # Ensure directory exists
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        self.engine = create_engine(
+            f"sqlite:///{db_path}",
+            # Connection pool settings for better concurrency
+            pool_size=10,
+            max_overflow=20,
+            pool_pre_ping=True,
+            pool_recycle=3600,  # Recycle connections every hour
+            # SQLite-specific connection arguments
+            connect_args={
+                "check_same_thread": False,  # Allow connections across threads
+                "timeout": 30,  # 30 second timeout for database locks
+            },
+            echo=False  # Set to True for SQL debugging
+        )
+        
+        # Configure WAL mode and other SQLite optimisations
+        self._configure_sqlite_optimisations()
+        
         Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine)
+    
+    def _configure_sqlite_optimisations(self):
+        """Configure SQLite for optimal concurrent performance"""
+        with self.engine.connect() as conn:
+            # Enable WAL mode for concurrent readers and writers
+            conn.execute("PRAGMA journal_mode=WAL")
+            
+            # Set busy timeout to handle lock contention gracefully
+            conn.execute("PRAGMA busy_timeout=5000")  # 5 second timeout
+            
+            # Enable synchronous mode for durability while maintaining performance
+            conn.execute("PRAGMA synchronous=NORMAL")  # Balance safety vs performance
+            
+            # Set cache size for better performance (negative value = KB)
+            conn.execute("PRAGMA cache_size=-32000")  # 32MB cache
+            
+            # Optimize temp storage
+            conn.execute("PRAGMA temp_store=MEMORY")
+            
+            conn.commit()
+            logger.info("SQLite WAL mode and optimisations enabled for LLM usage database")
 
     def _calculate_cost(
         self, model: str, input_tokens: int, output_tokens: int
@@ -174,88 +222,311 @@ class LLM:
             session.close()
 
     def _get_client_for_model(self, model: str):
-        """Select the appropriate client based on the model name."""
+        """Select the appropriate client based on the model name.
+
+        Note: Anthropic models now use native SDK, this is only for OpenAI/Gemini.
+        """
         if model.startswith("gpt"):
             return self.openai_client
         elif model.startswith("gemini"):
             return self.gemini_openai_client
-        elif self._is_anthropic_model(model):
-            return self.anthropic_openai_client
         else:
-            raise ValueError(f"Unknown model: {model}")
+            raise ValueError(f"Unknown model for OpenAI-compatible client: {model}")
 
     def _is_anthropic_model(self, model: str):
         """Check if model is an Anthropic model."""
         return model.startswith("sonnet") or model.startswith("claude")
 
-    def _convert_developer_to_user(self, messages: list[dict]) -> list[dict]:
-        """Convert any 'developer' roles to 'user' roles in messages."""
-        converted_messages = []
+    def _normalise_content_to_structured(self, content: str | list) -> list:
+        """Convert content to structured list format for Anthropic API.
+
+        Args:
+            content: Either string or existing list of content blocks
+
+        Returns:
+            List of content blocks in format [{"type": "text", "text": "content"}, ...]
+        """
+        if isinstance(content, str):
+            return [{"type": "text", "text": content}]
+        elif isinstance(content, list):
+            # Already in structured format, return as-is
+            return content
+        else:
+            # Fallback for unexpected types
+            return [{"type": "text", "text": str(content)}]
+
+    def _convert_openai_to_anthropic_messages(
+        self, messages: list[dict]
+    ) -> tuple[list[dict], str | None]:
+        """Convert OpenAI format messages to Anthropic format with structured content.
+
+        Returns:
+            tuple: (anthropic_messages, system_content)
+        """
+        system_content = None
+        anthropic_messages = []
+
         for message in messages:
-            converted_message = message.copy()
-            if converted_message.get("role") == "developer":
-                converted_message["role"] = "user"
-            converted_messages.append(converted_message)
-        return converted_messages
+            message_copy = message.copy()
+            role = message_copy.get("role")
+            content = message_copy.get("content", "")
 
-    def _get_anthropic_pydantic_response(
-        self, messages, model, temperature, response_format: BaseModel
-    ) -> BaseModel:
-        """Get structured response from Anthropic using Pydantic model."""
-        schema = response_format.model_json_schema()
+            if role == "system":
+                # Extract system content for separate system parameter
+                if isinstance(content, list):
+                    # Extract text from structured content
+                    text_parts = [
+                        block.get("text", "")
+                        for block in content
+                        if block.get("type") == "text"
+                    ]
+                    system_text = " ".join(text_parts)
+                else:
+                    system_text = str(content)
 
-        # Add schema information to the messages
-        enhanced_messages = messages + [
-            {
-                "role": "user",
-                "content": f"Please respond with a JSON object that is compliant with this schema from the .model_json_schema() of a Pydantic model:\n\n{json.dumps(schema, indent=2)}",
+                if system_content is None:
+                    system_content = system_text
+                else:
+                    system_content += "\n\n" + system_text
+            elif role == "developer":
+                # Convert developer role to user role with structured content
+                message_copy["role"] = "user"
+                message_copy["content"] = self._normalise_content_to_structured(content)
+                anthropic_messages.append(message_copy)
+            else:
+                # Normalise content to structured format for user, assistant, and tool messages
+                message_copy["content"] = self._normalise_content_to_structured(content)
+                anthropic_messages.append(message_copy)
+
+        # Merge consecutive messages with same role
+        merged_messages = self._merge_consecutive_messages(anthropic_messages)
+
+        return merged_messages, system_content
+
+    def _merge_consecutive_messages(self, messages: list[dict]) -> list[dict]:
+        """Merge consecutive messages with the same role by combining content arrays."""
+        if not messages:
+            return messages
+
+        merged_messages = []
+
+        for message in messages:
+            current_role = message.get("role")
+            current_content = message.get("content", [])
+
+            # If this is the first message or different role, add it
+            if not merged_messages or merged_messages[-1].get("role") != current_role:
+                merged_messages.append(message.copy())
+            else:
+                # Same role as previous message - merge content arrays
+                prev_content = merged_messages[-1].get("content", [])
+
+                # Extend with current message content
+                prev_content.extend(current_content)
+                merged_messages[-1]["content"] = prev_content
+
+        return merged_messages
+
+    def _anthropic_text_response(
+        self,
+        messages: list[dict],
+        model: str,
+        temperature: float,
+        system_content: str | None = None,
+    ) -> str | None:
+        """Get simple text response from Anthropic using native SDK."""
+        try:
+            kwargs = {
+                "model": model,
+                "max_tokens": 4096,
+                "temperature": temperature,
+                "messages": messages,
             }
+
+            if system_content:
+                kwargs["system"] = system_content
+
+            response = self.anthropic_client.messages.create(**kwargs)
+
+            # Track usage
+            self._track_usage(
+                model=model,
+                input_tokens=response.usage.input_tokens,
+                output_tokens=response.usage.output_tokens,
+                request_type="text",
+            )
+
+            return response.content[0].text
+
+        except Exception as e:
+            logger.error(f"Anthropic text response error: {e}")
+            return None
+
+    def _anthropic_structured_response(
+        self,
+        messages: list[dict],
+        model: str,
+        temperature: float,
+        response_format: BaseModel | dict,
+        system_content: str | None = None,
+    ) -> BaseModel | str | None:
+        """Unified structured response handler for both Pydantic models and JSON objects."""
+
+        # Determine if this is Pydantic model or JSON object request
+        is_pydantic = isinstance(response_format, type) and issubclass(
+            response_format, BaseModel
+        )
+        is_json_object = response_format == {"type": "json_object"}
+
+        if is_pydantic:
+            # Pydantic model - add schema information
+            schema = response_format.model_json_schema()
+            format_instruction = f"Please respond with a JSON object that is compliant with this schema from the .model_json_schema() of a Pydantic model:\n\n{json.dumps(schema, indent=2)}"
+            request_type = "structured"
+        elif is_json_object:
+            # Generic JSON object
+            format_instruction = "Respond in JSON format."
+            request_type = "json_object"
+        else:
+            logger.error(f"Unsupported response_format: {response_format}")
+            return None
+
+        # Add format instruction to messages
+        enhanced_messages = messages + [
+            {"role": "user", "content": [{"type": "text", "text": format_instruction}]}
         ]
 
         for attempt in range(MAX_LLM_RETRIES):
             try:
-                # Use prefill with assistant message containing "{"
-                response = self.anthropic_client.messages.create(
-                    model=model,
-                    max_tokens=4096,
-                    temperature=temperature,
-                    messages=enhanced_messages
-                    + [{"role": "assistant", "content": "{"}],
-                )
+                kwargs = {
+                    "model": model,
+                    "max_tokens": 4096,
+                    "temperature": temperature,
+                    "messages": enhanced_messages
+                    + [
+                        {
+                            "role": "assistant",
+                            "content": [{"type": "text", "text": "{"}],
+                        }
+                    ],
+                }
+
+                if system_content:
+                    kwargs["system"] = system_content
+
+                response = self.anthropic_client.messages.create(**kwargs)
 
                 # Extract JSON content and add opening brace back
                 json_content = "{" + response.content[0].text
 
-                # Track usage
-                self._track_usage(
-                    model=model,
-                    input_tokens=response.usage.input_tokens,
-                    output_tokens=response.usage.output_tokens,
-                    request_type="structured",
-                )
+                # Track usage (only on first attempt to avoid double-counting retries)
+                if attempt == 0:
+                    self._track_usage(
+                        model=model,
+                        input_tokens=response.usage.input_tokens,
+                        output_tokens=response.usage.output_tokens,
+                        request_type=request_type,
+                    )
 
-                # Parse JSON and validate with Pydantic
-                json_data = json.loads(json_content)
-                return response_format.model_validate(json_data)
+                # Clean up JSON content
+                try:
+                    json_data = json.loads(json_content)
+                except json.JSONDecodeError:
+                    # Try cleaning control characters
+                    cleaned_json = re.sub(r"[\x00-\x1F]+", "", json_content)
+                    json_data = json.loads(cleaned_json)
+                    json_content = cleaned_json
+
+                # Return based on format type
+                if is_pydantic:
+                    return response_format.model_validate(json_data)
+                else:
+                    return json_content
 
             except (json.JSONDecodeError, ValidationError) as e:
                 logger.warning(f"Attempt {attempt + 1} failed: {e}")
                 if attempt < MAX_LLM_RETRIES - 1:
-                    # Add error message to conversation and retry
+                    # Add error message to conversation and retry - FIXED: use "user" role
                     enhanced_messages.append(
                         {
                             "role": "assistant",
-                            "content": json_content,
+                            "content": [{"type": "text", "text": json_content}],
                         }
                     )
                     enhanced_messages.append(
                         {
                             "role": "user",
-                            "content": f"The previous response failed validation with error: {e}\nPlease provide a corrected JSON response that matches the schema exactly.",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": f"The previous response failed validation with error: {e}\nPlease provide a corrected JSON response that matches the format exactly.",
+                                }
+                            ],
                         }
                     )
                 else:
-                    raise e
+                    logger.error(
+                        f"Failed to get valid structured response after {MAX_LLM_RETRIES} attempts: {e}"
+                    )
+                    return None
+
+        return None
+
+    def _anthropic_tools_response(
+        self,
+        messages: list[dict],
+        model: str,
+        temperature: float,
+        tools: list,
+        system_content: str | None = None,
+    ) -> dict | None:
+        """Get tools/function calling response from Anthropic using native SDK."""
+        try:
+            kwargs = {
+                "model": model,
+                "max_tokens": 4096,
+                "temperature": temperature,
+                "messages": messages,
+                "tools": tools,
+            }
+
+            if system_content:
+                kwargs["system"] = system_content
+
+            response = self.anthropic_client.messages.create(**kwargs)
+
+            # Track usage
+            self._track_usage(
+                model=model,
+                input_tokens=response.usage.input_tokens,
+                output_tokens=response.usage.output_tokens,
+                request_type="tools",
+            )
+
+            # Convert Anthropic response format to OpenAI-compatible format for backward compatibility
+            content_text = (
+                response.content[0].text
+                if response.content and hasattr(response.content[0], "text")
+                else None
+            )
+            tool_calls = None
+
+            # Extract tool calls from response content
+            for content_block in response.content:
+                if hasattr(content_block, "type") and content_block.type == "tool_use":
+                    if tool_calls is None:
+                        tool_calls = []
+                    tool_calls.append(content_block)
+
+            return {
+                "content": content_text,
+                "tool_calls": tool_calls,
+                "role": "assistant",
+            }
+
+        except Exception as e:
+            logger.error(f"Anthropic tools response error: {e}")
+            return None
 
     async def a_get_response(
         self,
@@ -275,34 +546,83 @@ class LLM:
         response_format: BaseModel | dict = None,
         tools: list = None,
     ):
-        # Convert any developer roles to user roles for Anthropic models only
-        if self._is_anthropic_model(model):
-            messages = self._convert_developer_to_user(messages)
-
-        # Select the appropriate client based on model
-        client = self._get_client_for_model(model)
         # Map to actual model name
         actual_model = MODEL_MAPPING.get(model, model)
 
         for x in range(FAIL_STRUCTURE_RESPONSE_RETRIES):
             try:
-                if tools:
-                    return self._get_response_tools(
-                        messages, actual_model, temperature, tools, client
+                if self._is_anthropic_model(model):
+                    # Use native Anthropic SDK with message conversion
+                    anthropic_messages, system_content = (
+                        self._convert_openai_to_anthropic_messages(messages)
                     )
-                if response_format:
-                    return self._get_response_structured(
-                        messages, actual_model, temperature, response_format, client
+
+                    if tools:
+                        result = self._anthropic_tools_response(
+                            anthropic_messages,
+                            actual_model,
+                            temperature,
+                            tools,
+                            system_content,
+                        )
+                        if result is None:
+                            raise Exception("Anthropic tools response returned None")
+                        return type(
+                            "MockMessage", (), result
+                        )()  # Convert dict to object for compatibility
+                    elif response_format:
+                        # Unified handler for both Pydantic models and JSON objects
+                        result = self._anthropic_structured_response(
+                            anthropic_messages,
+                            actual_model,
+                            temperature,
+                            response_format,
+                            system_content,
+                        )
+                        if result is None:
+                            raise Exception(
+                                "Anthropic structured response returned None"
+                            )
+                        return result
+                    else:
+                        result = self._anthropic_text_response(
+                            anthropic_messages,
+                            actual_model,
+                            temperature,
+                            system_content,
+                        )
+                        if result is None:
+                            raise Exception("Anthropic text response returned None")
+                        return type(
+                            "MockMessage", (), {"content": result}
+                        )()  # Convert to object for compatibility
+                else:
+                    # Use existing logic for OpenAI and Gemini models
+                    client = self._get_client_for_model(model)
+
+                    if tools:
+                        return self._get_response_tools(
+                            messages, actual_model, temperature, tools, client
+                        )
+                    if response_format:
+                        return self._get_response_structured(
+                            messages, actual_model, temperature, response_format, client
+                        )
+                    return self._get_response_text_only(
+                        messages, actual_model, temperature, client
                     )
-                return self._get_response_text_only(
-                    messages, actual_model, temperature, client
-                )
             except ValidationError as e:
                 logger.error(f"Validation error: {e}")
                 delay_exp(e, x)
             except Exception as e:
                 logger.error(f"Error: {e}")
                 delay_exp(e, x)
+
+        # If all retries failed, return None to prevent crashes
+        logger.error(
+            f"All {FAIL_STRUCTURE_RESPONSE_RETRIES} attempts failed for model {model}"
+        )
+        return None
 
     def _get_response_text_only(self, messages, model, temperature, client):
         response = client.chat.completions.create(
@@ -623,19 +943,21 @@ class LLM:
 def get_actual_url_from_redirect(redirect_url: str) -> str:
     """Extract actual URL from Google redirect (generalised from get_pdf_url_from_redirect)."""
     try:
-        response_redirect = requests.get(redirect_url, allow_redirects=False, timeout=10)
+        response_redirect = requests.get(
+            redirect_url, allow_redirects=False, timeout=10
+        )
         if response_redirect.status_code in [301, 302]:
-            redirect_location = response_redirect.headers.get('Location', '')
+            redirect_location = response_redirect.headers.get("Location", "")
             if redirect_location:
                 return redirect_location
-        
+
         # If no direct redirect, try to extract from HTML
         response_redirect = requests.get(redirect_url, timeout=10)
         # Look for common URL patterns in the HTML
         url_match = re.search(r'HREF="([^"]*)"', response_redirect.text)
         if url_match:
             return url_match.group(1)
-            
+
         return redirect_url  # Return original if no redirect found
     except Exception as e:
         logger.warning(f"Failed to resolve redirect {redirect_url}: {e}")
@@ -644,19 +966,21 @@ def get_actual_url_from_redirect(redirect_url: str) -> str:
 
 def add_citations(response):
     """Add citations to the response text based on grounding metadata."""
-    if not hasattr(response, 'candidates') or not response.candidates:
+    if not hasattr(response, "candidates") or not response.candidates:
         return response.text
-    
+
     candidate = response.candidates[0]
-    if not hasattr(candidate, 'grounding_metadata') or not candidate.grounding_metadata:
+    if not hasattr(candidate, "grounding_metadata") or not candidate.grounding_metadata:
         return response.text
-    
+
     text = response.text
     grounding_metadata = candidate.grounding_metadata
-    
-    if not hasattr(grounding_metadata, 'grounding_supports') or not hasattr(grounding_metadata, 'grounding_chunks'):
+
+    if not hasattr(grounding_metadata, "grounding_supports") or not hasattr(
+        grounding_metadata, "grounding_chunks"
+    ):
         return text
-        
+
     supports = grounding_metadata.grounding_supports
     chunks = grounding_metadata.grounding_chunks
 
@@ -671,11 +995,11 @@ def add_citations(response):
             for i in support.grounding_chunk_indices:
                 if i < len(chunks):
                     uri = chunks[i].web.uri
-                    
+
                     # Convert Google redirect URLs to actual URLs
-                    if 'vertexaisearch.cloud.google.com/grounding-api-redirect' in uri:
+                    if "vertexaisearch.cloud.google.com/grounding-api-redirect" in uri:
                         uri = get_actual_url_from_redirect(uri)
-                    
+
                     citation_links.append(f"[{i + 1}]({uri})")
 
             citation_string = ", ".join(citation_links)

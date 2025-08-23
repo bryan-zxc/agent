@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Literal
+from typing import Literal, Optional
 
 
 class ImageElement(BaseModel):
@@ -110,16 +110,16 @@ class DocSearchCriteria(BaseModel):
 
 class DocumentContext(BaseModel):
     file_type: Literal["pdf", "text"]
-    encoding: str = None  # For text files
-    pdf_content: PDFFull = None  # For PDF files
+    encoding: Optional[str] = None  # For text files
+    pdf_content: Optional[PDFFull] = None  # For PDF files
 
 
 class File(BaseModel):
     filepath: str
     file_type: Literal["image", "data", "document"]
-    image_context: list[ImageElement] = None
-    data_context: Literal["csv", "excel", "other"] = None
-    document_context: DocumentContext = None
+    image_context: list[ImageElement] = []
+    data_context: Optional[Literal["csv", "excel", "other"]] = None
+    document_context: Optional[DocumentContext] = None
 
 
 class ColumnMeta(BaseModel):

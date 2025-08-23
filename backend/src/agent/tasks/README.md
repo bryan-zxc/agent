@@ -35,13 +35,17 @@ Creates execution plan from user request and queues task creation.
 
 **Process:**
 1. Creates planner record in database with user question and instructions
-2. Generates execution plan using LLM with file processing instructions
-3. Saves execution plan model to filesystem and database
-4. Queues `execute_task_creation` for next step
+2. Processes uploaded files (images, CSV, PDF, text) into planner context
+3. Generates execution plan using LLM with file processing instructions
+4. Creates initial answer template structure for progressive refinement
+5. Saves execution plan model and answer templates to filesystem
+6. Queues `execute_task_creation` for next step
 
 **Key Features:**
 - File type detection and instruction generation
+- Initial answer template creation with placeholder structure
 - Execution plan validation and storage
+- Answer template file persistence (.md format)
 - Automatic progression to task creation phase
 
 #### `execute_task_creation(task_data: Dict[str, Any])`
@@ -71,20 +75,45 @@ Processes worker results, appends to message history, and generates final user r
 - `task_data`: Contains planner context and worker results
 
 **Process:**
-1. Checks if all workers have completed successfully
-2. Collects worker results and execution context
+1. Processes completed worker results and updates execution plan
+2. Updates answer template with new information from worker outputs
 3. Appends completed worker responses to message history for future context
-4. Generates final user response using LLM synthesis
-5. Updates planner status to completed
-6. Triggers cleanup of planner files
-7. Notifies router of completion for WebSocket delivery
+4. **Early completion check**: If no open todos remain after task completion, triggers immediate planner completion
+5. Updates execution plan using LLM for remaining open tasks
+6. Checks if all tasks are complete for final response generation
+7. Uses filled answer template as primary source for final user response
+8. Updates planner status to completed and triggers file cleanup
 
 **Key Features:**
-- Worker result aggregation
+- **Early completion optimisation**: Skips unnecessary LLM processing when no work remains
+- Progressive answer template refinement after each worker completion
+- Answer template-based final response generation
+- Worker result aggregation and execution plan updates
 - Worker message history persistence for future tasks
-- Final response generation
-- Automatic file cleanup
-- Router notification for real-time delivery
+- Template-driven structured response formatting
+- Automatic file cleanup and completion handling
+
+#### `_complete_planner_execution(planner_id, execution_plan_model, worker_id, planner_data, db)`
+Internal helper function that handles planner completion logic to avoid code duplication.
+
+**Parameters:**
+- `planner_id`: The planner ID
+- `execution_plan_model`: The execution plan model to save
+- `worker_id`: The current worker ID to mark as recorded
+- `planner_data`: Planner data from database
+- `db`: Database connection
+
+**Process:**
+1. Loads final work-in-progress answer template
+2. Generates final user response using LLM with template completion prompts
+3. Saves execution plan and updates planner status to completed
+4. Marks worker as recorded and performs file cleanup
+5. Logs completion status
+
+**Usage:**
+- Called by early completion check when no open todos remain
+- Called by standard completion logic after LLM execution plan updates
+- Ensures consistent completion behaviour across both paths
 
 ### Worker Functions (`worker_tasks.py`)
 
@@ -177,6 +206,34 @@ file_path, final_name = save_planner_image(
 # Lazy load for LLM processing
 chart_data = get_planner_image("abc123", "sales_chart_2024")
 ```
+
+### Answer Template Management
+
+Answer templates provide structured response formatting with progressive refinement:
+
+```python
+# Save initial template structure
+save_answer_template(
+    planner_id="abc123",
+    template_content="# Analysis Results\n\n## Overview\n[Summary]\n\n## Key Findings\n- [Finding 1]\n- [Finding 2]"
+)
+
+# Save work-in-progress template with partial fills
+save_wip_answer_template(
+    planner_id="abc123", 
+    template_content="# Analysis Results\n\n## Overview\nSales data shows Q3 decline\n\n## Key Findings\n- [Finding 1]\n- [Finding 2]"
+)
+
+# Load templates for updates
+current_template = load_answer_template("abc123")
+wip_template = load_wip_answer_template("abc123")
+```
+
+**Template Lifecycle:**
+1. **Initial Creation**: Basic markdown structure with placeholders during planning
+2. **Progressive Filling**: Updated after each worker completion with new information
+3. **Final Completion**: Used as primary source for final user response
+4. **File Storage**: Stored as `.md` files with template and WIP versions
 
 ### Worker Message History Functions
 

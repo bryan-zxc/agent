@@ -123,11 +123,11 @@ class TestPlannerCleanup(unittest.TestCase):
             "worker_id": "worker_1",
             "task_status": "completed",
             "task_description": "Test task",
-            "output_variables": {},
-            "output_images": {}
+            "output_variable_filepaths": {},
+            "output_image_filepaths": {}
         }
         mock_db.get_workers_by_planner.return_value = [mock_worker]
-        mock_db.get_messages_by_agent_id.return_value = [
+        mock_db.get_messages.return_value = [
             {"role": "assistant", "content": "Task completed successfully"}
         ]
         
@@ -185,11 +185,11 @@ class TestPlannerCleanup(unittest.TestCase):
             "worker_id": "worker_1",
             "task_status": "completed",
             "task_description": "Test task",
-            "output_variables": {},
-            "output_images": {}
+            "output_variable_filepaths": {},
+            "output_image_filepaths": {}
         }
         mock_db.get_workers_by_planner.return_value = [mock_worker]
-        mock_db.get_messages_by_agent_id.return_value = [
+        mock_db.get_messages.return_value = [
             {"role": "assistant", "content": "Task completed successfully"}
         ]
         

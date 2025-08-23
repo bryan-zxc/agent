@@ -48,6 +48,17 @@
 - **Safe Execution**: Sandboxed Python with security guardrails
 - **Type Safety**: Pydantic models throughout
 
+## Testing Environment
+
+**Backend Testing**: All backend code testing and execution must be done through Docker with uv.
+
+```bash
+# Test Python compilation in Docker backend
+docker-compose exec backend uv run python -m py_compile src/agent/tasks/worker_tasks.py
+```
+
+Use `docker-compose exec backend uv run python` for any Python script execution or testing in the backend environment.
+
 ## CRITICAL: Documentation Update Requirements
 
 **MANDATORY: After making ANY code changes, you MUST update the relevant documentation:**

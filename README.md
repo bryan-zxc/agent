@@ -54,6 +54,13 @@ agent/
   - Cancel upload process
 - Automatic unique filename generation for conflict avoidance
 
+### Progressive Answer Templates
+- Dynamic answer template generation for structured responses
+- Progressive template refinement as tasks complete
+- Markdown-based template structure with placeholder filling
+- Context-aware template updates based on discovered information
+- Work-in-progress template tracking for quality assurance
+
 ### Conversation Management
 - Persistent conversation history
 - Context switching between chat and analysis modes
