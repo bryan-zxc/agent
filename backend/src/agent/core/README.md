@@ -37,7 +37,7 @@ WebSocket-enabled router for real-time chat and file processing orchestration.
 - Built-in database persistence for router history
 - **Architecture**: All communication methods require active WebSocket connections (no optional WebSocket parameters)
 
-**Key Methods:**
+**Key Methods (all async):**
 - `__init__(router_id)`: Initialize with router ID for persistence
 - `activate_conversation(user_message, websocket, files?)`: Initialize new router with first message
 - `handle_message(message_data, websocket)`: Main message handler with required WebSocket

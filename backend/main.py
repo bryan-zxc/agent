@@ -20,6 +20,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from sqlalchemy import text
 from src.agent.core.router import RouterAgent
 from src.agent.models.agent_database import AgentDatabase
 from src.agent.utils.file_utils import calculate_file_hash, generate_unique_filename, sanitise_filename
@@ -61,7 +62,7 @@ async def startup_event():
     
     # Clear task queue on startup to prevent stale tasks from previous runs
     logger.info("Clearing task queue...")
-    cleared_count = db.clear_task_queue()
+    cleared_count = await db.clear_task_queue()
     logger.info(f"Cleared {cleared_count} tasks from task queue")
     
     await start_background_processor()
@@ -210,7 +211,7 @@ async def upload_file(file: UploadFile = File(...)):
             Path(temp_file_path).unlink(missing_ok=True)
         
         # Check for duplicate content
-        existing_file = db.get_file_by_hash(content_hash, user_id)
+        existing_file = await db.get_file_by_hash(content_hash, user_id)
         
         if existing_file:
             # Duplicate found - return duplicate info with options
@@ -244,7 +245,7 @@ async def upload_file(file: UploadFile = File(...)):
             buffer.write(content)
         
         # Store file metadata
-        db.create_file_metadata(
+        await db.create_file_metadata(
             file_id=file_id,
             content_hash=content_hash,
             original_filename=sanitised_filename,
@@ -285,13 +286,13 @@ async def resolve_duplicate(
                 "files": []  # Empty files array for message handling
             }
         
-        existing_file = db.get_file_by_id(existing_file_id)
+        existing_file = await db.get_file_by_id(existing_file_id)
         if not existing_file:
             raise HTTPException(status_code=404, detail="Existing file not found")
         
         if action == "use_existing":
             # Increment reference count and return existing file
-            db.increment_file_reference(existing_file_id)
+            await db.increment_file_reference(existing_file_id)
             return {
                 "action": "use_existing",
                 "file_id": existing_file["file_id"],
@@ -343,7 +344,7 @@ async def resolve_duplicate(
             content_hash = calculate_file_hash(file_path)
             
             # Store file metadata with unique filename
-            db.create_file_metadata(
+            await db.create_file_metadata(
                 file_id=file_id,
                 content_hash=content_hash,
                 original_filename=unique_filename,
@@ -380,32 +381,19 @@ async def health_check():
 async def get_routers():
     """Get all routers"""
     try:
-        from src.agent.models.agent_database import (
-            AgentDatabase,
-            Router,
-            RouterMessage,
-        )
-
         db = AgentDatabase()
-        with db.SessionLocal() as session:
-            routers = (
-                session.query(Router)
-                .order_by(Router.updated_at.desc())
-                .all()
-            )
-
-            result = []
-            for router in routers:
-                result.append(
-                    {
-                        "id": router.router_id,
-                        "title": router.title,
-                        "preview": router.preview,
-                        "timestamp": router.updated_at.isoformat(),
-                    }
-                )
-
-        return result
+        routers = await db.get_all_routers()
+        
+        # Transform to match expected API format
+        return [
+            {
+                "id": router["router_id"],
+                "title": router["title"],
+                "preview": router["preview"],
+                "timestamp": router["updated_at"].isoformat() if router["updated_at"] else None,
+            }
+            for router in routers
+        ]
     except Exception as e:
         logger.error(f"Error fetching routers: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -528,8 +516,8 @@ async def get_usage_stats():
         
         # Configure WAL mode for this connection
         with engine.connect() as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA busy_timeout=5000")
+            conn.execute(text("PRAGMA journal_mode=WAL"))
+            conn.execute(text("PRAGMA busy_timeout=5000"))
             conn.commit()
         
         Base.metadata.create_all(engine)

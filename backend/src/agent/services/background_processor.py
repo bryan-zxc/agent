@@ -126,7 +126,7 @@ class BackgroundTaskProcessor:
         
         try:
             # Mark task as in progress
-            self.db.update_task_status(task_id, "IN_PROGRESS")
+            await self.db.update_task_status(task_id, "IN_PROGRESS")
             
             # Get the function to execute
             if function_name not in self.function_registry:
@@ -138,7 +138,7 @@ class BackgroundTaskProcessor:
             await task_function(task_data)
             
             # Mark task as completed
-            self.db.update_task_status(task_id, "COMPLETED")
+            await self.db.update_task_status(task_id, "COMPLETED")
             logger.info(f"Task {task_id} completed successfully")
             
         except Exception as e:
@@ -148,7 +148,7 @@ class BackgroundTaskProcessor:
             
             # Mark task as failed with detailed error message
             error_message = f"{type(e).__name__}: {str(e)}"
-            self.db.update_task_status(task_id, "FAILED", error_message)
+            await self.db.update_task_status(task_id, "FAILED", error_message)
             logger.error(f"Task {task_id} ({function_name}) failed and marked as FAILED in database")
             
             # TODO: Implement retry logic based on retry_count and max_retries

@@ -177,11 +177,19 @@ Database models and service for agent message persistence and state management.
 #### Service Class
 
 **`AgentDatabase`**
-- Unified database service for all agent types and state management
-- **Core Methods:**
+- Unified async database service for all agent types and state management
+- **Async Architecture**: All database operations use async/await patterns with aiosqlite
+- **Core Methods (all async):**
   - `add_message(agent_type, agent_id, role, content)`: Store message (returns message ID)
   - `get_messages(agent_type, agent_id)`: Retrieve router history
   - `clear_messages(agent_type, agent_id)`: Clear router history
+  - `create_planner()`: Create new planner instance
+  - `update_planner()`: Update planner state
+  - `get_planner()`: Retrieve planner information
+  - `create_worker()`: Create new worker/task instance
+  - `get_workers_by_planner()`: Get all workers for a planner
+  - `enqueue_task()`: Add task to execution queue
+  - `get_pending_tasks()`: Retrieve queued tasks
 - **Planner Linking Methods (Schema V2):**
   - `link_message_planner(router_id, message_id, planner_id)`: Associate planner with specific message
   - `get_planner_by_message(message_id)`: Retrieve planner info for a specific message (async)
@@ -189,8 +197,8 @@ Database models and service for agent message persistence and state management.
 - **Migration Features:**
   - `_migrate_v1_to_v2()`: Automatic schema migration on startup
   - `_record_migration(version, description)`: Track migration history
-- **Database**: SQLite with automatic table creation and migrations
-- **Thread Safety**: Session-per-operation pattern
+- **Database**: Async SQLite with aiosqlite, automatic table creation and migrations
+- **Concurrency**: AsyncSessionLocal context manager for proper async session handling
 
 ## Modules
 
@@ -388,12 +396,24 @@ from agent.models.agent_database import AgentDatabase
 
 db = AgentDatabase()
 
-# Store router message
-db.add_message("router", "router-123", "user", "Hello!")
-db.add_message("router", "router-123", "assistant", "Hi there!")
+# Store router message (async)
+await db.add_message("router", "router-123", "user", "Hello!")
+await db.add_message("router", "router-123", "assistant", "Hi there!")
 
-# Retrieve router
-messages = db.get_messages("router", "router-123")
+# Retrieve router (async)
+messages = await db.get_messages("router", "router-123")
+
+# Create planner (async)
+await db.create_planner(
+    planner_id="planner-456",
+    planner_name="Data Analysis Planner",
+    user_question="Analyse the sales data",
+    instruction="Generate comprehensive analysis",
+    status="planning"
+)
+
+# Get planner state (async)
+planner = await db.get_planner("planner-456")
 ```
 
 ### File Processing

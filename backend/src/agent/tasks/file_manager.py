@@ -155,7 +155,7 @@ def load_image_from_file(file_path: str) -> Optional[str]:
         return None
 
 
-def save_planner_variable(planner_id: str, key: str, value: Any, check_existing: bool = False) -> tuple[str, str]:
+async def save_planner_variable(planner_id: str, key: str, value: Any, check_existing: bool = False) -> tuple[str, str]:
     """Save a variable and update database with file path
     
     Args:
@@ -172,11 +172,11 @@ def save_planner_variable(planner_id: str, key: str, value: Any, check_existing:
     if save_variable_to_file(file_path, value):
         # Update database with file path using the final key
         db = AgentDatabase()
-        planner = db.get_planner(planner_id)
+        planner = await db.get_planner(planner_id)
         if planner:
             variable_paths = planner.get("variable_file_paths", {})
             variable_paths[final_key] = file_path
-            db.update_planner(planner_id, variable_file_paths=variable_paths)
+            await db.update_planner(planner_id, variable_file_paths=variable_paths)
         
         return file_path, final_key
     else:
@@ -220,7 +220,7 @@ def clean_image_name(raw_name: str, existing_names: set) -> str:
     return cleaned
 
 
-def save_planner_image(planner_id: str, raw_image_name: str, encoded_image: str, check_existing: bool = False) -> tuple[str, str]:
+async def save_planner_image(planner_id: str, raw_image_name: str, encoded_image: str, check_existing: bool = False) -> tuple[str, str]:
     """
     Save an image with cleaned name and update database with file path.
     
@@ -235,7 +235,7 @@ def save_planner_image(planner_id: str, raw_image_name: str, encoded_image: str,
     """
     # Get current image names from database to avoid duplicates
     db = AgentDatabase()
-    planner = db.get_planner(planner_id)
+    planner = await db.get_planner(planner_id)
     existing_image_paths = planner.get("image_file_paths", {}) if planner else {}
     existing_names = set(existing_image_paths.keys())
     
@@ -250,7 +250,7 @@ def save_planner_image(planner_id: str, raw_image_name: str, encoded_image: str,
         if planner:
             image_paths = existing_image_paths.copy()
             image_paths[final_image_name] = file_path
-            db.update_planner(planner_id, image_file_paths=image_paths)
+            await db.update_planner(planner_id, image_file_paths=image_paths)
         
         return file_path, final_image_name
     else:
@@ -317,10 +317,10 @@ def get_planner_image_keys(planner_id: str) -> list[str]:
     return list(image_paths.keys())
 
 
-def get_planner_variables(planner_id: str) -> Dict[str, Any]:
+async def get_planner_variables(planner_id: str) -> Dict[str, Any]:
     """Load all variables for a planner"""
     db = AgentDatabase()
-    planner = db.get_planner(planner_id)
+    planner = await db.get_planner(planner_id)
     
     if not planner:
         logger.warning(f"Planner {planner_id} not found")
@@ -339,10 +339,10 @@ def get_planner_variables(planner_id: str) -> Dict[str, Any]:
     return variables
 
 
-def get_planner_images(planner_id: str) -> Dict[str, str]:
+async def get_planner_images(planner_id: str) -> Dict[str, str]:
     """Load all images for a planner"""
     db = AgentDatabase()
-    planner = db.get_planner(planner_id)
+    planner = await db.get_planner(planner_id)
     
     if not planner:
         logger.warning(f"Planner {planner_id} not found")

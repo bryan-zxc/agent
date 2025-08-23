@@ -12,9 +12,10 @@ Unified interface for multiple large language model providers.
 **`LLM`**
 - Central service for all language model interactions
 - Supports multiple providers: OpenAI, Anthropic Claude, Google Gemini
+- **Async Architecture**: All database operations use async patterns with aiosqlite
 - **Key Features:**
   - Automatic provider selection based on model name
-  - Usage tracking and cost calculation
+  - Usage tracking and cost calculation with async database operations
   - Retry logic with exponential backoff
   - Structured output support with Pydantic models
 
@@ -23,7 +24,7 @@ Unified interface for multiple large language model providers.
 - `get_response(messages, model, temperature, response_format, tools)`: Main inference method
 - `a_get_response()`: Async version of get_response
 - `_calculate_cost(model, input_tokens, output_tokens)`: Cost calculation
-- `_track_usage()`: Usage logging to SQLite database
+- `_track_usage()`: Async usage logging to SQLite database
 
 #### Database Models
 

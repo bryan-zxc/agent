@@ -6,11 +6,12 @@ The tasks module implements the function-based task execution system that replac
 
 The function-based system operates through a background processor that executes queued tasks asynchronously:
 
-- **Task Queue**: SQLite-based queue with task status tracking
+- **Task Queue**: Async SQLite-based queue with task status tracking using aiosqlite
 - **Background Processor**: Continuous 1-second polling for task execution  
 - **Function Registry**: Maps function names to executable async functions
 - **Entity Isolation**: Sequential task execution per entity (planner/worker)
 - **Concurrent Processing**: Multiple entities can execute tasks simultaneously
+- **Database Operations**: All database interactions use async/await patterns for optimal performance
 
 ## Module Structure
 
@@ -375,7 +376,7 @@ import uuid
 
 db = AgentDatabase()
 task_id = uuid.uuid4().hex
-success = db.enqueue_task(
+success = await db.enqueue_task(
     task_id=task_id,
     entity_type="planner",
     entity_id="planner_456",

@@ -148,20 +148,21 @@ class LLM:
     def _configure_sqlite_optimisations(self):
         """Configure SQLite for optimal concurrent performance"""
         with self.engine.connect() as conn:
+            from sqlalchemy import text
             # Enable WAL mode for concurrent readers and writers
-            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute(text("PRAGMA journal_mode=WAL"))
             
             # Set busy timeout to handle lock contention gracefully
-            conn.execute("PRAGMA busy_timeout=5000")  # 5 second timeout
+            conn.execute(text("PRAGMA busy_timeout=5000"))  # 5 second timeout
             
             # Enable synchronous mode for durability while maintaining performance
-            conn.execute("PRAGMA synchronous=NORMAL")  # Balance safety vs performance
+            conn.execute(text("PRAGMA synchronous=NORMAL"))  # Balance safety vs performance
             
             # Set cache size for better performance (negative value = KB)
-            conn.execute("PRAGMA cache_size=-32000")  # 32MB cache
+            conn.execute(text("PRAGMA cache_size=-32000"))  # 32MB cache
             
             # Optimize temp storage
-            conn.execute("PRAGMA temp_store=MEMORY")
+            conn.execute(text("PRAGMA temp_store=MEMORY"))
             
             conn.commit()
             logger.info("SQLite WAL mode and optimisations enabled for LLM usage database")

@@ -1,5 +1,6 @@
-from sqlalchemy import Column, String, Text, DateTime, Integer, JSON, create_engine, ForeignKey, Float, Boolean, UniqueConstraint, Index, func
+from sqlalchemy import Column, String, Text, DateTime, Integer, JSON, create_engine, ForeignKey, Float, Boolean, UniqueConstraint, Index, func, select
 from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from datetime import datetime
 import json
 import logging
@@ -220,59 +221,79 @@ class AgentDatabase:
         # Ensure directory exists
         Path(database_path).parent.mkdir(parents=True, exist_ok=True)
         
-        database_url = f"sqlite:///{database_path}"
+        # Store database path for schema operations
+        self.database_path = database_path
         
-        # Configure SQLite for concurrent access with WAL mode and connection pooling
-        self.engine = create_engine(
-            database_url,
-            # Connection pool settings for better concurrency
+        # Synchronous engine for setup operations
+        sync_database_url = f"sqlite:///{database_path}"
+        self.sync_engine = create_engine(
+            sync_database_url,
             pool_size=10,
             max_overflow=20,
             pool_pre_ping=True,
-            pool_recycle=3600,  # Recycle connections every hour
-            # SQLite-specific connection arguments
+            pool_recycle=3600,
             connect_args={
-                "check_same_thread": False,  # Allow connections across threads
-                "timeout": 30,  # 30 second timeout for database locks
+                "check_same_thread": False,
+                "timeout": 30,
             },
-            echo=False  # Set to True for SQL debugging
+            echo=False
+        )
+        
+        # Async engine for database operations
+        async_database_url = f"sqlite+aiosqlite:///{database_path}"
+        self.async_engine = create_async_engine(
+            async_database_url,
+            pool_size=10,
+            max_overflow=20,
+            pool_pre_ping=True,
+            pool_recycle=3600,
+            echo=False
         )
         
         # Configure WAL mode and other SQLite optimisations
         self._configure_sqlite_optimisations()
         
-        self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
+        # Session factories
+        self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.sync_engine)
+        self.AsyncSessionLocal = async_sessionmaker(
+            bind=self.async_engine,
+            class_=AsyncSession,
+            autocommit=False,
+            autoflush=False,
+            expire_on_commit=False
+        )
         
         # Initialize database with schema version checking
         self._initialize_database()
     
     def _configure_sqlite_optimisations(self):
         """Configure SQLite for optimal concurrent performance"""
-        with self.engine.connect() as conn:
+        with self.sync_engine.connect() as conn:
+            from sqlalchemy import text
             # Enable WAL mode for concurrent readers and writers
-            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute(text("PRAGMA journal_mode=WAL"))
             
             # Set busy timeout to handle lock contention gracefully
-            conn.execute("PRAGMA busy_timeout=5000")  # 5 second timeout
+            conn.execute(text("PRAGMA busy_timeout=5000"))  # 5 second timeout
             
             # Enable synchronous mode for durability while maintaining performance
-            conn.execute("PRAGMA synchronous=NORMAL")  # Balance safety vs performance
+            conn.execute(text("PRAGMA synchronous=NORMAL"))  # Balance safety vs performance
             
             # Set cache size for better performance (negative value = KB)
-            conn.execute("PRAGMA cache_size=-64000")  # 64MB cache
+            conn.execute(text("PRAGMA cache_size=-64000"))  # 64MB cache
             
             # Enable foreign key constraints
-            conn.execute("PRAGMA foreign_keys=ON")
+            conn.execute(text("PRAGMA foreign_keys=ON"))
             
             # Optimize temp storage
-            conn.execute("PRAGMA temp_store=MEMORY")
+            conn.execute(text("PRAGMA temp_store=MEMORY"))
             
             conn.commit()
             logger.info("SQLite WAL mode and optimisations enabled for agent database")
     
-    def add_message(self, agent_type: AgentType, agent_id: str, role: str, content: Any) -> Optional[int]:
+    async def add_message(self, agent_type: AgentType, agent_id: str, role: str, content: Any) -> Optional[int]:
         """Add a message to the appropriate agent messages table"""
-        with self.SessionLocal() as session:
+        async with self.AsyncSessionLocal() as session:
             if agent_type == "planner":
                 message = PlannerMessage(
                     agent_id=agent_id,
@@ -296,37 +317,47 @@ class AgentDatabase:
                 )
             
             session.add(message)
-            session.flush()  # Flush to get the ID before commit
+            await session.flush()  # Flush to get the ID before commit
             message_id = message.id
-            session.commit()
+            await session.commit()
             return message_id
     
-    def update_router_title(self, router_id: str, title: str) -> None:
+    async def update_router_title(self, router_id: str, title: str) -> None:
         """Update the title of an existing router"""
-        with self.SessionLocal() as session:
-            router_record = session.query(Router).filter(
-                Router.router_id == router_id
-            ).first()
+        async with self.AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(Router).where(Router.router_id == router_id)
+            )
+            router_record = result.scalar_one_or_none()
             if router_record:
                 router_record.title = title
                 router_record.updated_at = datetime.utcnow()
-                session.commit()
+                await session.commit()
     
-    def get_messages(self, agent_type: AgentType, agent_id: str) -> List[Dict[str, Any]]:
+    async def get_messages(self, agent_type: AgentType, agent_id: str) -> List[Dict[str, Any]]:
         """Retrieve all messages for an agent"""
-        with self.SessionLocal() as session:
+        async with self.AsyncSessionLocal() as session:
             if agent_type == "planner":
-                messages = session.query(PlannerMessage).filter(
-                    PlannerMessage.agent_id == agent_id
-                ).order_by(PlannerMessage.created_at).all()
+                result = await session.execute(
+                    select(PlannerMessage)
+                    .where(PlannerMessage.agent_id == agent_id)
+                    .order_by(PlannerMessage.created_at)
+                )
+                messages = result.scalars().all()
             elif agent_type == "worker":
-                messages = session.query(WorkerMessage).filter(
-                    WorkerMessage.agent_id == agent_id
-                ).order_by(WorkerMessage.created_at).all()
+                result = await session.execute(
+                    select(WorkerMessage)
+                    .where(WorkerMessage.agent_id == agent_id)
+                    .order_by(WorkerMessage.created_at)
+                )
+                messages = result.scalars().all()
             else:  # router
-                messages = session.query(RouterMessage).filter(
-                    RouterMessage.router_id == agent_id
-                ).order_by(RouterMessage.created_at).all()
+                result = await session.execute(
+                    select(RouterMessage)
+                    .where(RouterMessage.router_id == agent_id)
+                    .order_by(RouterMessage.created_at)
+                )
+                messages = result.scalars().all()
             
             return [msg.to_message_dict() for msg in messages]
     
@@ -350,9 +381,9 @@ class AgentDatabase:
     
     # Agent State Operations
     
-    def create_router(self, router_id: str, status: str, model: str = None, temperature: float = None, title: str = None, preview: str = None) -> None:
+    async def create_router(self, router_id: str, status: str, model: str = None, temperature: float = None, title: str = None, preview: str = None) -> None:
         """Create a new router record"""
-        with self.SessionLocal() as session:
+        async with self.AsyncSessionLocal() as session:
             router = Router(
                 router_id=router_id,
                 status=status,
@@ -362,7 +393,7 @@ class AgentDatabase:
                 preview=preview or ""
             )
             session.add(router)
-            session.commit()
+            await session.commit()
     
     def update_router_status(self, router_id: str, status: str) -> None:
         """Update router status"""
@@ -373,10 +404,13 @@ class AgentDatabase:
                 router.updated_at = datetime.utcnow()
                 session.commit()
     
-    def get_router(self, router_id: str) -> Optional[Dict[str, Any]]:
+    async def get_router(self, router_id: str) -> Optional[Dict[str, Any]]:
         """Get router state by ID"""
-        with self.SessionLocal() as session:
-            router = session.query(Router).filter(Router.router_id == router_id).first()
+        async with self.AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(Router).where(Router.router_id == router_id)
+            )
+            router = result.scalar_one_or_none()
             if router:
                 return {
                     'router_id': router.router_id,
@@ -390,12 +424,31 @@ class AgentDatabase:
                 }
             return None
     
-    def create_planner(self, planner_id: str, user_question: str, instruction: str = None, 
+    async def get_all_routers(self) -> List[Dict[str, Any]]:
+        """Get all routers ordered by updated_at descending"""
+        async with self.AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(Router).order_by(Router.updated_at.desc())
+            )
+            routers = result.scalars().all()
+            return [
+                {
+                    'router_id': router.router_id,
+                    'title': router.title,
+                    'preview': router.preview,
+                    'status': router.status,
+                    'created_at': router.created_at,
+                    'updated_at': router.updated_at
+                }
+                for router in routers
+            ]
+    
+    async def create_planner(self, planner_id: str, user_question: str, instruction: str = None, 
                       execution_plan: str = None, model: str = None, temperature: float = None,
                       failed_task_limit: int = None, status: str = "planning", planner_name: str = None,
                       next_task: str = None) -> None:
         """Create a new planner state record"""
-        with self.SessionLocal() as session:
+        async with self.AsyncSessionLocal() as session:
             planner = Planner(
                 planner_id=planner_id,
                 planner_name=planner_name,
@@ -409,14 +462,17 @@ class AgentDatabase:
                 next_task=next_task
             )
             session.add(planner)
-            session.commit()
+            await session.commit()
     
     
     
-    def get_planner(self, planner_id: str) -> Optional[Dict[str, Any]]:
+    async def get_planner(self, planner_id: str) -> Optional[Dict[str, Any]]:
         """Get planner state by ID"""
-        with self.SessionLocal() as session:
-            planner = session.query(Planner).filter(Planner.planner_id == planner_id).first()
+        async with self.AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(Planner).where(Planner.planner_id == planner_id)
+            )
+            planner = result.scalar_one_or_none()
             if planner:
                 return {
                     'planner_id': planner.planner_id,
@@ -436,14 +492,14 @@ class AgentDatabase:
                 }
             return None
     
-    def create_worker(self, worker_id: str, planner_id: str, worker_name: str,
+    async def create_worker(self, worker_id: str, planner_id: str, worker_name: str,
                      task_status: str, task_description: str, acceptance_criteria: list,
                      user_request: str, wip_answer_template: str, task_result: str, querying_structured_data: bool,
                      image_keys: list, variable_keys: list, tools: list,
                      input_variable_filepaths: dict, input_image_filepaths: dict,
                      tables: list, filepaths: list) -> None:
         """Create a new worker/task state record"""
-        with self.SessionLocal() as session:
+        async with self.AsyncSessionLocal() as session:
             worker = Worker(
                 worker_id=worker_id,
                 worker_name=worker_name,
@@ -467,41 +523,50 @@ class AgentDatabase:
                 filepaths=filepaths
             )
             session.add(worker)
-            session.commit()
+            await session.commit()
     
-    def update_worker(self, worker_id: str, **kwargs) -> bool:
+    async def update_worker(self, worker_id: str, **kwargs) -> bool:
         """Update worker fields with arbitrary keyword arguments"""
-        with self.SessionLocal() as session:
-            worker = session.query(Worker).filter(Worker.worker_id == worker_id).first()
+        async with self.AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(Worker).where(Worker.worker_id == worker_id)
+            )
+            worker = result.scalar_one_or_none()
             if worker:
                 for key, value in kwargs.items():
                     if hasattr(worker, key):
                         setattr(worker, key, value)
                 worker.updated_at = datetime.utcnow()
-                session.commit()
+                await session.commit()
                 return True
             return False
     
-    def update_planner(self, planner_id: str, **kwargs) -> bool:
+    async def update_planner(self, planner_id: str, **kwargs) -> bool:
         """Update planner fields with arbitrary keyword arguments"""
-        with self.SessionLocal() as session:
-            planner = session.query(Planner).filter(Planner.planner_id == planner_id).first()
+        async with self.AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(Planner).where(Planner.planner_id == planner_id)
+            )
+            planner = result.scalar_one_or_none()
             if planner:
                 for key, value in kwargs.items():
                     if hasattr(planner, key):
                         setattr(planner, key, value)
                 planner.updated_at = datetime.utcnow()
-                session.commit()
+                await session.commit()
                 return True
             return False
     
     
     
     
-    def get_worker(self, worker_id: str) -> Optional[Dict[str, Any]]:
+    async def get_worker(self, worker_id: str) -> Optional[Dict[str, Any]]:
         """Get worker state by ID"""
-        with self.SessionLocal() as session:
-            worker = session.query(Worker).filter(Worker.worker_id == worker_id).first()
+        async with self.AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(Worker).where(Worker.worker_id == worker_id)
+            )
+            worker = result.scalar_one_or_none()
             if worker:
                 return {
                     'worker_id': worker.worker_id,
@@ -529,10 +594,15 @@ class AgentDatabase:
                 }
             return None
     
-    def get_workers_by_planner(self, planner_id: str) -> List[Dict[str, Any]]:
+    async def get_workers_by_planner(self, planner_id: str) -> List[Dict[str, Any]]:
         """Get all workers for a planner"""
-        with self.SessionLocal() as session:
-            workers = session.query(Worker).filter(Worker.planner_id == planner_id).order_by(Worker.created_at).all()
+        async with self.AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(Worker)
+                .where(Worker.planner_id == planner_id)
+                .order_by(Worker.created_at)
+            )
+            workers = result.scalars().all()
             return [
                 {
                     'worker_id': worker.worker_id,
@@ -580,14 +650,17 @@ class AgentDatabase:
                 session.add(link)
                 session.commit()
     
-    def link_message_planner(self, router_id: str, message_id: int, planner_id: str, relationship_type: str = "initiated") -> None:
+    async def link_message_planner(self, router_id: str, message_id: int, planner_id: str, relationship_type: str = "initiated") -> None:
         """Create a link between router message and planner (V2)"""
-        with self.SessionLocal() as session:
+        async with self.AsyncSessionLocal() as session:
             # Check if link already exists
-            existing_link = session.query(RouterMessagePlannerLink).filter(
-                RouterMessagePlannerLink.message_id == message_id,
-                RouterMessagePlannerLink.planner_id == planner_id
-            ).first()
+            result = await session.execute(
+                select(RouterMessagePlannerLink).where(
+                    RouterMessagePlannerLink.message_id == message_id,
+                    RouterMessagePlannerLink.planner_id == planner_id
+                )
+            )
+            existing_link = result.scalar_one_or_none()
             
             if not existing_link:
                 link = RouterMessagePlannerLink(
@@ -597,23 +670,27 @@ class AgentDatabase:
                     relationship_type=relationship_type
                 )
                 session.add(link)
-                session.commit()
+                await session.commit()
     
-    def get_planners_by_router(self, router_id: str) -> List[Dict[str, Any]]:
+    async def get_planners_by_router(self, router_id: str) -> List[Dict[str, Any]]:
         """Get all planners linked to a router (legacy V1 method)"""
-        with self.SessionLocal() as session:
+        async with self.AsyncSessionLocal() as session:
             # Try V2 first (RouterMessagePlannerLink)
-            v2_links = session.query(RouterMessagePlannerLink).filter(
-                RouterMessagePlannerLink.router_id == router_id
-            ).order_by(RouterMessagePlannerLink.created_at).all()
+            v2_result = await session.execute(
+                select(RouterMessagePlannerLink)
+                .where(RouterMessagePlannerLink.router_id == router_id)
+                .order_by(RouterMessagePlannerLink.created_at)
+            )
+            v2_links = v2_result.scalars().all()
             
             if v2_links:
                 # V2 data available - use message-specific links
                 planners = []
                 for link in v2_links:
-                    planner = session.query(Planner).filter(
-                        Planner.planner_id == link.planner_id
-                    ).first()
+                    planner_result = await session.execute(
+                        select(Planner).where(Planner.planner_id == link.planner_id)
+                    )
+                    planner = planner_result.scalar_one_or_none()
                     if planner:
                         planners.append({
                             'planner_id': planner.planner_id,
@@ -635,15 +712,19 @@ class AgentDatabase:
                 return planners
             else:
                 # Fallback to V1 data
-                v1_links = session.query(RouterPlannerLink).filter(
-                    RouterPlannerLink.router_id == router_id
-                ).order_by(RouterPlannerLink.created_at).all()
+                v1_result = await session.execute(
+                    select(RouterPlannerLink)
+                    .where(RouterPlannerLink.router_id == router_id)
+                    .order_by(RouterPlannerLink.created_at)
+                )
+                v1_links = v1_result.scalars().all()
                 
                 planners = []
                 for link in v1_links:
-                    planner = session.query(Planner).filter(
-                        Planner.planner_id == link.planner_id
-                    ).first()
+                    planner_result = await session.execute(
+                        select(Planner).where(Planner.planner_id == link.planner_id)
+                    )
+                    planner = planner_result.scalar_one_or_none()
                     if planner:
                         planners.append({
                             'planner_id': planner.planner_id,
@@ -713,7 +794,7 @@ class AgentDatabase:
     def _initialize_database(self) -> None:
         """Initialize database with schema version checking and migration"""
         # Create tables if they don't exist
-        Base.metadata.create_all(bind=self.engine)
+        Base.metadata.create_all(bind=self.sync_engine)
         
         # Check schema version and migrate if needed
         if settings.database_auto_migrate:
@@ -875,10 +956,10 @@ class AgentDatabase:
 
     # Task Queue Management Methods
     
-    def enqueue_task(self, task_id: str, entity_type: str, entity_id: str, 
+    async def enqueue_task(self, task_id: str, entity_type: str, entity_id: str, 
                     function_name: str, payload: dict = None) -> bool:
         """Add a task to the queue"""
-        with self.SessionLocal() as session:
+        async with self.AsyncSessionLocal() as session:
             # Create new task
             task = TaskQueue(
                 task_id=task_id,
@@ -889,7 +970,7 @@ class AgentDatabase:
             )
             
             session.add(task)
-            session.commit()
+            await session.commit()
             logger.info(f"Enqueued task {task_id} for {entity_type} {entity_id}")
             return True
     
@@ -912,10 +993,13 @@ class AgentDatabase:
                 for task in tasks
             ]
     
-    def update_task_status(self, task_id: str, status: str, error_message: str = None) -> bool:
+    async def update_task_status(self, task_id: str, status: str, error_message: str = None) -> bool:
         """Update task status with timestamps"""
-        with self.SessionLocal() as session:
-            task = session.query(TaskQueue).filter(TaskQueue.task_id == task_id).first()
+        async with self.AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(TaskQueue).where(TaskQueue.task_id == task_id)
+            )
+            task = result.scalar_one_or_none()
             if not task:
                 logger.error(f"Task {task_id} not found")
                 return False
@@ -928,35 +1012,44 @@ class AgentDatabase:
                 if status == 'FAILED':
                     task.error_message = error_message
             
-            session.commit()
+            await session.commit()
             return True
     
     # Planner Task Management Methods
     
     
-    def get_planner_next_task(self, planner_id: str) -> Optional[str]:
+    async def get_planner_next_task(self, planner_id: str) -> Optional[str]:
         """Get the next task function name for a planner"""
-        with self.SessionLocal() as session:
-            planner = session.query(Planner).filter(Planner.planner_id == planner_id).first()
+        async with self.AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(Planner).where(Planner.planner_id == planner_id)
+            )
+            planner = result.scalar_one_or_none()
             return planner.next_task if planner else None
     
     
-    def get_router_id_for_planner(self, planner_id: str) -> Optional[str]:
+    async def get_router_id_for_planner(self, planner_id: str) -> Optional[str]:
         """Get router ID for a planner via router-message-planner links"""
-        with self.SessionLocal() as session:
-            link = session.query(RouterMessagePlannerLink).filter(
-                RouterMessagePlannerLink.planner_id == planner_id
-            ).first()
+        async with self.AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(RouterMessagePlannerLink).where(
+                    RouterMessagePlannerLink.planner_id == planner_id
+                )
+            )
+            link = result.scalar_one_or_none()
             return link.router_id if link else None
     
-    def get_pending_task_for_entity(self, entity_id: str, function_name: str) -> Optional[Dict[str, Any]]:
+    async def get_pending_task_for_entity(self, entity_id: str, function_name: str) -> Optional[Dict[str, Any]]:
         """Check if a specific function is already queued for an entity"""
-        with self.SessionLocal() as session:
-            task = session.query(TaskQueue).filter(
-                TaskQueue.entity_id == entity_id,
-                TaskQueue.function_name == function_name,
-                TaskQueue.status.in_(['PENDING', 'IN_PROGRESS'])
-            ).first()
+        async with self.AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(TaskQueue).where(
+                    TaskQueue.entity_id == entity_id,
+                    TaskQueue.function_name == function_name,
+                    TaskQueue.status.in_(['PENDING', 'IN_PROGRESS'])
+                )
+            )
+            task = result.scalar_one_or_none()
             
             if task:
                 return {

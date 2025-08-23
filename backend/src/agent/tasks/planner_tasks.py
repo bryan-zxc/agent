@@ -130,7 +130,7 @@ async def execute_initial_planning(task_data: dict):
 
     # Check if this is a resume scenario (planner already exists)
     db = AgentDatabase()
-    existing_planner = db.get_planner(planner_id) if planner_id else None
+    existing_planner = await db.get_planner(planner_id) if planner_id else None
 
     if existing_planner:
         logger.info(
@@ -174,7 +174,7 @@ async def execute_initial_planning(task_data: dict):
     try:
         # Create message-planner link BEFORE creating new planner
         if message_id and router_id:
-            db.link_message_planner(
+            await db.link_message_planner(
                 router_id=router_id,
                 message_id=message_id,
                 planner_id=planner_id,
@@ -185,7 +185,7 @@ async def execute_initial_planning(task_data: dict):
             )
 
         # Create planner database record
-        db.create_planner(
+        await db.create_planner(
             planner_id=planner_id,
             planner_name=planner_name,
             user_question=user_question,
@@ -201,7 +201,7 @@ async def execute_initial_planning(task_data: dict):
         message_manager = MessageManager(db, "planner", planner_id)
 
         # Initialize messages variable for consistent state tracking
-        messages = message_manager.get_messages()
+        messages = await message_manager.get_messages()
 
         # Initialize planner collections (following PlannerAgent.__init__ pattern)
         tables = []
@@ -213,7 +213,7 @@ async def execute_initial_planning(task_data: dict):
         db_path = planner_dir / "database.db"
 
         # Add system message for new planners only (exact copy from PlannerAgent)
-        messages = message_manager.add_message(
+        messages = await message_manager.add_message(
             role="system",
             content="You are an expert planner. "
             "Your objective is to break down the user's instruction into a list of tasks that can be individually executed."
@@ -225,7 +225,7 @@ async def execute_initial_planning(task_data: dict):
         )
 
         # Add user question to planner message history so it has user context for answer template creation
-        messages = message_manager.add_message(
+        messages = await message_manager.add_message(
             role="user",
             content=user_question,
         )
@@ -247,7 +247,7 @@ async def execute_initial_planning(task_data: dict):
                     f.filename = image_name
 
                     # Add message about image processing (exact copy from PlannerAgent)
-                    messages = message_manager.add_message(
+                    messages = await message_manager.add_message(
                         role="user",
                         content=f.model_dump_json(indent=2, include={"image_context"}),
                     )
@@ -285,7 +285,7 @@ async def execute_initial_planning(task_data: dict):
                                 f"Failed to create table {table_name} even with all_varchar: {e2}"
                             )
                             # Add error message instead of table creation message
-                            db.add_message(
+                            await db.add_message(
                                 agent_id=planner_id,
                                 agent_type="planner",
                                 role="user",
@@ -298,7 +298,7 @@ async def execute_initial_planning(task_data: dict):
                     tables.append(table_meta)
 
                     # Add message about table creation (exact copy from PlannerAgent)
-                    db.add_message(
+                    await db.add_message(
                         agent_id=planner_id,
                         agent_type="planner",
                         role="user",
@@ -318,7 +318,7 @@ async def execute_initial_planning(task_data: dict):
                         if len(text_content) > 1000000:
                             limited_content += "...\n\n[Content truncated to first 1 million characters]"
 
-                        db.add_message(
+                        await db.add_message(
                             agent_id=planner_id,
                             agent_type="planner",
                             role="user",
@@ -328,7 +328,7 @@ async def execute_initial_planning(task_data: dict):
                             f"Processed text file: {f.filepath} with encoding {f.document_context.encoding}"
                         )
                     except Exception as e:
-                        db.add_message(
+                        await db.add_message(
                             agent_id=planner_id,
                             agent_type="planner",
                             role="user",
@@ -340,7 +340,7 @@ async def execute_initial_planning(task_data: dict):
                     f.file_type == "document" and f.document_context.file_type == "pdf"
                 ):
                     # Add message about PDF file being available for processing
-                    db.add_message(
+                    await db.add_message(
                         agent_id=planner_id,
                         agent_type="planner",
                         role="user",
@@ -362,7 +362,7 @@ async def execute_initial_planning(task_data: dict):
 
         # Update planner with metadata
         if metadata:
-            db.update_planner(planner_id, agent_metadata=metadata)
+            await db.update_planner(planner_id, agent_metadata=metadata)
 
         # Create tools text (exact copy from PlannerAgent)
         tools_text = "\n\n---\n\n".join(
@@ -381,7 +381,7 @@ async def execute_initial_planning(task_data: dict):
         )
 
         # Get messages for LLM call
-        messages = db.get_messages(agent_type="planner", agent_id=planner_id)
+        messages = await db.get_messages(agent_type="planner", agent_id=planner_id)
 
         # Get initial execution plan from LLM
         initial_plan = await llm.a_get_response(
@@ -398,7 +398,7 @@ async def execute_initial_planning(task_data: dict):
         execution_plan_markdown = execution_plan_model_to_markdown(execution_plan_model)
 
         # Update planner with execution plan
-        db.update_planner(
+        await db.update_planner(
             planner_id, execution_plan=execution_plan_markdown, status="executing"
         )
 
@@ -406,7 +406,7 @@ async def execute_initial_planning(task_data: dict):
         save_execution_plan_model(planner_id, execution_plan_model)
 
         # Create initial answer template
-        messages = db.get_messages(agent_type="planner", agent_id=planner_id)
+        messages = await db.get_messages(agent_type="planner", agent_id=planner_id)
         logger.info(
             f"DEBUG: Retrieved {len(messages)} messages for planner {planner_id}"
         )
@@ -449,7 +449,7 @@ async def execute_initial_planning(task_data: dict):
     except Exception as e:
         logger.error(f"Initial planning failed for planner {planner_id}: {e}")
         if "planner_id" in locals():
-            db.update_planner(planner_id, status="failed")
+            await db.update_planner(planner_id, status="failed")
         raise
 
 
@@ -462,11 +462,11 @@ async def execute_task_creation(task_data: dict):
     logger.info(f"Starting task creation for planner {planner_id}")
 
     db = AgentDatabase()
-    planner_data = db.get_planner(planner_id)
+    planner_data = await db.get_planner(planner_id)
 
     if not planner_data:
         logger.error(f"Planner {planner_id} not found")
-        db.update_planner(planner_id, status="failed")
+        await db.update_planner(planner_id, status="failed")
         return
 
     try:
@@ -479,7 +479,7 @@ async def execute_task_creation(task_data: dict):
             logger.error(
                 f"Planner {planner_id} has no pending tasks - this should not happen, marking as failed"
             )
-            db.update_planner(planner_id, status="failed")
+            await db.update_planner(planner_id, status="failed")
             return
 
         # Get next task from execution plan
@@ -491,7 +491,7 @@ async def execute_task_creation(task_data: dict):
             )
 
         # Get planner messages for context
-        messages = db.get_messages(agent_type="planner", agent_id=planner_id)
+        messages = await db.get_messages(agent_type="planner", agent_id=planner_id)
 
         # Create tools text for context
         tools_text = "\n\n---\n\n".join(
@@ -574,7 +574,7 @@ async def execute_task_creation(task_data: dict):
         worker_id = uuid.uuid4().hex
 
         # Set next_task to waiting_for_worker (no queue - planner waits for worker completion)
-        db.update_planner(planner_id, next_task="waiting_for_worker")
+        await db.update_planner(planner_id, next_task="waiting_for_worker")
 
         # Queue worker initialisation (worker will load task and create worker record)
         queue_worker_task(worker_id, planner_id, "worker_initialisation")
@@ -586,7 +586,7 @@ async def execute_task_creation(task_data: dict):
     except Exception as e:
         logger.error(f"Task creation failed for planner {planner_id}: {e}")
         # Set planner as failed
-        db.update_planner(planner_id, status="failed")
+        await db.update_planner(planner_id, status="failed")
         raise
 
 
@@ -609,7 +609,7 @@ async def _complete_planner_execution(
     """
     # Generate final user response (exactly copying planner.py lines 619-637)
     final_wip_template = load_wip_answer_template(planner_id) or ""
-    planner_messages = db.get_messages(agent_type="planner", agent_id=planner_id)
+    planner_messages = await db.get_messages(agent_type="planner", agent_id=planner_id)
 
     # Filter to exclude system messages for final response generation
     user_response_messages = [
@@ -640,7 +640,7 @@ async def _complete_planner_execution(
     # Save final execution plan and mark planner as completed with user response
     save_execution_plan_model(planner_id, execution_plan_model)
     execution_plan_markdown = execution_plan_model_to_markdown(execution_plan_model)
-    db.update_planner(
+    await db.update_planner(
         planner_id,
         execution_plan=execution_plan_markdown,
         status="completed",
@@ -651,10 +651,10 @@ async def _complete_planner_execution(
     # PHASE 1: Direct database completion - add response to router messages
     try:
         # Get router_id from planner links
-        router_id = db.get_router_id_for_planner(planner_id)
+        router_id = await db.get_router_id_for_planner(planner_id)
         if router_id:
             # Add assistant response directly to router messages
-            message_id = db.add_message("router", router_id, "assistant", user_response)
+            message_id = await db.add_message("router", router_id, "assistant", user_response)
             logger.info(f"Added planner completion response to router {router_id} as message {message_id}")
         else:
             logger.warning(f"No router_id found for planner {planner_id} - response not added to router messages")
@@ -663,7 +663,7 @@ async def _complete_planner_execution(
         # Don't fail the entire planner - just log the error
 
     # Mark worker as recorded and skip variable processing - no future tasks need them
-    db.update_worker(worker_id, task_status="recorded")
+    await db.update_worker(worker_id, task_status="recorded")
     logger.info(f"Planner {planner_id} completed with user response generated")
 
     # Clean up planner files since planning is complete
@@ -684,7 +684,7 @@ async def execute_synthesis(task_data: dict):
     logger.info(f"Starting synthesis for planner {planner_id}")
 
     db = AgentDatabase()
-    planner_data = db.get_planner(planner_id)
+    planner_data = await db.get_planner(planner_id)
 
     if not planner_data:
         logger.error(f"Planner {planner_id} not found")
@@ -692,7 +692,7 @@ async def execute_synthesis(task_data: dict):
 
     try:
         # Get all workers for this planner
-        workers = db.get_workers_by_planner(planner_id)
+        workers = await db.get_workers_by_planner(planner_id)
 
         # Find completed workers that haven't been processed yet (status = 'completed' or 'failed_validation')
         completed_workers = [
@@ -705,7 +705,7 @@ async def execute_synthesis(task_data: dict):
             logger.error(
                 f"Planner {planner_id} has no completed workers to process - this should not happen, marking as failed"
             )
-            db.update_planner(planner_id, status="failed")
+            await db.update_planner(planner_id, status="failed")
             return
 
         # Process each completed worker (following task_result_synthesis pattern)
@@ -717,7 +717,7 @@ async def execute_synthesis(task_data: dict):
             logger.info(f"Processing completed worker {worker_id}: {task_description}")
 
             # 1. Add worker response to planner messages (like original task_result_synthesis)
-            worker_messages = db.get_messages(agent_type="worker", agent_id=worker_id)
+            worker_messages = await db.get_messages(agent_type="worker", agent_id=worker_id)
             task_message_combined = "\n\n---\n\n".join(
                 [
                     msg["content"]
@@ -726,7 +726,7 @@ async def execute_synthesis(task_data: dict):
                 ]
             )
 
-            db.add_message(
+            await db.add_message(
                 agent_id=planner_id,
                 agent_type="planner",
                 role="assistant",
@@ -754,7 +754,7 @@ async def execute_synthesis(task_data: dict):
                     current_wip_template = load_wip_answer_template(planner_id) or ""
 
                     # Get planner messages for template update context
-                    planner_messages = db.get_messages(
+                    planner_messages = await db.get_messages(
                         agent_type="planner", agent_id=planner_id
                     )
 
@@ -816,7 +816,7 @@ async def execute_synthesis(task_data: dict):
                     )
 
                 # Get planner messages for LLM context
-                messages = db.get_messages(agent_type="planner", agent_id=planner_id)
+                messages = await db.get_messages(agent_type="planner", agent_id=planner_id)
 
                 # Create filtered model with only open todos for LLM
                 open_todos = [
@@ -912,7 +912,7 @@ async def execute_synthesis(task_data: dict):
                 # Save updated execution plan (only if not completed)
                 save_execution_plan_model(planner_id, final_model)
                 execution_plan_markdown = execution_plan_model_to_markdown(final_model)
-                db.update_planner(planner_id, execution_plan=execution_plan_markdown)
+                await db.update_planner(planner_id, execution_plan=execution_plan_markdown)
 
                 logger.info(f"Execution plan updated for planner {planner_id}")
 
@@ -976,7 +976,7 @@ async def execute_synthesis(task_data: dict):
                 )
 
             # 4. Mark worker as processed by updating its status to 'recorded'
-            db.update_worker(worker_id, task_status="recorded")
+            await db.update_worker(worker_id, task_status="recorded")
             logger.info(f"Marked worker {worker_id} as recorded")
 
         logger.info(f"Synthesis completed for planner {planner_id}")
@@ -986,5 +986,5 @@ async def execute_synthesis(task_data: dict):
 
     except Exception as e:
         logger.error(f"Synthesis failed for planner {planner_id}: {e}")
-        db.update_planner(planner_id, status="failed")
+        await db.update_planner(planner_id, status="failed")
         raise

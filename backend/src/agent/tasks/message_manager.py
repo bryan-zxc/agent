@@ -31,13 +31,11 @@ class MessageManager:
         self.agent_type = agent_type
         self.agent_id = agent_id
         self._messages: List[Dict[str, Any]] = []
+        self._synced = False  # Track if we've synced from database yet
         
-        # Load existing messages from database
-        self._sync_from_db()
-        
-        logger.debug(f"Initialised MessageManager for {agent_type} {agent_id} with {len(self._messages)} existing messages")
+        logger.debug(f"Initialised MessageManager for {agent_type} {agent_id} (will sync on first use)")
     
-    def add_message(self, role: str, content: Any) -> List[Dict[str, Any]]:
+    async def add_message(self, role: str, content: Any) -> List[Dict[str, Any]]:
         """
         Add a message and return the updated complete message list.
         
@@ -51,8 +49,12 @@ class MessageManager:
         Returns:
             Complete updated message list for immediate use with LLM calls
         """
+        # Ensure we're synced with database first
+        if not self._synced:
+            await self._sync_from_db()
+        
         # Persist to database
-        message_id = self.db.add_message(self.agent_type, self.agent_id, role, content)
+        message_id = await self.db.add_message(self.agent_type, self.agent_id, role, content)
         
         if message_id is not None:
             # Add to in-memory cache
@@ -66,9 +68,9 @@ class MessageManager:
         else:
             logger.error(f"Failed to add message to database for {self.agent_type} {self.agent_id}")
             
-        return self.get_messages()
+        return await self.get_messages()
     
-    def get_messages(self) -> List[Dict[str, Any]]:
+    async def get_messages(self) -> List[Dict[str, Any]]:
         """
         Get complete message list for LLM interactions.
         
@@ -78,19 +80,23 @@ class MessageManager:
         Returns:
             Complete message list ready for LLM API calls
         """
+        # Ensure we have the latest messages from database
+        if not self._synced:
+            await self._sync_from_db()
         return self._messages.copy()
     
-    def clear_messages(self) -> None:
+    async def clear_messages(self) -> None:
         """
         Clear all messages for this agent from both database and memory.
         
         Use with caution as this permanently removes conversation history.
         """
-        self.db.clear_messages(self.agent_type, self.agent_id)
+        await self.db.clear_messages(self.agent_type, self.agent_id)
         self._messages.clear()
+        self._synced = True  # We're now synced with the empty database state
         logger.info(f"Cleared all messages for {self.agent_type} {self.agent_id}")
     
-    def refresh_from_db(self) -> List[Dict[str, Any]]:
+    async def refresh_from_db(self) -> List[Dict[str, Any]]:
         """
         Force refresh from database to handle external changes.
         
@@ -100,16 +106,19 @@ class MessageManager:
         Returns:
             Updated message list after database sync
         """
-        self._sync_from_db()
-        return self.get_messages()
+        await self._sync_from_db()
+        return await self.get_messages()
     
-    def _sync_from_db(self) -> None:
+    async def _sync_from_db(self) -> None:
         """Load messages from database into in-memory cache."""
         try:
-            self._messages = self.db.get_messages(self.agent_type, self.agent_id)
+            self._messages = await self.db.get_messages(self.agent_type, self.agent_id)
+            self._synced = True
+            logger.debug(f"Synced {len(self._messages)} messages from database for {self.agent_type} {self.agent_id}")
         except Exception as e:
             logger.error(f"Failed to sync messages from database for {self.agent_type} {self.agent_id}: {e}")
             self._messages = []
+            self._synced = False  # Mark as not synced on failure
     
     def message_count(self) -> int:
         """Get current message count without database query."""

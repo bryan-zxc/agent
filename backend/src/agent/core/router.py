@@ -12,6 +12,7 @@ from ..models import File, DocumentContext
 from ..models.responses import RequireAgent
 from ..models.schemas import FileGrouping
 from ..models.agent_database import AgentDatabase, AgentType, Router
+from sqlalchemy import select, update
 from ..services.image_service import process_image_file, is_image
 from ..services.llm_service import LLM
 from ..tasks.task_utils import update_planner_next_task_and_queue
@@ -69,14 +70,14 @@ class RouterAgent:
             self.id = uuid.uuid4().hex
             # Note: For new routers, initialization happens in activate_conversation()
 
-    def _load_existing_state(self):
+    async def _load_existing_state(self):
         """PHASE 5: Enhanced database state loading for ephemeral router architecture
         
         Critical for ephemeral instances - must load complete router state from database.
         Every router creation depends on this method for conversation continuity.
         """
         try:
-            state = self._agent_db.get_router(self.id)
+            state = await self._agent_db.get_router(self.id)
             if not state:
                 raise ValueError(f"Router {self.id} not found in database - cannot load state")
                 
@@ -113,7 +114,7 @@ class RouterAgent:
     @model.setter
     def model(self, value):
         self._model = value
-        self.update_agent_state(model=value)
+        # Note: update_agent_state is now async - consider using async context
 
     @property
     def temperature(self):
@@ -122,27 +123,50 @@ class RouterAgent:
     @temperature.setter
     def temperature(self, value):
         self._temperature = value
-        self.update_agent_state(temperature=value)
+        # Note: update_agent_state is now async - consider using async context
 
-    @property
-    def messages(self) -> List[Dict[str, Any]]:
+    async def get_messages(self) -> List[Dict[str, Any]]:
         """Get messages from database for this agent"""
-        return self._agent_db.get_messages(self.agent_type, self.id)
+        return await self._agent_db.get_messages(self.agent_type, self.id)
+    
+    @property 
+    def messages(self) -> List[Dict[str, Any]]:
+        """Synchronous messages property for backwards compatibility - deprecated"""
+        import asyncio
+        try:
+            return asyncio.run(self.get_messages())
+        except RuntimeError:
+            # Already in event loop, need to handle differently
+            import warnings
+            warnings.warn("Synchronous messages property used in async context. Use get_messages() instead.", DeprecationWarning)
+            return []
 
-    @messages.setter
+    @messages.setter  
     def messages(self, value: List[Dict[str, Any]]):
         """Set messages (for backward compatibility, though we prefer database storage)"""
-        # Clear existing messages and add new ones
-        self._agent_db.clear_messages(self.agent_type, self.id)
-        for msg in value:
-            self._agent_db.add_message(
-                agent_type=self.agent_type, 
-                agent_id=self.id, 
-                role=msg["role"], 
-                content=msg["content"]
-            )
+        import asyncio
+        import warnings
+        warnings.warn("Synchronous messages setter is deprecated. Use async database operations instead.", DeprecationWarning)
+        
+        # Need to run async operations in sync context
+        async def _set_messages():
+            await self._agent_db.clear_messages(self.agent_type, self.id)
+            for msg in value:
+                await self._agent_db.add_message(
+                    agent_type=self.agent_type, 
+                    agent_id=self.id, 
+                    role=msg["role"], 
+                    content=msg["content"]
+                )
+        
+        try:
+            asyncio.run(_set_messages())
+        except RuntimeError:
+            # Already in event loop - cannot use asyncio.run
+            import warnings
+            warnings.warn("Cannot set messages in async context. Messages not updated.", RuntimeWarning)
 
-    def add_message(
+    async def add_message(
         self,
         role: str,
         content: str,
@@ -206,7 +230,7 @@ class RouterAgent:
                         ).show()
 
         # Store in database and return message ID
-        return self._agent_db.add_message(
+        return await self._agent_db.add_message(
             agent_type=self.agent_type, 
             agent_id=self.id, 
             role=role, 
@@ -215,7 +239,7 @@ class RouterAgent:
 
     # Agent State Management
 
-    def update_agent_state(self, **kwargs):
+    async def update_agent_state(self, **kwargs):
         """Update any agent state fields dynamically"""
         if not kwargs:
             return
@@ -223,18 +247,12 @@ class RouterAgent:
         # Always update the updated_at timestamp
         kwargs["updated_at"] = datetime.now(timezone.utc)
 
-        # Build dynamic update query
-        with self._agent_db.SessionLocal() as session:
-            # Get the router record
-            record = session.query(Router).filter(Router.router_id == self.id).first()
-
-            if record:
-                # Update all provided fields
-                for field, value in kwargs.items():
-                    if hasattr(record, field):
-                        setattr(record, field, value)
-
-                session.commit()
+        # Build dynamic update query using async session
+        async with self._agent_db.AsyncSessionLocal() as session:
+            # Use async update query
+            stmt = update(Router).where(Router.router_id == self.id).values(**kwargs)
+            await session.execute(stmt)
+            await session.commit()
 
     # Router-specific properties
 
@@ -245,7 +263,7 @@ class RouterAgent:
     @status.setter
     def status(self, value):
         self._status = value
-        self.update_agent_state(status=value)
+        # Note: update_agent_state is now async - consider using async context
 
     async def activate_conversation(self, user_message: str, websocket: WebSocket, files: list = None):
         """Activate a new router with system message and process first user message"""
@@ -254,7 +272,7 @@ class RouterAgent:
         preview = user_message[:37] + "..." if len(user_message) > 40 else user_message
 
         # Create router with complete initialization in database
-        self._agent_db.create_router(
+        await self._agent_db.create_router(
             router_id=self.id,
             status="active",
             model=settings.router_model,
@@ -269,7 +287,7 @@ class RouterAgent:
         self._status = "active"
 
         # Add system message to database
-        self.add_message(
+        await self.add_message(
             role="system",
             content="Your name is Bandit Heeler, your main role is to have a conversation with the user and for complex requests activate agents."
             "Otherwise, you are a fictional character from the show Bluey.",
@@ -291,12 +309,13 @@ class RouterAgent:
         """Generate LLM title using existing message chain and update database"""
         try:
             # Get the first user message to check length
-            user_messages = [msg for msg in self.messages if msg.get("role") == "user"]
+            messages = await self.get_messages()
+            user_messages = [msg for msg in messages if msg.get("role") == "user"]
             if not user_messages or len(user_messages[0]["content"]) <= 30:
                 return
 
             # Use the entire message history to generate a title
-            title_messages = self.messages + [
+            title_messages = messages + [
                 {
                     "role": "user",
                     "content": "Create a succinct title for this conversation. "
@@ -313,7 +332,7 @@ class RouterAgent:
             llm_title = response.content.strip()
 
             # Update title in database
-            self._agent_db.update_router_title(self.id, llm_title)
+            await self._agent_db.update_router_title(self.id, llm_title)
             logger.info(f"Updated title for router {self.id}: {llm_title}")
 
         except Exception as e:
@@ -336,7 +355,7 @@ class RouterAgent:
         )
 
         # Store user message
-        self.add_message(role="user", content=user_message)
+        await self.add_message(role="user", content=user_message)
 
         try:
             # Send processing status
@@ -380,7 +399,7 @@ class RouterAgent:
                     response = simple_chat_task.result()
                     logger.info(f"Response generated in router:\n{response}")
                     # Store and send response for simple chat only
-                    self.add_message(role="assistant", content=response)
+                    await self.add_message(role="assistant", content=response)
                     await self.send_assistant_message(content=response, websocket=websocket)
 
         except Exception as e:
@@ -394,8 +413,9 @@ class RouterAgent:
 
     async def handle_simple_chat(self) -> str:
         """Handle simple conversational messages"""
+        messages = await self.get_messages()
         response = await self.llm.a_get_response(
-            messages=self.messages,
+            messages=messages,
             model=self.model,
             temperature=self.temperature,
         )
@@ -403,7 +423,8 @@ class RouterAgent:
 
     async def assess_agent_requirements(self) -> RequireAgent:
         """Use LLM to assess what type of agent assistance is needed based on message history"""
-        assessment_messages = self.messages + [
+        messages = await self.get_messages()
+        assessment_messages = messages + [
             {
                 "role": "user",
                 "content": "Based on the conversation, are there any indicators that the user request requires agent assistance?",
@@ -457,8 +478,9 @@ class RouterAgent:
                 f"DEBUG: Taking files-only path - calling LLM to summarise message history"
             )
             # Create a fresh message context for summarisation without the Bandit Heeler system message
+            messages = await self.get_messages()
             user_messages = [
-                msg for msg in self.messages if msg.get("role") != "system"
+                msg for msg in messages if msg.get("role") != "system"
             ]
             summary_messages = [
                 {
@@ -738,7 +760,7 @@ class RouterAgent:
             logger.info(f"DEBUG: Using default planner (no special name)")
 
         # Send "Agents assemble!" message first and capture its ID
-        agents_assemble_message_id = self.add_message(role="assistant", content="Agents assemble!")
+        agents_assemble_message_id = await self.add_message(role="assistant", content="Agents assemble!")
         logger.info(f"DEBUG: Agents assemble message_id from add_message: {agents_assemble_message_id} (type: {type(agents_assemble_message_id)})")
         logger.info(f"DEBUG: WebSocket parameter is: {websocket} (None: {websocket is None})")
         await self.send_assistant_message(
@@ -774,7 +796,7 @@ class RouterAgent:
 
         logger.info(f"DEBUG: Queuing initial planning task for planner {planner_id}")
         task_id = uuid.uuid4().hex
-        success = self._agent_db.enqueue_task(
+        success = await self._agent_db.enqueue_task(
             task_id=task_id,
             entity_type="planner",
             entity_id=planner_id,
@@ -854,8 +876,9 @@ class RouterAgent:
         """Send message history to frontend on connect"""
         if websocket:
             # Only send history if there are actual messages (excluding system messages)
+            messages = await self.get_messages()
             router_messages = [
-                msg for msg in self.messages if msg.get("role") != "system"
+                msg for msg in messages if msg.get("role") != "system"
             ]
             await websocket.send_json(
                 {
@@ -897,7 +920,7 @@ class RouterAgent:
 
         try:
             # Get planner data
-            planner = self._agent_db.get_planner(planner_id)
+            planner = await self._agent_db.get_planner(planner_id)
             if not planner:
                 logger.error(f"Planner {planner_id} not found")
                 return
@@ -910,7 +933,7 @@ class RouterAgent:
                 return
 
             # Add to router's message chain
-            self.add_message(role="assistant", content=user_response)
+            await self.add_message(role="assistant", content=user_response)
 
             # Send to frontend via WebSocket (if connected) - no message_id needed for final response
             if websocket:

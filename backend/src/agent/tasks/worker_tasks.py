@@ -54,7 +54,7 @@ async def validate_worker_result(
 ) -> bool:
     """Validate if worker task is completed based on acceptance criteria"""
     # Add validation message and get updated messages in one operation
-    validation_messages = message_manager.add_message(
+    validation_messages = await message_manager.add_message(
         role="developer",
         content=f"Determine if the task is successfully completed based on the acceptance criteria:\n{acceptance_criteria}\n\n"
         "Note: if python code is generated, the acceptance criteria will also include needing a print statement at the end of the code (unless it is an image, in which case it should be stored as a PIL.Image object).",
@@ -76,7 +76,7 @@ async def validate_worker_result(
         )
 
         # Update worker status to completed and sync to database (like self.sync_task_to_db())
-        db.update_worker(
+        await db.update_worker(
             worker_id=worker_id,
             task_status="completed",
             task_result=task_result,
@@ -86,9 +86,9 @@ async def validate_worker_result(
     else:
         task_result = f"{validation.validated_result.result}\n\nFailed criteria: {validation.failed_criteria}"
         # Update task result in database (like self.task.task_result = ...)
-        db.update_worker(worker_id=worker_id, task_result=task_result)
+        await db.update_worker(worker_id=worker_id, task_result=task_result)
         # Add message to database (like self.add_message)
-        message_manager.add_message(role="assistant", content=task_result)
+        await message_manager.add_message(role="assistant", content=task_result)
         return False
 
 
@@ -116,12 +116,12 @@ async def process_image_variable(
     # Save image to file
     if save_image_to_file(file_path, encoded_image):
         # Update worker database with file path - merge with existing paths
-        worker_data = db.get_worker(worker_id)
+        worker_data = await db.get_worker(worker_id)
         current_img_paths = (
             worker_data.get("output_image_filepaths", {}) if worker_data else {}
         )
         current_img_paths.update({final_image_key: file_path})
-        db.update_worker(worker_id, output_image_filepaths=current_img_paths)
+        await db.update_worker(worker_id, output_image_filepaths=current_img_paths)
 
         # Add message to database using final key name
         content = [{"type": "text", "text": f"Image: {final_image_key}"}]
@@ -131,7 +131,7 @@ async def process_image_variable(
                 "image_url": {"url": f"data:image/png;base64,{encoded_image}"},
             }
         )
-        message_manager.add_message(role="user", content=content)
+        await message_manager.add_message(role="user", content=content)
 
         return final_image_key
     else:
@@ -161,25 +161,25 @@ async def process_variable(
     # Save variable to file
     if save_variable_to_file(file_path, variable):
         # Update worker database with file path - merge with existing paths
-        worker_data = db.get_worker(worker_id)
+        worker_data = await db.get_worker(worker_id)
         current_var_paths = (
             worker_data.get("output_variable_filepaths", {}) if worker_data else {}
         )
         current_var_paths.update({final_variable_key: file_path})
-        db.update_worker(worker_id, output_variable_filepaths=current_var_paths)
+        await db.update_worker(worker_id, output_variable_filepaths=current_var_paths)
 
         # Add message to database - content depends on serialisability
         serialisable, stringable = is_serialisable(variable)
 
         if serialisable:
             # Show full variable content since it's serialisable
-            message_manager.add_message(
+            await message_manager.add_message(
                 role="assistant",
                 content=f"```python\n{final_variable_key}\n```\n\nOutput:\n```\n{variable}\n```",
             )
         elif stringable:
             # Show string representation but note it's not serialisable
-            message_manager.add_message(
+            await message_manager.add_message(
                 role="assistant",
                 content=f"```python\n{final_variable_key}\n```\n\nOutput:\n```\n{str(variable)}\n```\n\n"
                 "Note: the output is not serialisable and will not be included as an output variable.",
@@ -217,7 +217,7 @@ async def worker_initialisation(task_data: dict):
     db = AgentDatabase()
 
     # Check if this is a resume scenario (worker already exists)
-    existing_worker = db.get_worker(worker_id)
+    existing_worker = await db.get_worker(worker_id)
 
     if existing_worker:
         logger.info(
@@ -237,7 +237,7 @@ async def worker_initialisation(task_data: dict):
         logger.info(f"Loaded task for worker {worker_id}: {task.task_description}")
 
         # Get planner data to access variables, images, and other context
-        planner_data = db.get_planner(planner_id)
+        planner_data = await db.get_planner(planner_id)
         if not planner_data:
             logger.error(f"Planner {planner_id} not found")
             return
@@ -281,7 +281,7 @@ async def worker_initialisation(task_data: dict):
         worker_name = get_random_worker_name()
 
         # Create worker database record with individual parameters
-        db.create_worker(
+        await db.create_worker(
             worker_id=worker_id,
             planner_id=planner_id,
             worker_name=worker_name,
@@ -308,14 +308,14 @@ async def worker_initialisation(task_data: dict):
 
         # Set up initial messages for worker (following worker.py pattern lines 68-80)
         # Add system message with task goal
-        message_manager.add_message(
+        await message_manager.add_message(
             role="system",
             content=f"Your goal is to perform the following task:\n{task.task_description}",
         )
 
         # Add developer message with broader context (following worker.py pattern)
         wip_template = load_wip_answer_template(planner_id) or ""
-        message_manager.add_message(
+        await message_manager.add_message(
             role="user",
             content="Below is broader level context for your task:\n\n"
             f"**Original user request:**\n\n{task.user_request}\n\n"
@@ -347,11 +347,11 @@ async def worker_initialisation(task_data: dict):
                             "If image manipulation is required, use these dimensions to produce precise coordinates for cropping or combining charts.",
                         }
                     )
-                    message_manager.add_message(role="user", content=content)
+                    await message_manager.add_message(role="user", content=content)
 
         # Add input variables if any
         if task.variable_keys and planner_variables:
-            message_manager.add_message(
+            await message_manager.add_message(
                 role="developer",
                 content="The following variables are available for use, they already exist in the environment, "
                 f"you do not need to declare or create it: {', '.join(task.variable_keys)}",
@@ -359,7 +359,7 @@ async def worker_initialisation(task_data: dict):
             for variable_name in task.variable_keys:
                 if variable_name in planner_variables:
                     variable = planner_variables[variable_name]
-                    message_manager.add_message(
+                    await message_manager.add_message(
                         role="developer",
                         content=f"# {variable_name}\nType: {type(variable)}\n\n"
                         f"Length of variable: {len(str(variable))}\n\n"
@@ -368,7 +368,7 @@ async def worker_initialisation(task_data: dict):
 
         # Add file paths if any
         if filepaths:
-            message_manager.add_message(
+            await message_manager.add_message(
                 role="developer",
                 content=f"The following PDF files are available for use: {', '.join(filepaths)}",
             )
@@ -378,7 +378,7 @@ async def worker_initialisation(task_data: dict):
             tools_text = "\n\n---\n\n".join(
                 [f"# {t}\n{TOOLS.get(t).__doc__}" for t in task.tools]
             )
-            message_manager.add_message(
+            await message_manager.add_message(
                 role="developer",
                 content=f"You may use the following function(s):\n\n{tools_text}\n\n"
                 "When using the function(s) you can assume that they already exists in the environment, "
@@ -402,7 +402,7 @@ async def worker_initialisation(task_data: dict):
         logger.error(f"Worker initialisation failed for worker {worker_id}: {e}")
         # Mark worker as failed if it exists
         try:
-            db.update_worker(worker_id, status="failed")
+            await db.update_worker(worker_id, status="failed")
         except:
             pass
         # Update planner to continue despite worker failure
@@ -429,7 +429,7 @@ async def execute_standard_worker(task_data: dict):
     db = AgentDatabase()
 
     # Load worker state from database
-    worker_data = db.get_worker(worker_id)
+    worker_data = await db.get_worker(worker_id)
     if not worker_data:
         logger.error(f"Worker {worker_id} not found in database")
         return
@@ -445,7 +445,7 @@ async def execute_standard_worker(task_data: dict):
     planner_images = get_planner_images(planner_id)
 
     # Get worker messages from database
-    messages = message_manager.get_messages()
+    messages = await message_manager.get_messages()
 
     # Get worker configuration from settings
     max_retry = settings.max_retry_tasks
@@ -477,13 +477,13 @@ async def execute_standard_worker(task_data: dict):
         logger.info(f"Task result: {task_result.model_dump_json(indent=2)}")
 
         # Update attempt counter
-        db.update_worker(worker_id=worker_id, current_attempt=current_attempt)
+        await db.update_worker(worker_id=worker_id, current_attempt=current_attempt)
 
         if task_result.python_code:
             # Check for malicious code
             if task_result.is_malicious:
                 error_message = "The code is either making changes to the database or creating executable files - this is considered malicious and not permitted."
-                messages = message_manager.add_message(
+                messages = await message_manager.add_message(
                     role="assistant",
                     content=f"{error_message}\\nRewrite the python code to fix the error.",
                 )
@@ -495,7 +495,7 @@ async def execute_standard_worker(task_data: dict):
                     )
                 else:
                     # Max retries reached - mark as failed and queue synthesis
-                    db.update_worker(
+                    await db.update_worker(
                         worker_id=worker_id,
                         task_status="failed_validation",
                         task_result="Task failed: Malicious code detected after multiple attempts.",
@@ -503,7 +503,7 @@ async def execute_standard_worker(task_data: dict):
                     update_planner_next_task_and_queue(planner_id, "execute_synthesis")
                 return
 
-            messages = message_manager.add_message(
+            messages = await message_manager.add_message(
                 role="assistant",
                 content=f"The python code to execute:\\n```python\\n{task_result.python_code}\\n```",
             )
@@ -538,13 +538,13 @@ async def execute_standard_worker(task_data: dict):
             sandbox_result = sandbox.execute(task_result.python_code)
 
             if sandbox_result["success"]:
-                messages = message_manager.add_message(
+                messages = await message_manager.add_message(
                     role="assistant",
                     content="Below outputs are generated on executing python code.",
                 )
 
                 if sandbox_result["output"]:
-                    messages = message_manager.add_message(
+                    messages = await message_manager.add_message(
                         role="assistant",
                         content=sandbox_result["output"],
                     )
@@ -582,7 +582,7 @@ async def execute_standard_worker(task_data: dict):
                             )
                         else:
                             error_message = f"Incorrect output: if {output_var.name} is an image, it must be a PIL.Image object or a list[Image] or dict[str:Image] object, no other choices are allowed."
-                            messages = message_manager.add_message(
+                            messages = await message_manager.add_message(
                                 role="assistant",
                                 content=f"{error_message}\\nRewrite the python code to fix the error.",
                             )
@@ -593,7 +593,7 @@ async def execute_standard_worker(task_data: dict):
                                     worker_id, "execute_standard_worker"
                                 )
                             else:
-                                db.update_worker(
+                                await db.update_worker(
                                     worker_id=worker_id,
                                     task_status="failed_validation",
                                     task_result=error_message,
@@ -646,12 +646,12 @@ async def execute_standard_worker(task_data: dict):
 
                 if tool_check.tool_not_available:
                     failure_message = "Task failed: Required tool was not provided"
-                    db.update_worker(
+                    await db.update_worker(
                         worker_id=worker_id,
                         task_status="failed_validation",
                         task_result=failure_message,
                     )
-                    messages = message_manager.add_message(
+                    messages = await message_manager.add_message(
                         role="assistant",
                         content=f"{failure_message}\\n\\n{sandbox_result['stack_trace']}\\n\\nRequired tool is not available, please supply the task with the required tool and try again.",
                     )
@@ -659,7 +659,7 @@ async def execute_standard_worker(task_data: dict):
                     update_planner_next_task_and_queue(planner_id, "execute_synthesis")
                     return
 
-                messages = message_manager.add_message(
+                messages = await message_manager.add_message(
                     role="assistant",
                     content=f"{error_message}\\n\\n{sandbox_result['stack_trace']}\\n\\nRewrite the python code to fix the error.",
                 )
@@ -686,7 +686,7 @@ async def execute_standard_worker(task_data: dict):
 
                 if repeated_fail.repeated_failure:
                     failure_message = f"{error_message}\\n\\nRepeated failure: {repeated_fail.failure_summary}"
-                    db.update_worker(
+                    await db.update_worker(
                         worker_id=worker_id,
                         task_status="failed_validation",
                         task_result=failure_message,
@@ -697,7 +697,7 @@ async def execute_standard_worker(task_data: dict):
 
         else:
             # No Python code generated, just text response
-            messages = message_manager.add_message(
+            messages = await message_manager.add_message(
                 role="assistant", content=task_result.result
             )
 
@@ -720,7 +720,7 @@ async def execute_standard_worker(task_data: dict):
             logger.info(
                 f"Worker {worker_id} exhausted all {max_retry} retries, marking as failed"
             )
-            db.update_worker(
+            await db.update_worker(
                 worker_id=worker_id,
                 task_status="failed_validation",
                 task_result="Task failed after multiple tries.",
@@ -729,7 +729,7 @@ async def execute_standard_worker(task_data: dict):
 
     except Exception as e:
         logger.error(f"Standard worker execution failed for worker {worker_id}: {e}")
-        db.update_worker(
+        await db.update_worker(
             worker_id=worker_id,
             task_status="failed",
             task_result=f"Worker execution failed: {str(e)}",
@@ -759,7 +759,7 @@ async def execute_sql_worker(task_data: dict):
     db = AgentDatabase()
 
     # Load worker state from database
-    worker_data = db.get_worker(worker_id)
+    worker_data = await db.get_worker(worker_id)
     if not worker_data:
         logger.error(f"Worker {worker_id} not found in database")
         return
@@ -771,7 +771,7 @@ async def execute_sql_worker(task_data: dict):
     message_manager = MessageManager(db, "worker", worker_id)
 
     # Get worker messages from database
-    messages = message_manager.get_messages()
+    messages = await message_manager.get_messages()
 
     # Get worker configuration from settings
     max_retry = settings.max_retry_tasks
@@ -790,7 +790,7 @@ async def execute_sql_worker(task_data: dict):
         logger.info(f"Messages: {json.dumps(messages, indent=2)}")
 
         # Update attempt counter
-        db.update_worker(worker_id=worker_id, current_attempt=current_attempt)
+        await db.update_worker(worker_id=worker_id, current_attempt=current_attempt)
 
         # Get SQL artefact from LLM
         sql_artefact = await llm.a_get_response(
@@ -806,7 +806,7 @@ async def execute_sql_worker(task_data: dict):
             try:
                 # Execute SQL in DuckDB
                 sql_output = duck_conn.execute(sql_artefact.sql_code).df().to_markdown()
-                messages = message_manager.add_message(
+                messages = await message_manager.add_message(
                     role="assistant",
                     content=f"The following code was executed:\\n\\n```sql\\n\\n{sql_artefact.sql_code}\\n\\n```\\n\\n"
                     f"The output is:\\n\\n{sql_output}",
@@ -823,7 +823,7 @@ async def execute_sql_worker(task_data: dict):
 
             except Exception as e:
                 error_message = f"Error executing SQL code: {e}"
-                messages = message_manager.add_message(
+                messages = await message_manager.add_message(
                     role="assistant",
                     content=f"{error_message}\\n\\nRewrite the SQL code to fix the error.",
                 )
@@ -833,12 +833,12 @@ async def execute_sql_worker(task_data: dict):
             error_message = (
                 f"SQL code cannot be generated. {sql_artefact.reason_code_not_created}"
             )
-            db.update_worker(
+            await db.update_worker(
                 worker_id=worker_id,
                 task_status="failed_validation",
                 task_result=error_message,
             )
-            messages = message_manager.add_message(
+            messages = await message_manager.add_message(
                 role="assistant", content=error_message
             )
             # Queue synthesis for SQL generation failure
@@ -856,7 +856,7 @@ async def execute_sql_worker(task_data: dict):
             logger.info(
                 f"SQL Worker {worker_id} exhausted all {max_retry} retries, marking as failed"
             )
-            db.update_worker(
+            await db.update_worker(
                 worker_id=worker_id,
                 task_status="failed_validation",
                 task_result="SQL task failed after multiple tries.",
@@ -865,7 +865,7 @@ async def execute_sql_worker(task_data: dict):
 
     except Exception as e:
         logger.error(f"SQL worker execution failed for worker {worker_id}: {e}")
-        db.update_worker(
+        await db.update_worker(
             worker_id=worker_id,
             task_status="failed",
             task_result=f"SQL worker execution failed: {str(e)}",
