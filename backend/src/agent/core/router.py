@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Optional, Union, List, Dict, Any
+from typing import Optional, Union, List
 from fastapi import WebSocket
 from PIL import Image
 from datetime import datetime, timezone
@@ -16,6 +16,7 @@ from sqlalchemy import select, update
 from ..services.image_service import process_image_file, is_image
 from ..services.llm_service import LLM
 from ..tasks.task_utils import update_planner_next_task_and_queue
+from ..tasks.message_manager import MessageManager
 from ..utils.tools import encode_image, decode_image
 
 logger = logging.getLogger(__name__)
@@ -72,173 +73,83 @@ class RouterAgent:
 
     async def _load_existing_state(self):
         """PHASE 5: Enhanced database state loading for ephemeral router architecture
-        
+
         Critical for ephemeral instances - must load complete router state from database.
         Every router creation depends on this method for conversation continuity.
         """
         try:
             state = await self._agent_db.get_router(self.id)
             if not state:
-                raise ValueError(f"Router {self.id} not found in database - cannot load state")
-                
+                raise ValueError(
+                    f"Router {self.id} not found in database - cannot load state"
+                )
+
             # Load core router configuration
             self._model = state.get("model")
             self._temperature = state.get("temperature")
             self._status = state.get("status")
-            
+
             # Validate critical properties were loaded
             if self._model is None:
-                logger.warning(f"Router {self.id} loaded with null model - using default")
+                logger.warning(
+                    f"Router {self.id} loaded with null model - using default"
+                )
                 self._model = settings.router_model
-                
+
             if self._temperature is None:
-                logger.warning(f"Router {self.id} loaded with null temperature - using default")
+                logger.warning(
+                    f"Router {self.id} loaded with null temperature - using default"
+                )
                 self._temperature = 0.0
-                
+
             if self._status is None:
-                logger.warning(f"Router {self.id} loaded with null status - using default")
+                logger.warning(
+                    f"Router {self.id} loaded with null status - using default"
+                )
                 self._status = "active"
-                
-            logger.info(f"Router {self.id} state loaded successfully - model: {self._model}, temp: {self._temperature}, status: {self._status}")
-            
+
+            logger.info(
+                f"Router {self.id} state loaded successfully - model: {self._model}, temp: {self._temperature}, status: {self._status}"
+            )
+
+            # Initialize MessageManager for existing router
+            self.message_manager = MessageManager(
+                self._agent_db, self.agent_type, self.id
+            )
+
         except Exception as e:
             logger.error(f"Failed to load router {self.id} state from database: {e}")
             raise ValueError(f"Router {self.id} state loading failed: {e}") from e
 
-    # Common agent properties with database sync
-
-    @property
-    def model(self):
-        return getattr(self, "_model", None)
-
-    @model.setter
-    def model(self, value):
-        self._model = value
-        # Note: update_agent_state is now async - consider using async context
-
-    @property
-    def temperature(self):
-        return getattr(self, "_temperature", None)
-
-    @temperature.setter
-    def temperature(self, value):
-        self._temperature = value
-        # Note: update_agent_state is now async - consider using async context
-
-    async def get_messages(self) -> List[Dict[str, Any]]:
-        """Get messages from database for this agent"""
-        return await self._agent_db.get_messages(self.agent_type, self.id)
-    
-    @property 
-    def messages(self) -> List[Dict[str, Any]]:
-        """Synchronous messages property for backwards compatibility - deprecated"""
-        import asyncio
-        try:
-            return asyncio.run(self.get_messages())
-        except RuntimeError:
-            # Already in event loop, need to handle differently
-            import warnings
-            import os
-            # Only warn in non-test environments to reduce test noise
-            if not os.environ.get('PYTEST_CURRENT_TEST'):
-                warnings.warn("Synchronous messages property used in async context. Use get_messages() instead.", DeprecationWarning)
-            return []
-
-    @messages.setter  
-    def messages(self, value: List[Dict[str, Any]]):
-        """Set messages (for backward compatibility, though we prefer database storage)"""
-        import asyncio
-        import warnings
-        warnings.warn("Synchronous messages setter is deprecated. Use async database operations instead.", DeprecationWarning)
-        
-        # Need to run async operations in sync context
-        async def _set_messages():
-            await self._agent_db.clear_messages(self.agent_type, self.id)
-            for msg in value:
-                await self._agent_db.add_message(
-                    agent_type=self.agent_type, 
-                    agent_id=self.id, 
-                    role=msg["role"], 
-                    content=msg["content"]
-                )
-        
-        try:
-            asyncio.run(_set_messages())
-        except RuntimeError:
-            # Already in event loop - cannot use asyncio.run
-            import warnings
-            warnings.warn("Cannot set messages in async context. Messages not updated.", RuntimeWarning)
-
-    async def add_message(
-        self,
-        role: str,
-        content: str,
-        image: Union[str, Path, Image.Image] = None,
-        verbose=True,
-    ) -> Optional[int]:
+    def _encode_image_content(
+        self, content: Union[str, List], image: Union[str, Path, Image.Image]
+    ) -> Union[str, List]:
         """
-        Adds a message to the message history.
+        Handle image encoding for message content.
 
-        :param role: The role of the message sender (e.g., 'user', 'assistant').
-        :param content: The content of the message.
-        :return: A list of messages including the new message.
+        Args:
+            content: Original content (string or list)
+            image: Image to encode (path, PIL Image, or base64 string)
+
+        Returns:
+            Content with encoded image data
         """
-        if image:
-            if content:
-                if isinstance(content, str):
-                    content = [
-                        {"type": "text", "text": content},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{encode_image(image)}"
-                            },
-                        },
-                    ]
-                else:
-                    content.append(
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{encode_image(image)}"
-                            },
-                        }
-                    )
-            else:
-                content = [
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/png;base64,{encode_image(image)}"
-                        },
-                    }
-                ]
+        image_data = {
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{encode_image(image)}"},
+        }
 
-        if isinstance(content, str):
-            if verbose:
-                logger.info(content)
+        if content:
+            if isinstance(content, str):
+                # Convert string content to list format with text and image
+                return [{"type": "text", "text": content}, image_data]
             else:
-                logger.debug(content)
-        elif isinstance(content, list):
-            for c in content:
-                if c.get("type") == "text":
-                    if verbose:
-                        logger.info(c["text"])
-                    else:
-                        logger.debug(c["text"])
-                else:
-                    if verbose:
-                        decode_image(
-                            c["image_url"]["url"].replace("data:image/png;base64,", "")
-                        ).show()
-
-        # Store in database and return message ID
-        return await self._agent_db.add_message(
-            agent_type=self.agent_type, 
-            agent_id=self.id, 
-            role=role, 
-            content=content
-        )
+                # Append image to existing list content
+                content.append(image_data)
+                return content
+        else:
+            # No text content, just image
+            return [image_data]
 
     # Agent State Management
 
@@ -268,7 +179,9 @@ class RouterAgent:
         self._status = value
         # Note: update_agent_state is now async - consider using async context
 
-    async def activate_conversation(self, user_message: str, websocket: WebSocket, files: list = None):
+    async def activate_conversation(
+        self, user_message: str, websocket: WebSocket, files: list = None
+    ):
         """Activate a new router with system message and process first user message"""
         # Create default title (truncated if over 30 chars) and preview
         title = user_message[:30] if len(user_message) > 30 else user_message
@@ -285,14 +198,17 @@ class RouterAgent:
         )
 
         # Set instance variables after DB creation
-        self._model = settings.router_model
-        self._temperature = 0.0
+        self.model = settings.router_model
+        self.temperature = 0.0
         self._status = "active"
 
+        # Initialize MessageManager for this router
+        self.message_manager = MessageManager(self._agent_db, self.agent_type, self.id)
+
         # Add system message to database
-        await self.add_message(
-            role="system",
-            content="Your name is Bandit Heeler, your main role is to have a conversation with the user and for complex requests activate agents."
+        await self.message_manager.add_message(
+            "system",
+            "Your name is Bandit Heeler, your main role is to have a conversation with the user and for complex requests activate agents."
             "Otherwise, you are a fictional character from the show Bluey.",
         )
 
@@ -312,7 +228,7 @@ class RouterAgent:
         """Generate LLM title using existing message chain and update database"""
         try:
             # Get the first user message to check length
-            messages = await self.get_messages()
+            messages = await self.message_manager.get_messages()
             user_messages = [msg for msg in messages if msg.get("role") == "user"]
             if not user_messages or len(user_messages[0]["content"]) <= 30:
                 return
@@ -358,7 +274,7 @@ class RouterAgent:
         )
 
         # Store user message
-        await self.add_message(role="user", content=user_message)
+        await self.message_manager.add_message("user", user_message)
 
         try:
             # Send processing status
@@ -402,8 +318,10 @@ class RouterAgent:
                     response = simple_chat_task.result()
                     logger.info(f"Response generated in router:\n{response}")
                     # Store and send response for simple chat only
-                    await self.add_message(role="assistant", content=response)
-                    await self.send_assistant_message(content=response, websocket=websocket)
+                    await self.message_manager.add_message("assistant", response)
+                    await self.send_assistant_message(
+                        content=response, websocket=websocket
+                    )
 
         except Exception as e:
             logger.error(
@@ -416,7 +334,7 @@ class RouterAgent:
 
     async def handle_simple_chat(self) -> str:
         """Handle simple conversational messages"""
-        messages = await self.get_messages()
+        messages = await self.message_manager.get_messages()
         response = await self.llm.a_get_response(
             messages=messages,
             model=self.model,
@@ -426,7 +344,7 @@ class RouterAgent:
 
     async def assess_agent_requirements(self) -> RequireAgent:
         """Use LLM to assess what type of agent assistance is needed based on message history"""
-        messages = await self.get_messages()
+        messages = await self.message_manager.get_messages()
         assessment_messages = messages + [
             {
                 "role": "user",
@@ -444,7 +362,10 @@ class RouterAgent:
         return response
 
     async def handle_complex_request(
-        self, websocket: WebSocket, files: list = None, agent_requirements: RequireAgent = None
+        self,
+        websocket: WebSocket,
+        files: list = None,
+        agent_requirements: RequireAgent = None,
     ):
         """Handle complex requests requiring planner - runs asynchronously in background"""
         logger.info(
@@ -481,10 +402,8 @@ class RouterAgent:
                 f"DEBUG: Taking files-only path - calling LLM to summarise message history"
             )
             # Create a fresh message context for summarisation without the Bandit Heeler system message
-            messages = await self.get_messages()
-            user_messages = [
-                msg for msg in messages if msg.get("role") != "system"
-            ]
+            messages = await self.message_manager.get_messages()
+            user_messages = [msg for msg in messages if msg.get("role") != "system"]
             summary_messages = [
                 {
                     "role": "system",
@@ -515,20 +434,31 @@ class RouterAgent:
             # Process each file group sequentially
             for i, file_group in enumerate(file_groups, 1):
                 if len(file_groups) > 1:
-                    await self.send_status(status=f"Processing file group {i}/{len(file_groups)}: {', '.join(file_group)}", websocket=websocket)
+                    await self.send_status(
+                        status=f"Processing file group {i}/{len(file_groups)}: {', '.join(file_group)}",
+                        websocket=websocket,
+                    )
                 else:
-                    logger.info(f"DEBUG: Processing single file group with files: {file_group}")
+                    logger.info(
+                        f"DEBUG: Processing single file group with files: {file_group}"
+                    )
 
                 # Start background task for this file group - no return value, runs asynchronously
                 await self._invoke_single(
-                    files=file_group, user_question=user_question, instructions=instructions, websocket=websocket, agent_requirements=agent_requirements
+                    files=file_group,
+                    user_question=user_question,
+                    instructions=instructions,
+                    websocket=websocket,
+                    agent_requirements=agent_requirements,
                 )
                 logger.info(
                     f"DEBUG: File group {i} planner queued for background processing"
                 )
 
             # All file groups processed sequentially - no return value needed
-            logger.info(f"Queued sequential processing of all {len(file_groups)} file groups.")
+            logger.info(
+                f"Queued sequential processing of all {len(file_groups)} file groups."
+            )
 
         else:
             logger.info(f"DEBUG: No files - using _invoke_single with empty files list")
@@ -678,7 +608,9 @@ class RouterAgent:
         )
         return processed_files, errors, instructions
 
-    async def determine_file_groups(self, user_question: str, files: list) -> list[list[str]]:
+    async def determine_file_groups(
+        self, user_question: str, files: list
+    ) -> list[list[str]]:
         """Determine how files should be grouped for processing"""
         if not files:
             return []
@@ -763,11 +695,20 @@ class RouterAgent:
             logger.info(f"DEBUG: Using default planner (no special name)")
 
         # Send "Agents assemble!" message first and capture its ID
-        agents_assemble_message_id = await self.add_message(role="assistant", content="Agents assemble!")
-        logger.info(f"DEBUG: Agents assemble message_id from add_message: {agents_assemble_message_id} (type: {type(agents_assemble_message_id)})")
-        logger.info(f"DEBUG: WebSocket parameter is: {websocket} (None: {websocket is None})")
+        result = await self.message_manager.add_message(
+            "assistant", "Agents assemble!", need_message_id=True
+        )
+        agents_assemble_message_id = result["message_id"]
+        logger.info(
+            f"DEBUG: Agents assemble message_id from add_message: {agents_assemble_message_id} (type: {type(agents_assemble_message_id)})"
+        )
+        logger.info(
+            f"DEBUG: WebSocket parameter is: {websocket} (None: {websocket is None})"
+        )
         await self.send_assistant_message(
-            content="Agents assemble!", websocket=websocket, message_id=agents_assemble_message_id
+            content="Agents assemble!",
+            websocket=websocket,
+            message_id=agents_assemble_message_id,
         )
 
         logger.info(
@@ -847,8 +788,10 @@ class RouterAgent:
         """Send assistant message to frontend"""
         # Debug logging for Agents assemble messages
         if content == "Agents assemble!":
-            logger.info(f"DEBUG: send_assistant_message called with websocket={websocket is not None}, message_id={message_id}")
-        
+            logger.info(
+                f"DEBUG: send_assistant_message called with websocket={websocket is not None}, message_id={message_id}"
+            )
+
         if websocket:
             response_data = {
                 "type": "response",
@@ -857,16 +800,20 @@ class RouterAgent:
             }
             if message_id is not None:
                 response_data["message_id"] = message_id
-            
+
             # Debug logging for Agents assemble messages
             if content == "Agents assemble!":
-                logger.info(f"DEBUG: Sending Agents assemble WebSocket message: {response_data}")
-            
+                logger.info(
+                    f"DEBUG: Sending Agents assemble WebSocket message: {response_data}"
+                )
+
             await websocket.send_json(response_data)
         else:
             # Debug logging when websocket is None
             if content == "Agents assemble!":
-                logger.warning(f"DEBUG: Cannot send Agents assemble message - WebSocket is None!")
+                logger.warning(
+                    f"DEBUG: Cannot send Agents assemble message - WebSocket is None!"
+                )
 
     async def send_error(self, error: str, websocket: WebSocket):
         """Send error message to frontend"""
@@ -879,10 +826,8 @@ class RouterAgent:
         """Send message history to frontend on connect"""
         if websocket:
             # Only send history if there are actual messages (excluding system messages)
-            messages = await self.get_messages()
-            router_messages = [
-                msg for msg in messages if msg.get("role") != "system"
-            ]
+            messages = await self.message_manager.get_messages()
+            router_messages = [msg for msg in messages if msg.get("role") != "system"]
             await websocket.send_json(
                 {
                     "type": "message_history",
@@ -936,11 +881,13 @@ class RouterAgent:
                 return
 
             # Add to router's message chain
-            await self.add_message(role="assistant", content=user_response)
+            await self.message_manager.add_message("assistant", user_response)
 
             # Send to frontend via WebSocket (if connected) - no message_id needed for final response
             if websocket:
-                await self.send_assistant_message(content=user_response, websocket=websocket)
+                await self.send_assistant_message(
+                    content=user_response, websocket=websocket
+                )
                 logger.info(f"Sent planner completion response to frontend")
             else:
                 logger.warning(

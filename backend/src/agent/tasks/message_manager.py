@@ -1,6 +1,6 @@
 """Message Manager for efficient in-memory message handling with database synchronisation"""
 
-from typing import Dict, List, Any, Optional, TYPE_CHECKING
+from typing import Dict, List, Any, Optional, Union, TYPE_CHECKING
 import logging
 
 if TYPE_CHECKING:
@@ -35,9 +35,9 @@ class MessageManager:
         
         logger.debug(f"Initialised MessageManager for {agent_type} {agent_id} (will sync on first use)")
     
-    async def add_message(self, role: str, content: Any) -> List[Dict[str, Any]]:
+    async def add_message(self, role: str, content: Any, need_message_id: bool = False) -> Union[List[Dict[str, Any]], Dict[str, Any]]:
         """
-        Add a message and return the updated complete message list.
+        Add a message and return either the message list or both ID and messages.
         
         This method persists to database and updates the in-memory cache in one operation,
         ensuring consistency and eliminating the need for separate database queries.
@@ -45,9 +45,13 @@ class MessageManager:
         Args:
             role: Message role ('user', 'assistant', 'system', 'developer')
             content: Message content (can be string, list, or other JSON-serialisable content)
+            need_message_id: If True, returns dict with message_id and messages. If False, returns just messages.
             
         Returns:
-            Complete updated message list for immediate use with LLM calls
+            If need_message_id is False (default): Complete updated message list for immediate use with LLM calls
+            If need_message_id is True: Dict containing:
+            - message_id: Database ID of the added message (Optional[int])
+            - messages: Complete updated message list
         """
         # Ensure we're synced with database first
         if not self._synced:
@@ -67,8 +71,17 @@ class MessageManager:
             logger.debug(f"Added message (ID: {message_id}) to {self.agent_type} {self.agent_id}")
         else:
             logger.error(f"Failed to add message to database for {self.agent_type} {self.agent_id}")
-            
-        return await self.get_messages()
+        
+        # Return format based on need_message_id parameter
+        messages = await self.get_messages()
+        
+        if need_message_id:
+            return {
+                "message_id": message_id,
+                "messages": messages
+            }
+        else:
+            return messages  # Default behavior - unchanged from original
     
     async def get_messages(self) -> List[Dict[str, Any]]:
         """
