@@ -1,7 +1,7 @@
 from sqlalchemy import Column, String, Text, DateTime, Integer, JSON, create_engine, ForeignKey, Float, Boolean, UniqueConstraint, Index, func, select
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import logging
 from typing import Dict, List, Any, Optional, Literal
@@ -22,7 +22,7 @@ class PlannerMessage(Base):
     agent_id = Column(String(32), nullable=False, index=True)  # UUID hex string
     role = Column(String(20), nullable=False)  # 'user', 'assistant', 'system', 'developer'
     content = Column(JSON, nullable=False)  # Store as JSON to handle both string and list content
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     
     def to_message_dict(self) -> Dict[str, Any]:
         """Convert database record back to message format"""
@@ -39,7 +39,7 @@ class WorkerMessage(Base):
     agent_id = Column(String(32), nullable=False, index=True)  # UUID hex string (task_id)
     role = Column(String(20), nullable=False)  # 'user', 'assistant', 'system', 'developer'
     content = Column(JSON, nullable=False)  # Store as JSON to handle both string and list content
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     
     def to_message_dict(self) -> Dict[str, Any]:
         """Convert database record back to message format"""
@@ -56,7 +56,7 @@ class RouterMessage(Base):
     router_id = Column(String(32), ForeignKey('routers.router_id'), nullable=False, index=True)
     role = Column(String(20), nullable=False)  # 'user', 'assistant'
     content = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     
     # Add composite index for message history queries
     __table_args__ = (
@@ -85,8 +85,8 @@ class Router(Base):
     preview = Column(String(255), nullable=False, default="")
     agent_metadata = Column(JSON, default=lambda: {})  # Future extensibility
     schema_version = Column(Integer, default=1)  # Schema evolution tracking
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class Planner(Base):
@@ -110,8 +110,8 @@ class Planner(Base):
     
     agent_metadata = Column(JSON, default=lambda: {})  # Future extensibility
     schema_version = Column(Integer, default=1)  # Schema evolution tracking
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class Worker(Base):
@@ -140,8 +140,8 @@ class Worker(Base):
     filepaths = Column(JSON)  # List of PDF file paths available for use
     agent_metadata = Column(JSON, default=lambda: {})  # Future extensibility
     schema_version = Column(Integer, default=1)  # Schema evolution tracking
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class RouterPlannerLink(Base):
@@ -152,7 +152,7 @@ class RouterPlannerLink(Base):
     router_id = Column(String(32), ForeignKey('routers.router_id'), nullable=False)
     planner_id = Column(String(32), ForeignKey('planners.planner_id'), nullable=False)
     relationship_type = Column(String(50), nullable=False)  # initiated, continued, forked
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     
     __table_args__ = (UniqueConstraint('router_id', 'planner_id'),)
 
@@ -166,7 +166,7 @@ class RouterMessagePlannerLink(Base):
     message_id = Column(Integer, ForeignKey('router_messages.id'), nullable=False, index=True)
     planner_id = Column(String(32), ForeignKey('planners.planner_id'), nullable=False, index=True)  # ADDED INDEX
     relationship_type = Column(String(50), nullable=False)  # initiated, continued, forked
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     
     __table_args__ = (
         UniqueConstraint('message_id', 'planner_id'),  # One planner per message
@@ -183,7 +183,7 @@ class TaskQueue(Base):
     entity_id = Column(String(32), nullable=False, index=True)  # planner_id or worker_id
     function_name = Column(String(100), nullable=False)  # async function to execute
     status = Column(String(20), nullable=False, default='PENDING', index=True)  # PENDING, IN_PROGRESS, COMPLETED, FAILED
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     started_at = Column(DateTime)
     completed_at = Column(DateTime)
     error_message = Column(Text)  # Store error details for failed tasks
@@ -204,7 +204,7 @@ class FileMetadata(Base):
     file_path = Column(String(1024), nullable=False)  # Actual storage path
     file_size = Column(Integer, nullable=False)  # File size in bytes
     mime_type = Column(String(255))  # MIME type
-    upload_timestamp = Column(DateTime, default=datetime.utcnow)
+    upload_timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     user_id = Column(String(255), nullable=False, index=True)  # User identifier
     reference_count = Column(Integer, default=1)  # Number of times referenced
     
@@ -331,7 +331,7 @@ class AgentDatabase:
             router_record = result.scalar_one_or_none()
             if router_record:
                 router_record.title = title
-                router_record.updated_at = datetime.utcnow()
+                router_record.updated_at = datetime.now(timezone.utc)
                 await session.commit()
     
     async def get_messages(self, agent_type: AgentType, agent_id: str) -> List[Dict[str, Any]]:
@@ -401,7 +401,7 @@ class AgentDatabase:
             router = session.query(Router).filter(Router.router_id == router_id).first()
             if router:
                 router.status = status
-                router.updated_at = datetime.utcnow()
+                router.updated_at = datetime.now(timezone.utc)
                 session.commit()
     
     async def get_router(self, router_id: str) -> Optional[Dict[str, Any]]:
@@ -536,7 +536,7 @@ class AgentDatabase:
                 for key, value in kwargs.items():
                     if hasattr(worker, key):
                         setattr(worker, key, value)
-                worker.updated_at = datetime.utcnow()
+                worker.updated_at = datetime.now(timezone.utc)
                 await session.commit()
                 return True
             return False
@@ -552,7 +552,7 @@ class AgentDatabase:
                 for key, value in kwargs.items():
                     if hasattr(planner, key):
                         setattr(planner, key, value)
-                planner.updated_at = datetime.utcnow()
+                planner.updated_at = datetime.now(timezone.utc)
                 await session.commit()
                 return True
             return False
@@ -1006,9 +1006,9 @@ class AgentDatabase:
             
             task.status = status
             if status == 'IN_PROGRESS':
-                task.started_at = datetime.utcnow()
+                task.started_at = datetime.now(timezone.utc)
             elif status in ['COMPLETED', 'FAILED']:
-                task.completed_at = datetime.utcnow()
+                task.completed_at = datetime.now(timezone.utc)
                 if status == 'FAILED':
                     task.error_message = error_message
             

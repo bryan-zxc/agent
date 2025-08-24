@@ -18,6 +18,7 @@ from ..models import (
     InitialExecutionPlan,
     TableMeta,
     ColumnMeta,
+    SingleValueColumn,
     TOOLS,
     Task,
     ExecutionPlanModel,
@@ -89,26 +90,165 @@ def clean_table_name(input_string: str):
         return f"table_{cleaned}"
 
 
-def get_table_metadata(duck_conn, table_name: str):
-    """Get table metadata for a DuckDB table"""
-    # Get column information
-    columns_info = duck_conn.sql(f"PRAGMA table_info('{table_name}')").fetchall()
+def clean_column_name(input_string: str, column_index: int, existing_columns: list):
+    """
+    Clean input string to create a valid SQL column name.
+    Handles collisions by appending column index if needed.
+    """
+    import re
 
-    columns = []
-    for col_info in columns_info:
-        # col_info format: (cid, name, type, notnull, default_value, pk)
-        column = ColumnMeta(
-            name=col_info[1],
-            data_type=col_info[2],
-            nullable=not bool(col_info[3]),
-            is_primary_key=bool(col_info[5]),
-        )
-        columns.append(column)
+    if not input_string:
+        return f"column_{column_index}"
 
-    # Get row count
+    # Remove all non-alphanumeric and non-underscore characters
+    cleaned = re.sub(r"[^a-zA-Z0-9]", " ", input_string)
+    cleaned = (
+        re.sub(r"\s+", " ", cleaned).strip().replace(" ", "_")
+    )  # Collapse multiple spaces and trim
+
+    # If string is empty after cleaning, return fallback
+    if not cleaned:
+        cleaned = f"column_{column_index}"
+
+    # Ensure first character is alphabetic
+    if not cleaned[0].isalpha():
+        cleaned = "col_" + cleaned
+
+    # Handle collisions with existing column names
+    original_cleaned = cleaned
+    counter = 1
+    while cleaned in existing_columns:
+        cleaned = f"{original_cleaned}_{counter}"
+        counter += 1
+
+    return cleaned
+
+
+def get_table_metadata(duck_conn, table_name: str) -> TableMeta:
+    """Get comprehensive table metadata for a DuckDB table"""
+    # Get basic table info
     row_count = duck_conn.sql(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
 
-    return TableMeta(name=table_name, columns=columns, row_count=row_count)
+    # Get column names and types
+    columns_info = duck_conn.sql(f"DESCRIBE {table_name}").fetchall()
+    total_columns = len(columns_info)
+    columns_new = []
+    column_metas = []
+    single_value_columns = []
+    selected_columns = []  # Track columns that will be included in final output
+    current_metadata_length = (
+        len(table_name) + 100
+    )  # Base overhead (will add top_10_md length later)
+
+    for i, col in enumerate(columns_info):
+        col_name = clean_column_name(col[0], i, columns_new)
+        columns_new.append(col_name)
+        if col_name != col[0]:
+            duck_conn.sql(
+                f'ALTER TABLE {table_name} RENAME COLUMN "{col[0]}" TO {col_name}'
+            )
+        if col[1].startswith("VARCHAR"):
+            duck_conn.sql(
+                f"UPDATE {table_name} SET {col_name} = LTRIM(RTRIM({col_name}))"
+            )
+
+        # Check if column is completely blank/null/whitespace
+        non_empty_count = duck_conn.sql(
+            f"""
+            SELECT COUNT(*) FROM {table_name} 
+            WHERE {col_name} IS NOT NULL 
+            AND LTRIM(RTRIM(CAST({col_name} AS VARCHAR))) != ''
+            """
+        ).fetchone()[0]
+
+        if non_empty_count == 0:
+            # Skip completely empty columns
+            continue
+
+        # Check if column has only one distinct non-null value
+        distinct_values = duck_conn.sql(
+            f"""
+            SELECT DISTINCT ifnull(LTRIM(RTRIM(CAST({col_name} AS VARCHAR))),'') FROM {table_name}
+            """
+        ).fetchall()
+
+        if len(distinct_values) == 1:
+            # Single value column - add to single_value_columns list
+            single_value_column = SingleValueColumn(
+                column_name=col_name,
+                only_value_in_column=str(distinct_values[0][0]),
+            )
+            single_value_columns.append(single_value_column)
+            continue
+
+        # Calculate percentage of distinct values
+        distinct_count = duck_conn.sql(
+            f"SELECT COUNT(DISTINCT {col_name}) FROM {table_name}"
+        ).fetchone()[0]
+        pct_distinct = (distinct_count / row_count) if row_count > 0 else 0
+
+        # Get min and max values
+        min_max = duck_conn.sql(
+            f"SELECT MIN({col_name}), MAX({col_name}) FROM {table_name}"
+        ).fetchone()
+        min_value = str(min_max[0]) if min_max[0] is not None else ""
+        max_value = str(min_max[1]) if min_max[1] is not None else ""
+
+        # Get top 3 most frequent values
+        top_3_result = duck_conn.sql(
+            f"""
+            SELECT {col_name}, COUNT(*) as freq 
+            FROM {table_name} 
+            WHERE {col_name} IS NOT NULL
+            GROUP BY {col_name} 
+            ORDER BY freq DESC 
+            LIMIT 3
+        """
+        ).fetchall()
+
+        top_3_values = {str(value): freq for value, freq in top_3_result}
+
+        column_meta = ColumnMeta(
+            column_name=col_name,
+            pct_distinct=round(pct_distinct, 2),
+            min_value=min_value,
+            max_value=max_value,
+            top_3_values=top_3_values,
+        )
+        column_metas.append(column_meta)
+        selected_columns.append(col_name)  # Track this column for top 10 query
+
+        # Estimate metadata length for this column (rough approximation)
+        column_meta_str = column_meta.model_dump_json()
+        current_metadata_length += len(column_meta_str)
+
+        # Check if adding this column would exceed the character limit
+        if current_metadata_length > 100000:
+            # Skip remaining columns to stay under limit
+            break
+
+    # Generate top 10 rows markdown using only the selected columns
+    if selected_columns:
+        selected_columns_str = ", ".join(selected_columns)
+        top_10_md = (
+            duck_conn.sql(
+                f"SELECT {selected_columns_str} FROM {table_name} LIMIT 10"
+            )
+            .df()
+            .to_markdown(index=False)
+        )
+    else:
+        # Fallback if no columns were selected (shouldn't happen in normal cases)
+        top_10_md = "No columns available for display"
+
+    return TableMeta(
+        table_name=table_name,
+        row_count=row_count,
+        top_10_md=top_10_md,
+        columns=column_metas,
+        single_value_columns=single_value_columns,
+        total_columns=total_columns,
+    )
 
 
 async def execute_initial_planning(task_data: dict):
@@ -285,9 +425,7 @@ async def execute_initial_planning(task_data: dict):
                                 f"Failed to create table {table_name} even with all_varchar: {e2}"
                             )
                             # Add error message instead of table creation message
-                            await db.add_message(
-                                agent_id=planner_id,
-                                agent_type="planner",
+                            await message_manager.add_message(
                                 role="user",
                                 content=f"CSV file `{f.filepath}` could not be processed into a database table. Error: {str(e2)}",
                             )
@@ -298,9 +436,7 @@ async def execute_initial_planning(task_data: dict):
                     tables.append(table_meta)
 
                     # Add message about table creation (exact copy from PlannerAgent)
-                    await db.add_message(
-                        agent_id=planner_id,
-                        agent_type="planner",
+                    await message_manager.add_message(
                         role="user",
                         content=f"Data file `{f.filepath}` converted to table `{table_name}` in database. Below is table metadata:\n\n{table_meta.model_dump_json(indent=2)}",
                     )
@@ -318,9 +454,7 @@ async def execute_initial_planning(task_data: dict):
                         if len(text_content) > 1000000:
                             limited_content += "...\n\n[Content truncated to first 1 million characters]"
 
-                        await db.add_message(
-                            agent_id=planner_id,
-                            agent_type="planner",
+                        await message_manager.add_message(
                             role="user",
                             content=f"Text file `{Path(f.filepath).name}` contains the following content:\n\n{limited_content}",
                         )
@@ -328,9 +462,7 @@ async def execute_initial_planning(task_data: dict):
                             f"Processed text file: {f.filepath} with encoding {f.document_context.encoding}"
                         )
                     except Exception as e:
-                        await db.add_message(
-                            agent_id=planner_id,
-                            agent_type="planner",
+                        await message_manager.add_message(
                             role="user",
                             content=f"Text file `{Path(f.filepath).name}` could not be read with encoding `{f.document_context.encoding}`. Error: {str(e)}",
                         )
@@ -340,9 +472,7 @@ async def execute_initial_planning(task_data: dict):
                     f.file_type == "document" and f.document_context.file_type == "pdf"
                 ):
                     # Add message about PDF file being available for processing
-                    await db.add_message(
-                        agent_id=planner_id,
-                        agent_type="planner",
+                    await message_manager.add_message(
                         role="user",
                         content=f"PDF document `{Path(f.filepath).name}` is available for processing at: {f.filepath}",
                     )
@@ -381,7 +511,7 @@ async def execute_initial_planning(task_data: dict):
         )
 
         # Get messages for LLM call
-        messages = await db.get_messages(agent_type="planner", agent_id=planner_id)
+        messages = await message_manager.get_messages()
 
         # Get initial execution plan from LLM
         initial_plan = await llm.a_get_response(
@@ -406,7 +536,7 @@ async def execute_initial_planning(task_data: dict):
         save_execution_plan_model(planner_id, execution_plan_model)
 
         # Create initial answer template
-        messages = await db.get_messages(agent_type="planner", agent_id=planner_id)
+        messages = await message_manager.get_messages()
         logger.info(
             f"DEBUG: Retrieved {len(messages)} messages for planner {planner_id}"
         )
@@ -469,6 +599,9 @@ async def execute_task_creation(task_data: dict):
         await db.update_planner(planner_id, status="failed")
         return
 
+    # Create message manager for this planner
+    message_manager = MessageManager(db, "planner", planner_id)
+
     try:
         # Load execution plan model from dedicated file
         execution_plan_model = load_execution_plan_model(planner_id)
@@ -491,7 +624,7 @@ async def execute_task_creation(task_data: dict):
             )
 
         # Get planner messages for context
-        messages = await db.get_messages(agent_type="planner", agent_id=planner_id)
+        messages = await message_manager.get_messages()
 
         # Create tools text for context
         tools_text = "\n\n---\n\n".join(
@@ -690,6 +823,9 @@ async def execute_synthesis(task_data: dict):
         logger.error(f"Planner {planner_id} not found")
         return
 
+    # Create message manager for this planner
+    message_manager = MessageManager(db, "planner", planner_id)
+
     try:
         # Get all workers for this planner
         workers = await db.get_workers_by_planner(planner_id)
@@ -717,7 +853,9 @@ async def execute_synthesis(task_data: dict):
             logger.info(f"Processing completed worker {worker_id}: {task_description}")
 
             # 1. Add worker response to planner messages (like original task_result_synthesis)
-            worker_messages = await db.get_messages(agent_type="worker", agent_id=worker_id)
+            # Create temporary MessageManager for reading worker messages
+            worker_message_manager = MessageManager(db, "worker", worker_id)
+            worker_messages = await worker_message_manager.get_messages()
             task_message_combined = "\n\n---\n\n".join(
                 [
                     msg["content"]
@@ -726,9 +864,7 @@ async def execute_synthesis(task_data: dict):
                 ]
             )
 
-            await db.add_message(
-                agent_id=planner_id,
-                agent_type="planner",
+            await message_manager.add_message(
                 role="assistant",
                 content=f"# Responses from worker\n\n"
                 f"**Task ID**: {worker_id}\n\n"
@@ -754,9 +890,7 @@ async def execute_synthesis(task_data: dict):
                     current_wip_template = load_wip_answer_template(planner_id) or ""
 
                     # Get planner messages for template update context
-                    planner_messages = await db.get_messages(
-                        agent_type="planner", agent_id=planner_id
-                    )
+                    planner_messages = await message_manager.get_messages()
 
                     # Create answer template update prompt (following planner.py pattern)
                     template_update_messages = planner_messages + [
@@ -816,7 +950,7 @@ async def execute_synthesis(task_data: dict):
                     )
 
                 # Get planner messages for LLM context
-                messages = await db.get_messages(agent_type="planner", agent_id=planner_id)
+                messages = await message_manager.get_messages()
 
                 # Create filtered model with only open todos for LLM
                 open_todos = [

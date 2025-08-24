@@ -1,4 +1,4 @@
-from pydantic import Field
+from pydantic import Field, ConfigDict
 from pydantic_settings import BaseSettings
 from typing import Optional
 
@@ -72,9 +72,10 @@ class AgentSettings(BaseSettings):
     environment: str = Field(default="development", description="Current environment")
     debug_mode: bool = Field(default=False, description="Enable debug mode")
 
-    class Config:
-        env_file = [".env", ".env.local"]  # Load both files, .env.local overrides .env
-        env_prefix = ""  # No prefix for API keys
+    model_config = ConfigDict(
+        env_file=[".env", ".env.local"],  # Load both files, .env.local overrides .env
+        env_prefix="",  # No prefix for API keys
+    )
 
 
 # Global settings instance

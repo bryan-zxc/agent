@@ -130,11 +130,18 @@ class ColumnMeta(BaseModel):
     top_3_values: dict
 
 
+class SingleValueColumn(BaseModel):
+    column_name: str
+    only_value_in_column: str
+
+
 class TableMeta(BaseModel):
     table_name: str
     row_count: int
     top_10_md: str
-    colums: list[ColumnMeta]
+    columns: list[ColumnMeta]  # Fixed typo from 'colums'
+    single_value_columns: list[SingleValueColumn] = []
+    total_columns: int = 0
 
 
 class ImageDescription(BaseModel):

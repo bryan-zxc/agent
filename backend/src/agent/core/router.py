@@ -138,7 +138,10 @@ class RouterAgent:
         except RuntimeError:
             # Already in event loop, need to handle differently
             import warnings
-            warnings.warn("Synchronous messages property used in async context. Use get_messages() instead.", DeprecationWarning)
+            import os
+            # Only warn in non-test environments to reduce test noise
+            if not os.environ.get('PYTEST_CURRENT_TEST'):
+                warnings.warn("Synchronous messages property used in async context. Use get_messages() instead.", DeprecationWarning)
             return []
 
     @messages.setter  

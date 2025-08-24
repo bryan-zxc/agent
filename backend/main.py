@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -36,7 +37,31 @@ load_dotenv(".env.local")  # Loads .env.local and overrides any duplicates
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Agent System API", version="1.0.0")
+# Initialize database
+db = AgentDatabase()
+
+# Create lifespan handler before FastAPI app
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage FastAPI application lifespan - startup and shutdown"""
+    # Startup
+    logger.info("Starting background processor...")
+    
+    # Clear task queue on startup to prevent stale tasks from previous runs
+    logger.info("Clearing task queue...")
+    cleared_count = await db.clear_task_queue()
+    logger.info(f"Cleared {cleared_count} tasks from task queue")
+    
+    await start_background_processor()
+    logger.info("Background processor started successfully")
+    
+    yield
+    
+    # Shutdown (if needed in future)
+    logger.info("Application shutdown")
+
+
+app = FastAPI(title="Agent System API", version="1.0.0", lifespan=lifespan)
 
 # Add CORS middleware
 app.add_middleware(
@@ -51,22 +76,6 @@ app.add_middleware(
 # Simple session tracking only
 websocket_sessions = {}  # websocket -> {session_id, user_info}
 
-# Initialize database
-db = AgentDatabase()
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize background processor on FastAPI startup"""
-    logger.info("Starting background processor...")
-    
-    # Clear task queue on startup to prevent stale tasks from previous runs
-    logger.info("Clearing task queue...")
-    cleared_count = await db.clear_task_queue()
-    logger.info(f"Cleared {cleared_count} tasks from task queue")
-    
-    await start_background_processor()
-    logger.info("Background processor started successfully")
 
 
 # Pydantic models for API
