@@ -873,7 +873,7 @@ def get_images_from_doc(doc):
 
 
 
-class QnA(BaseModel):
+class FactQuestion(BaseModel):
     question: str = Field(
         description="The question should enquire about one fact that will help answer the user's question. "
         "It must not ask for calculations or analysis, but simple to provide a single fact."
@@ -891,6 +891,20 @@ class QnA(BaseModel):
         "Avoid unclear citation such as '7'. "
     )
 
+class AnalyticalQuestion(BaseModel):
+    question: str = Field(
+        description="An analytical question that can't be easily answered by one or a collection of facts, but the question is required to address the user's request/question. For example 'What is the document clear and concise?'"
+    )
+    answer: str
+
+class UnansweredQuestion(BaseModel):
+    question: str = Field(
+        description="The question that cannot be answered by the context, but is required to answer the user's question. "
+    )
+    reason: str = Field(
+        "Not available in the searched context.",
+        description="This field can be generically left as not available in the searched context. Where appropriate, additional context around why the question can't be answered can also be provided.",
+    )
 
 class QnAList(BaseModel):
     thought: str = Field(
@@ -907,12 +921,20 @@ class QnAList(BaseModel):
         "The template must be comprehensive, but does not need any facts filled in. "
         "Just leave placeholders for facts to be filled in."
     )
-    question_answer: list[QnA] = Field(
-        description="The list of questions where the answers can already be extracted from the context. "
+    fact_question_answer: list[FactQuestion] = Field(
+        description="Facts that can be extracted from the context in the form of question answer pairs (i.e. answer is available). "
         "This must completely cover every answerable component of the answer template."
     )
-    unanswered_questions: list[str] = Field(
-        "",
+    analytical_question_answer: list[AnalyticalQuestion] = Field(
+        [],
+        description="This field can be defaulted to blank, but left as a placeholder for questions that are required, but difficult to answer via facts provided by fact_question_answer. "
+        "IMPORTANT: the actual document content will not be accessible after this point, so downstream tasks can only rely what is provided in fact_question_answer and this field. "
+        "Therefore, for questions asking about information such as tone or styling in the document (as an example), they have to be provided here otherwise downstream activities will no longer have access to original document text. "
+        "Do not include the question here if answer cannot be provided, leave the question in unanswered_questions. "
+        "Do not include analytical questions that can be answered using the facts provided in fact_question_answer (there will be subsequent tasks to perform analysis separately). ",
+    )
+    unanswered_questions: list[UnansweredQuestion] = Field(
+        [],
         description="The list of questions that cannot be answered by the context but is required to fill in the answer template. "
         "This must fill in all remaining gaps from the answer template."
         "If the answer template can be completed with the provided context, leave this field blank.",
@@ -1109,6 +1131,10 @@ def get_facts_from_pdf(question: str, pdf_source: Union[str, Path]) -> str:
     then uses LLM to extract relevant facts from the PDF in the form of
     question-answer pairs and identifies any unanswered questions.
 
+    IMPORTANT: when using this function/tool, the results must be accepted - the acceptance criteria of the task must not
+    be forcing an outcome from running this function, as there may be none. The acceptance criteria should only check if
+    the function is called correctly and the output is in the correct format.
+
     Parameters:
     ----------
     question : str
@@ -1143,7 +1169,7 @@ def get_facts_from_pdf(question: str, pdf_source: Union[str, Path]) -> str:
 
     # Return only question_answer and unanswered_questions fields
     return response.model_dump_json(
-        include={"answer_template", "question_answer", "unanswered_questions"}, indent=2
+        exclude=["thought","answer_template"], indent=2
     )
 
 
