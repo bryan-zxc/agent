@@ -992,7 +992,32 @@ async def execute_synthesis(task_data: dict):
                         "Do not create tasks to formulate answer, as the answer is already being formulated progressively with the answer template.",
                     },
                 ]
-
+                # Prepare update messages using only open tasks
+                # update_messages = self.messages + [
+                #     {
+                #         "role": "developer",
+                #         "content": f"**Current open tasks from execution plan:**\n\n{open_tasks_model.model_dump_json(indent=2)}",
+                #     },
+                #     {
+                #         "role": "developer",
+                #         "content": f"Based on the completed task execution details above for task `{t.task_description}`, please update the execution plan. "
+                #         f"For context, this is the instructions:\n\n{self.instruction}\n\n"
+                #         f"This is the template to answer the user's question:\n\n"
+                #         f"```markdown\n{self.answer_template}\n```\n\n"
+                #         f"This is the partly filled answer template so far:\n\n"
+                #         f"```markdown\n{self.wip_filled_answer_template}\n```\n\n"
+                #         "Think through what is still required to finish populating the answer template and use that to guide yourself in performing the following steps:\n"
+                #         "1. Update existing task descriptions using updated_description field if needed\n"
+                #         "2. Add new tasks if required, marking them with '(new)' in the description field\n"
+                #         "3. Leave next_action as False - separate logic will determine next action\n"
+                #         "4. Mark unnecessary tasks as obsolete=True\n"
+                #         "Note: aggressively prune down unneeded tasks if they appear to overlap with outputs already produced. "
+                #         "DO NOT prune out calculation tasks, even if the answer template has already pre-filled the calculation. "
+                #         "Tasks will be executed strictly in order on the list, if a new task is created please place it in the position of when it is supposed to be executed, don't leave it to the end.\n"
+                #         "Note 2: Do not create tasks to formulate answer, as the answer is already being formulated progressively with the answer template. "
+                #         "You can return an empty todo list if the answer template is completely populated or if you determine that the missing information does not exist in provided context.",
+                #     },
+                # ]
                 # Get LLM response
                 llm_updated_model = await llm.a_get_response(
                     messages=update_messages,
