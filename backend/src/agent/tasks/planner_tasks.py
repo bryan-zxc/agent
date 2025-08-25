@@ -499,15 +499,13 @@ async def execute_initial_planning(task_data: dict):
             [f"# {name}\n{tool.__doc__}" for name, tool in TOOLS.items()]
         )
 
-        # Generate execution plan using structured format (exact copy from PlannerAgent)
+        # Generate execution plan using structured format
         plan_prompt = (
             f"**Available tools for execution:**\n{tools_text}\n\n"
             f"**Instructions:**\n{instruction}\n\n"
             "Please create a detailed execution plan with an overall objective and a list of specific tasks. "
             "The objective should describe what the tasks are aiming to achieve. "
             "Each task should be specific enough to be executed independently. "
-            "The instructions will no longer be visible when creating tasks later on, so make sure that the tasks are detailed enough. "
-            "If required, create placeholder tasks that align to requirements in the instructions so it doesn't get lost even if you can't determine the precise downstream tasks yet."
         )
 
         # Get messages for LLM call
@@ -545,7 +543,8 @@ async def execute_initial_planning(task_data: dict):
             "Based on the information so far, produce a first cut template in Markdown format to provide the final answer to the user's question. "
             "This should include placeholders for facts, analysis outcomes, and any other relevant information. "
             "Don't fill any answers into this template even if you have the information, just leave placeholders. "
-            "Do not return anything other than the template itself, don't use ```markdown ... ``` block either."
+            "Do not return anything other than the template itself, don't use ```markdown ... ``` block either. "
+            "Keep the template as succinct and concise as possible."
         )
 
         answer_template_messages = messages + [
@@ -960,14 +959,14 @@ async def execute_synthesis(task_data: dict):
                 ]
 
                 # Early completion check - if no open todos, activate completion immediately
-                if not open_todos:
-                    logger.info(
-                        f"No open todos found for planner {planner_id} - activating early completion"
-                    )
-                    await _complete_planner_execution(
-                        planner_id, execution_plan_model, worker_id, planner_data, db
-                    )
-                    return  # Exit synthesis completely
+                # if not open_todos:
+                #     logger.info(
+                #         f"No open todos found for planner {planner_id} - activating early completion"
+                #     )
+                #     await _complete_planner_execution(
+                #         planner_id, execution_plan_model, worker_id, planner_data, db
+                #     )
+                #     return  # Exit synthesis completely
 
                 open_todos_model = ExecutionPlanModel(
                     objective=execution_plan_model.objective, todos=open_todos
@@ -989,34 +988,13 @@ async def execute_synthesis(task_data: dict):
                         "2. Add new tasks if required, marking them with '(new)' in the description field\n"
                         "3. Leave next_action as False - separate logic will determine next action\n"
                         "4. Mark unnecessary tasks as obsolete=True\n"
-                        "Do not create tasks to formulate answer, as the answer is already being formulated progressively with the answer template.",
+                        "If the answer template suggests that calculations are required, ""and you haven't performed the corresponding calculation action, ""you must create a calculation task, ""or keep existing calculation task, ""even if the answer template autofilled the calculation outcome.\n"
+                        "Tasks will be executed strictly in order on the list, if a new task is created please place it in the position of when it is supposed to be executed, don't leave it to the end.\n"
+                        "Do not create tasks to formulate answer, as the answer is already being formulated progressively with the answer template. "
+                        "You can return an empty todo list there is no further work to be done (for example, the answer template is completely populated).",
                     },
                 ]
-                # Prepare update messages using only open tasks
-                # update_messages = self.messages + [
-                #     {
-                #         "role": "developer",
-                #         "content": f"**Current open tasks from execution plan:**\n\n{open_tasks_model.model_dump_json(indent=2)}",
-                #     },
-                #     {
-                #         "role": "developer",
-                #         "content": f"Based on the completed task execution details above for task `{t.task_description}`, please update the execution plan. "
-                #         f"For context, this is the instructions:\n\n{self.instruction}\n\n"
-                #         f"This is the template to answer the user's question:\n\n"
-                #         f"```markdown\n{self.answer_template}\n```\n\n"
-                #         f"This is the partly filled answer template so far:\n\n"
-                #         f"```markdown\n{self.wip_filled_answer_template}\n```\n\n"
-                #         "Think through what is still required to finish populating the answer template and use that to guide yourself in performing the following steps:\n"
-                #         "1. Update existing task descriptions using updated_description field if needed\n"
-                #         "2. Add new tasks if required, marking them with '(new)' in the description field\n"
-                #         "3. Leave next_action as False - separate logic will determine next action\n"
-                #         "4. Mark unnecessary tasks as obsolete=True\n"
-                #         "If the answer template suggests that calculations are required, and you haven't performed the corresponding calculation action, you must create a calculation task, or keep existing calculation task, even if the answer template autofilled the calculation outcome."
-                #         "Tasks will be executed strictly in order on the list, if a new task is created please place it in the position of when it is supposed to be executed, don't leave it to the end.\n"
-                #         "Do not create tasks to formulate answer, as the answer is already being formulated progressively with the answer template. "
-                #         "You can return an empty todo list if the answer template is completely populated or if you determine that the missing information does not exist in provided context.",
-                #     },
-                # ]
+                
                 # Get LLM response
                 llm_updated_model = await llm.a_get_response(
                     messages=update_messages,
