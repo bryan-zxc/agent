@@ -27,6 +27,7 @@ class AnswerTemplate(BaseModel):
         "Based on new information available, update the above template if required. "
         "Remember that if you choose not to update the template just return the same template as is. "
         "If you do update the template, make sure that you continue to use placeholders even if you have the information, this should be just a template, not the actual answer. "
+        "Keep the template succinct."
     )
     wip_filled_template: str = Field(
         description="The work in progress filled answer template, which is the latest population of placeholders with information currently available."
