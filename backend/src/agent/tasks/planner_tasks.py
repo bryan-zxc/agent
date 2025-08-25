@@ -1011,10 +1011,9 @@ async def execute_synthesis(task_data: dict):
                 #         "2. Add new tasks if required, marking them with '(new)' in the description field\n"
                 #         "3. Leave next_action as False - separate logic will determine next action\n"
                 #         "4. Mark unnecessary tasks as obsolete=True\n"
-                #         "Note: aggressively prune down unneeded tasks if they appear to overlap with outputs already produced. "
-                #         "DO NOT prune out calculation tasks, even if the answer template has already pre-filled the calculation. "
+                #         "If the answer template suggests that calculations are required, and you haven't performed the corresponding calculation action, you must create a calculation task, or keep existing calculation task, even if the answer template autofilled the calculation outcome."
                 #         "Tasks will be executed strictly in order on the list, if a new task is created please place it in the position of when it is supposed to be executed, don't leave it to the end.\n"
-                #         "Note 2: Do not create tasks to formulate answer, as the answer is already being formulated progressively with the answer template. "
+                #         "Do not create tasks to formulate answer, as the answer is already being formulated progressively with the answer template. "
                 #         "You can return an empty todo list if the answer template is completely populated or if you determine that the missing information does not exist in provided context.",
                 #     },
                 # ]
