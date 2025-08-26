@@ -9,7 +9,7 @@ agent/
 ├── backend/                 # FastAPI server
 │   ├── src/agent/          # Existing agent code
 │   │   ├── agents/         # PlannerAgent, WorkerAgents
-│   │   ├── core/           # RouterAgent, BaseAgent
+│   │   ├── core/           # router_operations (functions), BaseAgent
 │   │   ├── models/         # Pydantic schemas and database
 │   │   └── services/       # LLM, document, image services
 │   ├── main.py             # FastAPI server entry point

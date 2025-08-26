@@ -4,14 +4,14 @@ A comprehensive AI agent system for processing various file types and executing 
 
 ## Architecture Overview
 
-This library implements a function-based task queue system that processes documents, images, and data files to answer user questions and execute complex tasks. The system uses a router-background processor architecture where the RouterAgent handles immediate responses and queues background tasks for a function-based execution engine.
+This library implements a function-based task queue system that processes documents, images, and data files to answer user questions and execute complex tasks. The system uses a router-background processor architecture where router operations handle immediate responses and queue background tasks for a function-based execution engine.
 
 ## Directory Structure
 
 ```
 agent/
 ├── config/          # Configuration and settings
-├── core/            # RouterAgent and base routing logic
+├── core/            # Router operations and base routing logic
 ├── models/          # Pydantic models, database schemas, and API responses
 ├── security/        # Security and safety guardrails
 ├── services/        # External service integrations and background processor
@@ -22,7 +22,7 @@ agent/
 ## Key Components
 
 ### Core (`core/`)
-- **RouterAgent**: WebSocket-enabled chat interface with immediate response capability
+- **Router Operations**: WebSocket-enabled chat interface with immediate response capability (functional architecture)
 - **Task routing**: Automatic detection of simple chat vs complex analysis needs
 
 ### Tasks (`tasks/`)
@@ -46,7 +46,7 @@ agent/
 
 ### WebSocket Integration (Recommended)
 ```python
-from agent.core.router import RouterAgent
+from agent.core import router_operations
 from agent.services.background_processor import start_background_processor
 from fastapi import FastAPI, WebSocket
 
@@ -59,13 +59,13 @@ async def startup_event():
 
 @app.websocket("/chat")
 async def websocket_endpoint(websocket: WebSocket):
-    router = RouterAgent()
-    await router.connect_websocket(websocket)
+    router_state = await router_operations.create_router()
+    await router_operations.send_message_history(router_state, websocket)
     
     # Handle messages with immediate response + background processing
     while True:
         data = await websocket.receive_json()
-        await router.handle_message(data)  # Returns immediately, tasks run in background
+        await router_operations.handle_message(router_state, data, websocket)  # Returns immediately, tasks run in background
 ```
 
 ### Function-Based Task Usage

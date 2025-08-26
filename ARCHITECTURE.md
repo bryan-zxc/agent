@@ -1,14 +1,14 @@
 # Agent System Architecture
 
 ## Overview
-Implementation of an AI agent system with real-time frontend interface using a modern function-based task queue architecture. The system features a router that handles normal chat interactions and automatically queues background agent tasks when complex processing is required (e.g., image analysis, multi-step tasks).
+Implementation of an AI agent system with real-time frontend interface using a modern function-based task queue architecture. The system features function-based router operations that handle normal chat interactions and automatically queue background agent tasks when complex processing is required (e.g., image analysis, multi-step tasks).
 
 ## System Architecture
 
 ```mermaid
 graph LR
     A[Next.js Frontend<br/>- Chat UI<br/>- File upload<br/>- Real-time updates] 
-    B[FastAPI Server<br/>- RouterAgent<br/>- Immediate responses<br/>- WebSocket updates]
+    B[FastAPI Server<br/>- router_operations<br/>- Immediate responses<br/>- WebSocket updates]
     C[Background Processor<br/>- Async task execution<br/>- Function-based tasks<br/>- Concurrent processing]
     D[Task Queue<br/>- Planner tasks<br/>- Worker tasks<br/>- Status tracking]
     E[SQLite Database<br/>- Routers & Messages<br/>- Task queue<br/>- File paths<br/>- Agent state]
@@ -50,7 +50,7 @@ graph LR
 ### Backend (FastAPI Server)
 - **Technology**: FastAPI with WebSocket support and async task queue
 - **Core Components**:
-  - **RouterAgent**: WebSocket-enabled chat interface with immediate response capability
+  - **router_operations**: Function-based WebSocket chat interface with immediate response capability
   - **Background Processor**: Continuous task processor that executes queued functions
   - **Task Queue System**: Database-backed queue for async function execution
   - **Function-Based Tasks**: 
@@ -77,17 +77,17 @@ graph LR
 
 ### Simple Chat Mode (Default)
 1. User sends message via WebSocket
-2. RouterAgent processes immediately and responds
+2. Router functions process immediately and respond
 3. WebSocket delivers instant response
 4. No background processing required
 5. Maintains router history in database
 
 ### Complex Processing Mode (Triggered)
-1. RouterAgent detects complex requirements:
+1. Router functions detect complex requirements:
    - File uploads (images, PDFs, CSVs)
    - Agent assistance needed (web search, analysis)
    - Multi-step processing requests
-2. RouterAgent queues background task and responds "Agents assemble!"
+2. Router functions queue background task and respond "Agents assemble!"
 3. Background processor picks up queued planner task
 4. Function-based execution:
    - `execute_initial_planning`: Creates execution plan from user request
@@ -103,7 +103,7 @@ graph LR
 
 ```mermaid
 graph TD
-    A[User Message] --> B{RouterAgent Assessment}
+    A[User Message] --> B{Router Function Assessment}
     B -->|Simple Chat| C[Direct LLM Response]
     B -->|Complex Request| D[Queue Initial Planning]
     
@@ -144,7 +144,7 @@ graph TD
 
 ```mermaid
 sequenceDiagram
-    participant R as RouterAgent
+    participant R as Router Functions
     participant DB as Task Queue DB
     participant BP as Background Processor
     participant PF as Planner Function
@@ -369,7 +369,7 @@ graph TD
 agent/
 ├── backend/
 │   ├── src/agent/          # Agent system library
-│   │   ├── core/           # RouterAgent (function-based)
+│   │   ├── core/           # router_operations (standalone functions)
 │   │   ├── tasks/          # Async task functions
 │   │   │   ├── planner_tasks.py    # Planning function library
 │   │   │   ├── worker_tasks.py     # Worker function library
@@ -593,14 +593,14 @@ graph TD
             SA_T[task_utils.py ✓]
             SA_P[planner_tasks.py ✓]
             SA_W[worker_tasks.py ✓]
-            SA_R[router.py ✓]
+            SA_R[router_operations.py ✓]
         end
         
         subgraph "Unit Tests"
             UT_T[TestTaskExecution ✓]
             UT_A[TestAsyncValidation ✓]
             UT_D[TestDatabaseOps ✓]
-            UT_R[TestRouterAgent ✓]
+            UT_R[TestRouterOperations ✓]
         end
         
         subgraph "Integration Tests"
@@ -754,7 +754,7 @@ tests/
 │   ├── test_hybrid_async_execution.py # Advanced hybrid mocking + performance
 │   ├── test_task_execution.py       # Enhanced with async warnings
 │   ├── test_database_operations.py  # Database async methods
-│   └── test_router_agent.py         # WebSocket async operations
+│   └── test_router_operations.py   # WebSocket async operations
 ├── integration/
 │   ├── test_concurrent_planner_execution.py  # Concurrency testing
 │   ├── test_websocket_updates_execution.py   # Real-time communication

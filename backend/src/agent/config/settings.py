@@ -48,24 +48,30 @@ class AgentSettings(BaseSettings):
         default="./db/agent_database.db", description="Path to SQLite database file"
     )
 
-    # File Storage Configuration  
+    # File Storage Configuration
     collaterals_base_path: str = Field(
-        default="/app/files/agent_collaterals", description="Base path for agent collateral files"
+        default="/app/files/agent_collaterals",
+        description="Base path for agent collateral files",
     )
     execution_plan_model_filename: str = Field(
-        default="execution_plan_model.json", description="Filename for execution plan model in planner directory"
+        default="execution_plan_model.json",
+        description="Filename for execution plan model in planner directory",
     )
     current_task_filename: str = Field(
-        default="current_task.json", description="Filename for current task in planner directory"
+        default="current_task.json",
+        description="Filename for current task in planner directory",
     )
     worker_message_history_filename: str = Field(
-        default="worker_message_history.json", description="Filename for worker message history in planner directory"
+        default="worker_message_history.json",
+        description="Filename for worker message history in planner directory",
     )
     answer_template_filename: str = Field(
-        default="answer_template.md", description="Filename for answer template in planner directory"
+        default="answer_template.md",
+        description="Filename for answer template in planner directory",
     )
     wip_answer_template_filename: str = Field(
-        default="wip_answer_template.md", description="Filename for work-in-progress answer template in planner directory"
+        default="wip_answer_template.md",
+        description="Filename for work-in-progress answer template in planner directory",
     )
 
     # Environment

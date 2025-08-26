@@ -15,7 +15,7 @@ logging.basicConfig(
     ]
 )
 
-from .core.router import RouterAgent
+from .core import router_operations
 from .models import (
     # Core models
     File,
@@ -54,8 +54,8 @@ __author__ = "Agent Library Team"
 
 # Public API
 __all__ = [
-    # Core classes
-    "RouterAgent",
+    # Core modules
+    "router_operations",
     
     # Models
     "File",

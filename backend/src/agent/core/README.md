@@ -20,42 +20,42 @@ Base agent class that provides common functionality for all agents in the system
 - **LLM Integration**: Unified interface for language model interactions
 - **Logging Integration**: Built-in logging with configurable verbosity
 
-### `router.py`
-WebSocket-enabled router for real-time chat and file processing orchestration.
+### `router_operations.py`
+Function-based router operations for real-time chat and file processing orchestration.
 
-#### Classes
+#### Architecture
+- **Function-based design**: All router operations are standalone async functions
+- **State passing pattern**: Router state is passed as dictionary between functions
+- **WebSocket-only communication**: All user interactions happen via WebSocket `/chat` endpoint
+- **No HTTP activation**: Router activation happens through WebSocket, not HTTP endpoints
 
-**`RouterAgent`**
-- Main entry point for WebSocket-based chat interface  
-- Intelligently routes between simple router and complex analysis
-- Built-in database persistence for router history
-- **Simplified Architecture**: Uses simple attributes and direct database calls
-- **MessageManager Integration**: All message operations handled via MessageManager
-- **Architecture**: All communication methods require active WebSocket connections (no optional WebSocket parameters)
+#### Core Functions
 
-**Key Methods (all async):**
-- `__init__(router_id)`: Initialize with router ID for persistence
-- `activate_conversation(user_message, websocket, files?)`: Initialize new router with first message
-- `handle_message(message_data, websocket)`: Main message handler with required WebSocket
-- `handle_simple_chat()`: Direct LLM router for simple responses
-- `handle_complex_request(websocket, files?, agent_requirements?)`: Delegate to background agents
-- `assess_agent_requirements()`: LLM-based assessment for agent assistance needs
-- `process_files(file_paths)`: Convert file paths to File objects
+**Router Management:**
+- `create_router(router_id?)`: Create or load router instance, returns state dictionary
+- `load_existing_router_state(router_id, agent_db)`: Load router state from database
+- `generate_and_update_title(router_state)`: Generate LLM-based title for conversation
 
-**Router State Management:**
-- **Model/Temperature**: Simple attributes set during initialization, never change
-- **Status**: Direct database calls via `update_router(id, status="value")` and `get_router(id)`
-- **Messages**: Handled exclusively through MessageManager instance
-- **Database Pattern**: Consistent with planner and worker agents
+**Message Processing:**
+- `activate_conversation(user_message, websocket, files?)`: Initialize new conversation via WebSocket
+- `handle_message(router_state, message_data, websocket)`: Main message handler
+- `handle_simple_chat(router_state)`: Process simple conversational messages
+- `handle_complex_request(router_state, websocket, files?, agent_requirements?)`: Handle complex requests
+- `assess_agent_requirements(router_state)`: Determine if agent assistance is needed
 
-**WebSocket Communication (Required Parameter):**
-- `send_user_message(content, websocket)`: Send user messages to frontend
-- `send_assistant_message(content, websocket, message_id?)`: Send assistant messages to frontend  
-- `send_status(status, websocket)`: Send processing status updates
-- `send_error(error, websocket)`: Send error messages
-- `send_message_history(websocket)`: Send full router history on connect
-- `send_input_lock(websocket)`: Lock input during processing
-- `send_input_unlock(websocket)`: Unlock input when processing complete
+**File Processing:**
+- `process_files(file_paths)`: Process and categorise uploaded files
+- `determine_file_groups(router_state, user_question, files)`: Group files by type for processing
+- `invoke_single(router_state, instructions, files, websocket)`: Execute worker agent for file processing
+
+**WebSocket Communication:**
+- `send_user_message(content, router_id, websocket)`: Send user messages to frontend
+- `send_assistant_message(content, router_id, websocket, message_id?)`: Send assistant responses
+- `send_status(status, router_id, websocket)`: Send processing status updates
+- `send_error(error, router_id, websocket)`: Send error messages
+- `send_message_history(router_state, websocket)`: Send conversation history
+- `send_input_lock(router_id, agent_db, websocket)`: Lock user input during processing
+- `send_input_unlock(router_id, agent_db, websocket)`: Unlock input when complete
 
 **Message Flow:**
 1. **Simple Chat**: User message → LLM → Response (stored in database)
@@ -92,30 +92,38 @@ class CustomAgent(BaseAgent):
 
 ### WebSocket Chat Interface
 ```python
-from agent.core.router import RouterAgent
+from agent.core import router_operations
 from fastapi import WebSocket
 
 async def websocket_handler(websocket: WebSocket, router_id: str):
-    router = RouterAgent(router_id=router_id)
-    await router.send_message_history(websocket=websocket)
+    router_state = await router_operations.create_router(router_id=router_id)
+    await router_operations.send_message_history(
+        router_state=router_state, 
+        websocket=websocket
+    )
     
     while True:
         data = await websocket.receive_json()
-        await router.handle_message(message_data=data, websocket=websocket)
+        await router_operations.handle_message(
+            router_state=router_state, 
+            message_data=data, 
+            websocket=websocket
+        )
 ```
 
-### New Router Activation
+### New Conversation Activation
 ```python
-from agent.core.router import RouterAgent
+from agent.core import router_operations
 from fastapi import WebSocket
 
 async def start_new_conversation(websocket: WebSocket, user_message: str, files: list = None):
-    router = RouterAgent()  # Creates new router with UUID
-    await router.activate_conversation(
+    # activate_conversation creates its own router internally
+    router_state = await router_operations.activate_conversation(
         user_message=user_message, 
         websocket=websocket, 
         files=files
     )
+    # Router ID available as router_state["id"]
 ```
 
 ### MessageManager Integration

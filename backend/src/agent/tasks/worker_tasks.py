@@ -392,7 +392,9 @@ async def worker_initialisation(task_data: dict):
         if querying_structured_data:
             await update_worker_next_task_and_queue(worker_id, "execute_sql_worker")
         else:
-            await update_worker_next_task_and_queue(worker_id, "execute_standard_worker")
+            await update_worker_next_task_and_queue(
+                worker_id, "execute_standard_worker"
+            )
 
         logger.info(
             f"Worker initialisation completed for worker {worker_id}, queued worker execution"
@@ -500,7 +502,9 @@ async def execute_standard_worker(task_data: dict):
                         task_status="failed_validation",
                         task_result="Task failed: Malicious code detected after multiple attempts.",
                     )
-                    await update_planner_next_task_and_queue(planner_id, "execute_synthesis")
+                    await update_planner_next_task_and_queue(
+                        planner_id, "execute_synthesis"
+                    )
                 return
 
             messages = await message_manager.add_message(
@@ -622,7 +626,9 @@ async def execute_standard_worker(task_data: dict):
                 )
                 if validated:
                     # Queue planner synthesis on successful completion
-                    await update_planner_next_task_and_queue(planner_id, "execute_synthesis")
+                    await update_planner_next_task_and_queue(
+                        planner_id, "execute_synthesis"
+                    )
                     return
 
             else:
@@ -656,7 +662,9 @@ async def execute_standard_worker(task_data: dict):
                         content=f"{failure_message}\\n\\n{sandbox_result['stack_trace']}\\n\\nRequired tool is not available, please supply the task with the required tool and try again.",
                     )
                     # Queue synthesis regardless of tool failure
-                    await update_planner_next_task_and_queue(planner_id, "execute_synthesis")
+                    await update_planner_next_task_and_queue(
+                        planner_id, "execute_synthesis"
+                    )
                     return
 
                 messages = await message_manager.add_message(
@@ -692,7 +700,9 @@ async def execute_standard_worker(task_data: dict):
                         task_result=failure_message,
                     )
                     # Queue synthesis for repeated failure
-                    await update_planner_next_task_and_queue(planner_id, "execute_synthesis")
+                    await update_planner_next_task_and_queue(
+                        planner_id, "execute_synthesis"
+                    )
                     return
 
         else:
@@ -706,7 +716,9 @@ async def execute_standard_worker(task_data: dict):
             )
             if validated:
                 # Queue planner synthesis on successful completion
-                await update_planner_next_task_and_queue(planner_id, "execute_synthesis")
+                await update_planner_next_task_and_queue(
+                    planner_id, "execute_synthesis"
+                )
                 return
 
         # If we reach here, validation failed - check if more retries available
@@ -714,7 +726,9 @@ async def execute_standard_worker(task_data: dict):
             logger.info(
                 f"Worker {worker_id} validation failed, queueing retry {current_attempt + 1}/{max_retry}"
             )
-            await update_worker_next_task_and_queue(worker_id, "execute_standard_worker")
+            await update_worker_next_task_and_queue(
+                worker_id, "execute_standard_worker"
+            )
         else:
             # All retries exhausted - mark as failed and queue synthesis
             logger.info(
@@ -818,7 +832,9 @@ async def execute_sql_worker(task_data: dict):
                 )
                 if validated:
                     # Queue planner synthesis on successful completion
-                    await update_planner_next_task_and_queue(planner_id, "execute_synthesis")
+                    await update_planner_next_task_and_queue(
+                        planner_id, "execute_synthesis"
+                    )
                     return
 
             except Exception as e:

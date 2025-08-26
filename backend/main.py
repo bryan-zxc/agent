@@ -22,9 +22,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from sqlalchemy import text
-from src.agent.core.router import RouterAgent
+from src.agent.core import router_operations
 from src.agent.models.agent_database import AgentDatabase
-from src.agent.utils.file_utils import calculate_file_hash, generate_unique_filename, sanitise_filename
+from src.agent.utils.file_utils import (
+    calculate_file_hash,
+    generate_unique_filename,
+    sanitise_filename,
+)
 from src.agent.services.background_processor import start_background_processor
 from src.agent.utils.async_error_utils import AsyncErrorLogger
 
@@ -40,6 +44,7 @@ logger = logging.getLogger(__name__)
 # Database will be initialized in lifespan context
 db = None
 
+
 # Create lifespan handler before FastAPI app
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -49,19 +54,19 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing database...")
     db = await AgentDatabase.create()
     logger.info("Database initialized successfully")
-    
+
     logger.info("Starting background processor...")
-    
+
     # Clear task queue on startup to prevent stale tasks from previous runs
     logger.info("Clearing task queue...")
     cleared_count = await db.clear_task_queue()
     logger.info(f"Cleared {cleared_count} tasks from task queue")
-    
+
     await start_background_processor()
     logger.info("Background processor started successfully")
-    
+
     yield
-    
+
     # Shutdown (if needed in future)
     logger.info("Application shutdown")
 
@@ -82,7 +87,6 @@ app.add_middleware(
 websocket_sessions = {}  # websocket -> {session_id, user_info}
 
 
-
 # Pydantic models for API
 class ChatMessage(BaseModel):
     message: str
@@ -101,18 +105,18 @@ class StatusUpdate(BaseModel):
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for chat communication with enhanced tracking"""
     await websocket.accept()
-    
+
     # Enhanced connection logging
     connection_info = {
         "websocket_id": id(websocket),
         "websocket_type": type(websocket).__name__,
-        "remote_address": websocket.scope.get('client', 'unknown'),
-        "path": websocket.scope.get('path', 'unknown')
+        "remote_address": websocket.scope.get("client", "unknown"),
+        "path": websocket.scope.get("path", "unknown"),
     }
-    
-    if hasattr(websocket, 'client_state'):
+
+    if hasattr(websocket, "client_state"):
         connection_info["client_state"] = str(websocket.client_state)
-        
+
     logger.info(f"WebSocket connection established: {connection_info}")
 
     # PHASE 3: Simplified session tracking
@@ -134,7 +138,9 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             # Receive message from frontend
             data = await websocket.receive_json()
-            logger.info(f"Received WebSocket message from session {session_id}: {data.get('type', 'unknown')}")
+            logger.info(
+                f"Received WebSocket message from session {session_id}: {data.get('type', 'unknown')}"
+            )
             asyncio.create_task(handle_websocket_message(websocket, data))
 
     except WebSocketDisconnect:
@@ -142,7 +148,9 @@ async def websocket_endpoint(websocket: WebSocket):
         if websocket in websocket_sessions:
             session_info = websocket_sessions[websocket]
             del websocket_sessions[websocket]
-            logger.info(f"Client session {session_info['session_id']} disconnected - connection info: {session_info.get('connection_info', {})}")
+            logger.info(
+                f"Client session {session_info['session_id']} disconnected - connection info: {session_info.get('connection_info', {})}"
+            )
         # No router cleanup needed - routers are ephemeral
 
 
@@ -156,46 +164,61 @@ async def handle_websocket_message(websocket: WebSocket, data: dict):
             router_id = data.get("router_id")
             if router_id:
                 logger.info(f"Loading router history for {router_id}")
-                router = RouterAgent(router_id=router_id)  # Load from database
-                
+                router_state = await router_operations.create_router(
+                    router_id=router_id
+                )
+
                 # Send message history using WebSocket parameter
-                await router.send_message_history(websocket=websocket)
+                await router_operations.send_message_history(
+                    router_state=router_state, websocket=websocket
+                )
                 logger.info(f"Sent message history for router {router_id}")
-                # Router instance discarded after use
+                # Router state discarded after use
 
         elif message_type == "message":
             # Regular chat message - ephemeral router creation
             router_id = data.get("router_id")
             is_new_conversation = not router_id
-            
+
             if is_new_conversation:
-                # Brand new conversation - create fresh RouterAgent
+                # Brand new conversation - activate_conversation creates router internally
                 logger.info(f"Creating new ephemeral router for new conversation")
-                router = RouterAgent()  # Let RouterAgent generate its own ID
-                router_id = router.id   # Get the generated ID
-                logger.info(f"Generated new router_id: {router_id}")
-                
+
                 # For new conversations, use activate_conversation with WebSocket
                 user_message = data.get("message", "")
                 files = data.get("files", [])
-                await router.activate_conversation(user_message=user_message, files=files, websocket=websocket)
-                
+                router_state = await router_operations.activate_conversation(
+                    user_message=user_message, files=files, websocket=websocket
+                )
+                router_id = router_state[
+                    "id"
+                ]  # Get the generated ID from returned state
+                logger.info(f"Generated new router_id: {router_id}")
+
             else:
                 # Existing conversation - create ephemeral router from database
-                logger.info(f"Creating ephemeral router for existing conversation {router_id}")
-                router = RouterAgent(router_id=router_id)  # Load state from database
-                
+                logger.info(
+                    f"Creating ephemeral router for existing conversation {router_id}"
+                )
+                router_state = await router_operations.create_router(
+                    router_id=router_id
+                )  # Load state from database
+
                 # Handle message with WebSocket parameter
-                await router.handle_message(message_data=data, websocket=websocket)
-                
-            logger.info(f"Message processed by ephemeral router {router_id} - instance discarded")
-            # Router instance automatically discarded after handling
+                await router_operations.handle_message(
+                    router_state=router_state, message_data=data, websocket=websocket
+                )
+
+            logger.info(
+                f"Message processed by ephemeral router {router_id} - state discarded"
+            )
+            # Router state automatically discarded after handling
 
     except Exception as e:
         # Log detailed error information for WebSocket message handling
         error_logger = AsyncErrorLogger("websocket_message_handler")
         error_logger.log_detailed_exception(e, "WebSocket message processing")
-        
+
         await websocket.send_json(
             {"type": "error", "message": f"Error processing message: {str(e)}"}
         )
@@ -207,26 +230,27 @@ async def upload_file(file: UploadFile = File(...)):
     try:
         # TODO: Replace 'bryan000' with actual username from user management system
         user_id = "bryan000"
-        
+
         # Read file content
         content = await file.read()
         file_size = len(content)
-        
+
         # Calculate content hash
         import tempfile
+
         with tempfile.NamedTemporaryFile(delete=False) as temp_file:
             temp_file.write(content)
             temp_file_path = temp_file.name
-        
+
         try:
             content_hash = calculate_file_hash(temp_file_path)
         finally:
             # Clean up temp file
             Path(temp_file_path).unlink(missing_ok=True)
-        
+
         # Check for duplicate content
         existing_file = await db.get_file_by_hash(content_hash, user_id)
-        
+
         if existing_file:
             # Duplicate found - return duplicate info with options
             return {
@@ -235,29 +259,36 @@ async def upload_file(file: UploadFile = File(...)):
                     "file_id": existing_file["file_id"],
                     "original_filename": existing_file["original_filename"],
                     "file_size": existing_file["file_size"],
-                    "upload_timestamp": existing_file["upload_timestamp"].isoformat()
+                    "upload_timestamp": existing_file["upload_timestamp"].isoformat(),
                 },
                 "new_filename": file.filename,
-                "options": ["use_existing", "overwrite_existing", "save_as_new_copy", "cancel"]
+                "options": [
+                    "use_existing",
+                    "overwrite_existing",
+                    "save_as_new_copy",
+                    "cancel",
+                ],
             }
-        
+
         # No duplicate - save file normally
         upload_dir = Path("/app/files/uploads") / user_id
         upload_dir.mkdir(parents=True, exist_ok=True)
-        
+
         file_id = uuid.uuid4().hex
         sanitised_filename = sanitise_filename(file.filename)
-        
+
         # Check if sanitised filename already exists and make it unique if needed
         existing_files = [f.name for f in upload_dir.iterdir() if f.is_file()]
         if sanitised_filename in existing_files:
-            sanitised_filename = generate_unique_filename(sanitised_filename, existing_files)
-        
+            sanitised_filename = generate_unique_filename(
+                sanitised_filename, existing_files
+            )
+
         file_path = upload_dir / sanitised_filename
-        
+
         with open(file_path, "wb") as buffer:
             buffer.write(content)
-        
+
         # Store file metadata
         await db.create_file_metadata(
             file_id=file_id,
@@ -266,15 +297,15 @@ async def upload_file(file: UploadFile = File(...)):
             file_path=str(file_path),
             file_size=file_size,
             mime_type=file.content_type,
-            user_id=user_id
+            user_id=user_id,
         )
-        
+
         return {
             "duplicate_found": False,
             "file_id": file_id,
             "filename": sanitised_filename,
             "path": str(file_path),
-            "size": file_size
+            "size": file_size,
         }
 
     except Exception as e:
@@ -287,23 +318,23 @@ async def resolve_duplicate(
     action: str = Form(...),
     existing_file_id: str = Form(...),
     new_filename: str = Form(...),
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
 ):
     """Handle duplicate resolution based on user choice"""
     try:
         # TODO: Replace 'bryan000' with actual username from user management system
         user_id = "bryan000"
-        
+
         if action == "cancel":
             return {
                 "action": "cancel",
-                "files": []  # Empty files array for message handling
+                "files": [],  # Empty files array for message handling
             }
-        
+
         existing_file = await db.get_file_by_id(existing_file_id)
         if not existing_file:
             raise HTTPException(status_code=404, detail="Existing file not found")
-        
+
         if action == "use_existing":
             # Increment reference count and return existing file
             await db.increment_file_reference(existing_file_id)
@@ -313,50 +344,52 @@ async def resolve_duplicate(
                 "filename": existing_file["original_filename"],
                 "path": existing_file["file_path"],
                 "size": existing_file["file_size"],
-                "files": [existing_file["file_path"]]  # For message handling
+                "files": [existing_file["file_path"]],  # For message handling
             }
-        
+
         elif action == "overwrite_existing":
             # Read new file content
             content = await file.read()
-            
+
             # Overwrite existing file
             with open(existing_file["file_path"], "wb") as buffer:
                 buffer.write(content)
-            
+
             return {
-                "action": "overwrite_existing", 
+                "action": "overwrite_existing",
                 "file_id": existing_file["file_id"],
                 "filename": new_filename,
                 "path": existing_file["file_path"],
                 "size": len(content),
-                "files": [existing_file["file_path"]]  # For message handling
+                "files": [existing_file["file_path"]],  # For message handling
             }
-        
+
         elif action == "save_as_new_copy":
             # Read new file content
             content = await file.read()
-            
+
             # Create new file with unique filename
             upload_dir = Path("/app/files/uploads") / user_id
             upload_dir.mkdir(parents=True, exist_ok=True)
-            
+
             # Sanitise the new filename
             sanitised_filename = sanitise_filename(new_filename)
-            
+
             # Get list of existing filenames in the directory
             existing_files = [f.name for f in upload_dir.iterdir() if f.is_file()]
-            
-            unique_filename = generate_unique_filename(sanitised_filename, existing_files)
+
+            unique_filename = generate_unique_filename(
+                sanitised_filename, existing_files
+            )
             file_id = uuid.uuid4().hex
             file_path = upload_dir / unique_filename
-            
+
             with open(file_path, "wb") as buffer:
                 buffer.write(content)
-            
+
             # Calculate content hash for new file
             content_hash = calculate_file_hash(file_path)
-            
+
             # Store file metadata with unique filename
             await db.create_file_metadata(
                 file_id=file_id,
@@ -365,21 +398,21 @@ async def resolve_duplicate(
                 file_path=str(file_path),
                 file_size=len(content),
                 mime_type=file.content_type,
-                user_id=user_id
+                user_id=user_id,
             )
-            
+
             return {
                 "action": "save_as_new_copy",
                 "file_id": file_id,
                 "filename": unique_filename,
                 "path": str(file_path),
                 "size": len(content),
-                "files": [str(file_path)]  # For message handling
+                "files": [str(file_path)],  # For message handling
             }
-        
+
         else:
             raise HTTPException(status_code=400, detail="Invalid action")
-    
+
     except Exception as e:
         logger.error(f"Error resolving duplicate: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -397,14 +430,16 @@ async def get_routers():
     try:
         # Use the global db instance
         routers = await db.get_all_routers()
-        
+
         # Transform to match expected API format
         return [
             {
                 "id": router["router_id"],
                 "title": router["title"],
                 "preview": router["preview"],
-                "timestamp": router["updated_at"].isoformat() if router["updated_at"] else None,
+                "timestamp": (
+                    router["updated_at"].isoformat() if router["updated_at"] else None
+                ),
             }
             for router in routers
         ]
@@ -417,70 +452,21 @@ async def get_routers():
 async def get_router(router_id: str):
     """Get router history"""
     try:
-        router = RouterAgent(router_id=router_id)
-        # Load existing router state to initialise MessageManager
-        await router._load_existing_state()
+        router_state = await router_operations.create_router(router_id=router_id)
         # Get messages through MessageManager
-        messages = await router.message_manager.get_messages()
+        messages = await router_state["message_manager"].get_messages()
         return {"router_id": router_id, "messages": messages}
     except Exception as e:
         logger.error(f"Error fetching router: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# NOTE: Router activation happens through WebSocket (/chat) endpoint
+# All user interactions for starting conversations go through WebSocket
+# There is no HTTP-based activation endpoint as it's not needed
 
-
-@app.post("/routers/{router_id}/activate")
-async def activate_router(router_id: str, request: dict):
-    """Activate a router with the first user message"""
-    try:
-        user_message = request.get("message", "")
-        files = request.get("files", [])
-
-        if not user_message:
-            raise HTTPException(status_code=400, detail="Message is required")
-
-        # Create or get existing router
-        router = RouterAgent(router_id=router_id)
-
-        # Activate the router (this will add system message and process user message)
-        await router.activate_conversation(user_message, files)
-
-        # PHASE 3: No need to store router - ephemeral architecture
-        # Router state is persisted in database, not memory
-
-        # Get the conversation messages to return the assistant's response
-        messages = await router.message_manager.get_messages()
-        assistant_response = (
-            messages[-1]["content"]
-            if messages and messages[-1]["role"] == "assistant"
-            else ""
-        )
-
-        return {
-            "status": "activated",
-            "router_id": router_id,
-            "response": assistant_response,
-        }
-    except Exception as e:
-        logger.error(f"Error activating router: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/routers/{router_id}/update-title")
-async def update_router_title(router_id: str):
-    """Update router title using LLM (async, fire-and-forget)"""
-    try:
-        # Create RouterAgent and call method directly
-        router = RouterAgent(router_id=router_id)
-        asyncio.create_task(router.generate_and_update_title())
-
-        return {"status": "started"}
-    except Exception as e:
-        logger.error(f"Error starting title update: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
+# NOTE: Title generation happens automatically via WebSocket flow
+# No separate HTTP endpoint needed as titles are generated after conversation activation
 
 
 @app.get("/messages/{message_id}/planner-info")
@@ -489,15 +475,15 @@ async def get_message_planner_info(message_id: int):
     try:
         # Get planner associated with this specific message (now async)
         planner = await db.get_planner_by_message(message_id)
-        
+
         if not planner:
             return {
                 "has_planner": False,
                 "execution_plan": None,
                 "status": None,
-                "planner_id": None
+                "planner_id": None,
             }
-        
+
         return {
             "has_planner": True,
             "execution_plan": planner["execution_plan"],
@@ -506,7 +492,7 @@ async def get_message_planner_info(message_id: int):
             "planner_name": planner["planner_name"],
             "user_question": planner["user_question"],
             "message_id": planner["message_id"],
-            "router_id": planner["router_id"]
+            "router_id": planner["router_id"],
         }
     except Exception as e:
         logger.error(f"Error fetching message planner info: {str(e)}")
@@ -521,7 +507,7 @@ async def get_usage_stats():
         from sqlalchemy import create_engine, func
         from sqlalchemy.orm import sessionmaker
         from src.agent.services.llm_service import LLMUsage, Base
-        
+
         # Database setup with WAL mode optimisations (same as LLM service)
         db_path = Path("/app/db/llm_usage.db")
         engine = create_engine(
@@ -531,47 +517,56 @@ async def get_usage_stats():
                 "timeout": 30,
             },
         )
-        
+
         # Configure WAL mode for this connection
         with engine.connect() as conn:
             conn.execute(text("PRAGMA journal_mode=WAL"))
             conn.execute(text("PRAGMA busy_timeout=5000"))
             conn.commit()
-        
+
         Base.metadata.create_all(engine)
         Session = sessionmaker(bind=engine)
-        
+
         with Session() as session:
             now = datetime.now()
-            
+
             # Calculate time boundaries
             today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
             week_start = today_start - timedelta(days=today_start.weekday())
             month_start = today_start.replace(day=1)
-            
+
             # Today's usage
-            today_cost = session.query(func.sum(LLMUsage.cost)).filter(
-                LLMUsage.timestamp >= today_start
-            ).scalar() or 0.0
-            
+            today_cost = (
+                session.query(func.sum(LLMUsage.cost))
+                .filter(LLMUsage.timestamp >= today_start)
+                .scalar()
+                or 0.0
+            )
+
             # This week's usage
-            week_cost = session.query(func.sum(LLMUsage.cost)).filter(
-                LLMUsage.timestamp >= week_start
-            ).scalar() or 0.0
-            
+            week_cost = (
+                session.query(func.sum(LLMUsage.cost))
+                .filter(LLMUsage.timestamp >= week_start)
+                .scalar()
+                or 0.0
+            )
+
             # This month's usage
-            month_cost = session.query(func.sum(LLMUsage.cost)).filter(
-                LLMUsage.timestamp >= month_start
-            ).scalar() or 0.0
-            
+            month_cost = (
+                session.query(func.sum(LLMUsage.cost))
+                .filter(LLMUsage.timestamp >= month_start)
+                .scalar()
+                or 0.0
+            )
+
             # Total usage
             total_cost = session.query(func.sum(LLMUsage.cost)).scalar() or 0.0
-            
+
             return {
                 "today": round(today_cost, 4),
                 "week": round(week_cost, 4),
                 "month": round(month_cost, 4),
-                "total": round(total_cost, 4)
+                "total": round(total_cost, 4),
             }
     except Exception as e:
         logger.error(f"Error fetching usage stats: {str(e)}")

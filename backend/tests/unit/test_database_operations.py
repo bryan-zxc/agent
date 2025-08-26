@@ -20,11 +20,11 @@ class TestDatabaseOperationsSimple(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         """Set up test database for each test."""
         # Create temporary database file
-        self.db_fd, self.test_db_path = tempfile.mkstemp(suffix='.db')
+        self.db_fd, self.test_db_path = tempfile.mkstemp(suffix=".db")
         os.close(self.db_fd)  # Close file descriptor
-        
-        self.db = AgentDatabase(database_path=self.test_db_path)
-        
+
+        self.db = await AgentDatabase.create(database_path=self.test_db_path)
+
         # Test data
         self.router_id = f"test_router_{uuid.uuid4().hex[:8]}"
         self.planner_id = f"test_planner_{uuid.uuid4().hex[:8]}"
@@ -42,13 +42,13 @@ class TestDatabaseOperationsSimple(unittest.IsolatedAsyncioTestCase):
         # Test basic connection by creating a router
         result = await self.db.create_router(
             router_id=self.router_id,
-            status="active", 
+            status="active",
             model="gpt-4",
             temperature=0.7,
             title="Test Router",
-            preview="Test router preview"
+            preview="Test router preview",
         )
-        
+
         # Should not raise exceptions
         self.assertIsNone(result)  # create_router returns None on success
 
@@ -58,13 +58,13 @@ class TestDatabaseOperationsSimple(unittest.IsolatedAsyncioTestCase):
         message_id = await self.db.add_message(
             "planner", self.planner_id, "user", "Test message"
         )
-        
+
         # Message should be created
         self.assertIsNotNone(message_id)
-        
+
         # Retrieve messages
         messages = await self.db.get_messages("planner", self.planner_id)
-        
+
         # Should have our message
         self.assertEqual(len(messages), 1)
         self.assertEqual(messages[0]["content"], "Test message")
@@ -77,20 +77,31 @@ class TestDatabaseOperationsSimple(unittest.IsolatedAsyncioTestCase):
             user_question="Test question",
             status="active",
             model="gpt-4",
-            temperature=0.7
+            temperature=0.7,
         )
         self.assertIsNone(create_result)  # create_planner returns None on success
-        
+
         # Read planner
         planner_data = await self.db.get_planner(self.planner_id)
         self.assertEqual(planner_data["planner_id"], self.planner_id)
-        
+
         # Update planner
-        update_result = await self.db.update_planner(self.planner_id, status="completed")
+        update_result = await self.db.update_planner(
+            self.planner_id, status="completed"
+        )
         self.assertTrue(update_result)  # update_planner returns True on success
 
     async def test_worker_operations(self):
         """Test worker Create, Read, Update operations."""
+        # First create the planner that the worker references
+        await self.db.create_planner(
+            planner_id=self.planner_id,
+            user_question="Test question for worker",
+            status="active",
+            model="gpt-4",
+            temperature=0.7,
+        )
+
         # Create worker
         create_result = await self.db.create_worker(
             worker_id=self.worker_id,
@@ -109,14 +120,14 @@ class TestDatabaseOperationsSimple(unittest.IsolatedAsyncioTestCase):
             input_variable_filepaths={},
             input_image_filepaths={},
             tables=[],
-            filepaths=[]
+            filepaths=[],
         )
         self.assertIsNone(create_result)  # create_worker returns None on success
-        
-        # Read worker  
+
+        # Read worker
         worker_data = await self.db.get_worker(self.worker_id)
         self.assertEqual(worker_data["worker_id"], self.worker_id)
-        
+
         # Update worker
         update_result = await self.db.update_worker(self.worker_id, status="completed")
         self.assertTrue(update_result)  # update_worker returns True on success

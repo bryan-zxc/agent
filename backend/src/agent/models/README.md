@@ -72,7 +72,7 @@ Database models and service for agent message persistence and state management.
   - `created_at`: Message timestamp
 
 **`RouterMessage`**
-- Messages from RouterAgent routers
+- Messages from router operations
 - **Fields:**
   - `id`: Auto-incrementing primary key
   - `router_id`: Foreign key to Router table
@@ -81,7 +81,7 @@ Database models and service for agent message persistence and state management.
   - `created_at`: Message timestamp
 
 **`Router`**
-- Agent state for RouterAgent instances
+- State for router operations
 - **Fields:**
   - `router_id`: UUID hex string (primary key)
   - `status`: Router status (active, processing, completed, failed, archived)

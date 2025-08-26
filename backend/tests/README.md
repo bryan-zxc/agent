@@ -25,7 +25,9 @@ backend/tests/
 │   ├── test_hybrid_async_execution.py # 🚀 Advanced hybrid mocking + performance
 │   ├── test_import_structure.py    # Import and dependency tests
 │   ├── test_database_operations.py # Database functionality tests
-│   ├── test_router_agent.py       # RouterAgent ephemeral architecture
+│   ├── test_router_operations.py  # Router operations functional tests
+│   ├── test_router_operations_simple.py # Simple router operations tests
+│   ├── test_async_error_utils.py  # Async error handling utilities tests
 │   ├── test_task_execution.py     # 🔄 Enhanced with async warning capture
 │   ├── test_file_manager.py       # File storage and retrieval
 │   ├── test_websocket_communication.py # WebSocket functionality
@@ -51,10 +53,7 @@ backend/tests/
 │   ├── Annual-Report-2023.pdf      # Test document
 │   ├── img_03.png                  # Test image
 │   └── *.pdf                       # Various test documents
-├── run_tests.py                    # Main test runner (simplified interface)
-├── run_all_tests.py               # Combined test orchestrator
-├── run_unit_tests.py              # Unit test runner
-├── run_integration_tests.py       # Integration test runner
+├── async_test_utils.py            # Async testing utilities & mixins
 └── README.md                      # This file
 
 🔧 Async/Await Tools (in backend root):
@@ -68,17 +67,32 @@ backend/tests/
 
 ## 🚀 Quick Start
 
-### NEW: Async Validation Workflow (Recommended)
+### Running Tests with Docker (Recommended)
 
 ```bash
-# 1. Install pre-commit hooks (one-time setup)
-python setup_hooks.py  # Installs git hooks automatically
+# Run all tests
+docker-compose exec backend uv run python -m pytest tests/
 
-# 2. Quick async check while coding (3-5 seconds)
+# Run unit tests only
+docker-compose exec backend uv run python -m pytest tests/unit/
+
+# Run integration tests only
+docker-compose exec backend uv run python -m pytest tests/integration/
+
+# Run with verbose output
+docker-compose exec backend uv run python -m pytest tests/ -v
+
+# Stop on first failure
+docker-compose exec backend uv run python -m pytest tests/ -x
+
+# Run specific test file
+docker-compose exec backend uv run python -m pytest tests/unit/test_router_operations.py
+
+# Quick async check while coding (3-5 seconds)
 python check_async.py  # Catches missing awaits immediately
 
 # 3. Run unit tests with async warnings (5-15 seconds)  
-docker-compose exec backend uv run python tests/run_tests.py
+docker-compose exec backend uv run python -m pytest tests/unit/
 
 # 4. Commit (hooks run automatically - blocks if async issues)
 git commit -m "Your changes"  # Automatic validation
@@ -88,13 +102,13 @@ git commit -m "Your changes"  # Automatic validation
 
 ```bash
 # Quick unit tests after code changes (recommended default)
-docker-compose exec backend uv run python tests/run_tests.py
+docker-compose exec backend uv run python -m pytest tests/unit/
 
 # Run all tests before major releases
-docker-compose exec backend uv run python tests/run_tests.py --all
+docker-compose exec backend uv run python -m pytest tests/
 
 # Run integration tests for performance validation
-docker-compose exec backend uv run python tests/run_tests.py --integration
+docker-compose exec backend uv run python -m pytest tests/integration/
 ```
 
 ### Async-Specific Commands
@@ -115,36 +129,36 @@ docker-compose exec backend uv run python -m pytest tests/unit/test_hybrid_async
 git commit --allow-empty -m "test hooks"  # Should run validation
 ```
 
-### Specific Test Runners
+### Test Execution Options
 
 ```bash
-# Unit tests only (rapid feedback)
-docker-compose exec backend uv run python tests/run_unit_tests.py
+# Show test durations (find slow tests)
+docker-compose exec backend uv run python -m pytest tests/ --durations=10
 
-# Integration tests only (comprehensive validation)
-docker-compose exec backend uv run python tests/run_integration_tests.py
+# Run tests matching a pattern
+docker-compose exec backend uv run python -m pytest tests/ -k "router"
 
-# Combined orchestrator with advanced options
-docker-compose exec backend uv run python tests/run_all_tests.py
+# Run with coverage report
+docker-compose exec backend uv run python -m pytest tests/ --cov=src/agent
 ```
 
-### Run Specific Test Suites
+### Run Specific Test Files
 
 ```bash
-# Unit test suites
-docker-compose exec backend uv run python tests/run_unit_tests.py --suite async_validation
-docker-compose exec backend uv run python tests/run_unit_tests.py --suite hybrid_async_execution
-docker-compose exec backend uv run python tests/run_unit_tests.py --suite database_operations
+# Unit test files
+docker-compose exec backend uv run python -m pytest tests/unit/test_async_validation.py
+docker-compose exec backend uv run python -m pytest tests/unit/test_hybrid_async_execution.py
+docker-compose exec backend uv run python -m pytest tests/unit/test_database_operations.py
 
-# Integration test suites  
-docker-compose exec backend uv run python tests/run_integration_tests.py --suite background_processor_efficiency
-docker-compose exec backend uv run python tests/run_integration_tests.py --suite concurrent_planner_execution
+# Integration test files  
+docker-compose exec backend uv run python -m pytest tests/integration/test_background_processor_efficiency.py
+docker-compose exec backend uv run python -m pytest tests/integration/test_concurrent_planner_execution.py
 
 # Phase 4: Enhanced Integration Testing for Real Async Execution
-docker-compose exec backend uv run python tests/run_integration_tests.py --suite lightweight_async_flows
-docker-compose exec backend uv run python tests/run_integration_tests.py --suite agent_activation_e2e  
-docker-compose exec backend uv run python tests/run_integration_tests.py --suite concurrent_async_operations
-docker-compose exec backend uv run python tests/run_integration_tests.py --suite websocket_async_communication
+docker-compose exec backend uv run python -m pytest tests/integration/test_lightweight_async_flows.py
+docker-compose exec backend uv run python -m pytest tests/integration/test_agent_activation_e2e.py
+docker-compose exec backend uv run python -m pytest tests/integration/test_concurrent_async_operations.py
+docker-compose exec backend uv run python -m pytest tests/integration/test_websocket_async_communication.py
 
 # Phase 6: End-to-End Validation & Performance Optimization
 docker-compose exec backend uv run python -m pytest tests/validation/test_end_to_end_async_prevention.py -v
@@ -154,13 +168,13 @@ docker-compose exec backend uv run python -m pytest tests/validation/test_end_to
 
 ```bash
 # Verbose output
-docker-compose exec backend uv run python tests/run_tests.py --verbose
+docker-compose exec backend uv run python -m pytest tests/ -v
 
 # Stop on first failure
-docker-compose exec backend uv run python tests/run_tests.py --fail-fast
+docker-compose exec backend uv run python -m pytest tests/ -x
 
 # Combined options
-docker-compose exec backend uv run python tests/run_tests.py --all --verbose --fail-fast
+docker-compose exec backend uv run python -m pytest tests/ -vx --tb=short
 ```
 
 ## Test Categories
@@ -212,7 +226,7 @@ docker-compose exec backend uv run python tests/run_tests.py --all --verbose --f
 **Purpose:** Ensure all modules import correctly without circular dependencies
 
 **Tests:**
-- Core module imports (RouterAgent, BaseAgent)
+- Core module imports (router_operations, BaseAgent)
 - Model exports from `models/__init__.py`
 - Service layer imports (LLM, document, image services)
 - Task function imports and registry validation
@@ -235,8 +249,8 @@ docker-compose exec backend uv run python tests/run_tests.py --all --verbose --f
 
 **Performance Target:** <3 seconds
 
-### 5. RouterAgent (`test_router_agent.py`)
-**Purpose:** Validate ephemeral router lifecycle and operations
+### 5. Router Operations (`test_router_operations.py` and `test_router_operations_simple.py`)
+**Purpose:** Validate router operations functional architecture
 
 **Tests:**
 - Ephemeral architecture (creation, state loading, cleanup)
@@ -420,10 +434,10 @@ The test suite implements a two-tier approach balancing speed and comprehensiven
 
 ```bash
 # Fast CI pipeline (unit tests only)
-docker-compose exec backend uv run python tests/run_tests.py --fail-fast
+docker-compose exec backend uv run python -m pytest tests/unit/ -x
 
 # Comprehensive CI pipeline (all tests)
-docker-compose exec backend uv run python tests/run_tests.py --all --fail-fast
+docker-compose exec backend uv run python -m pytest tests/ -x
 
 # Check exit code
 if [ $? -eq 0 ]; then
@@ -442,7 +456,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - name: Run unit tests
-        run: docker-compose exec backend uv run python tests/run_tests.py --fail-fast
+        run: docker-compose exec backend uv run python -m pytest tests/unit/ -x
   
   integration-tests:
     runs-on: ubuntu-latest
@@ -451,7 +465,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - name: Run integration tests
-        run: docker-compose exec backend uv run python tests/run_tests.py --integration --fail-fast
+        run: docker-compose exec backend uv run python -m pytest tests/integration/ -x
 ```
 
 ## Adding New Tests
@@ -495,19 +509,19 @@ mock_websocket.send_json.assert_awaited_once()
 ```bash
 # Ensure Python path is correct
 export PYTHONPATH=/app/src
-docker-compose exec backend uv run python tests/run_unit_tests.py
+docker-compose exec backend uv run python -m pytest tests/unit/
 ```
 
 **Slow Tests:**
 ```bash
 # Run with performance warnings
-docker-compose exec backend uv run python tests/run_unit_tests.py --verbose
+docker-compose exec backend uv run python -m pytest tests/ --durations=10 -v
 ```
 
 **Test Failures:**
 ```bash
 # Run specific failing test
-docker-compose exec backend uv run python tests/run_unit_tests.py --suite async_validation --verbose
+docker-compose exec backend uv run python -m pytest tests/unit/test_async_validation.py -v
 ```
 
 ### Debug Mode

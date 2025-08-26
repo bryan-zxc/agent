@@ -1,5 +1,5 @@
 """Core functionality for the agent library."""
 
-from .router import RouterAgent
+from . import router_operations
 
-__all__ = ["RouterAgent"]
+__all__ = ["router_operations"]

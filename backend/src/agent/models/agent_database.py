@@ -292,18 +292,20 @@ class FileMetadata(Base):
 
 class AgentDatabase:
     """Database service for managing agent messages and state.
-    
+
     This class uses a factory pattern to ensure proper async initialisation.
     Use AgentDatabase.create() to instantiate, not direct __init__.
     """
 
-    def __init__(self, database_path: str = settings.database_path, _internal_init: bool = False):
+    def __init__(
+        self, database_path: str = settings.database_path, _internal_init: bool = False
+    ):
         """Private initialiser - use AgentDatabase.create() instead.
-        
+
         Args:
             database_path: Path to the SQLite database file
             _internal_init: Internal flag to prevent direct instantiation
-        
+
         Raises:
             RuntimeError: If called directly without using the factory method
         """
@@ -313,10 +315,10 @@ class AgentDatabase:
                 "Use: db = await AgentDatabase.create()\n"
                 "Not: db = AgentDatabase()"
             )
-        
+
         # Store database path for schema operations
         self.database_path = database_path
-        
+
         # Async engine for all database operations
         async_database_url = f"sqlite+aiosqlite:///{database_path}"
         self.async_engine = create_async_engine(
@@ -326,7 +328,7 @@ class AgentDatabase:
                 "timeout": 30,  # Connection timeout
             },
         )
-        
+
         # Async session factory
         self.AsyncSessionLocal = async_sessionmaker(
             bind=self.async_engine,
@@ -335,33 +337,35 @@ class AgentDatabase:
             autoflush=False,
             expire_on_commit=False,
         )
-    
+
     @classmethod
-    async def create(cls, database_path: str = settings.database_path) -> 'AgentDatabase':
+    async def create(
+        cls, database_path: str = settings.database_path
+    ) -> "AgentDatabase":
         """Factory method to create and properly initialise an AgentDatabase instance.
-        
+
         This method ensures all async initialisation is completed before returning
         the database instance, preventing issues with uninitialised connections.
-        
+
         Args:
             database_path: Path to the SQLite database file
-        
+
         Returns:
             Fully initialised AgentDatabase instance
-        
+
         Example:
             db = await AgentDatabase.create()
         """
         # Ensure directory exists
         Path(database_path).parent.mkdir(parents=True, exist_ok=True)
-        
+
         # Create instance using internal flag
         instance = cls(database_path=database_path, _internal_init=True)
-        
+
         # Perform all async initialisation
         await instance._initialise_database_async()
         await instance._configure_async_sqlite_optimisations()
-        
+
         return instance
 
     async def _initialise_database_async(self) -> None:
@@ -369,7 +373,7 @@ class AgentDatabase:
         # Create tables if they don't exist
         async with self.async_engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-        
+
         # Check schema version and migrate if needed
         if settings.database_auto_migrate:
             await self._check_and_migrate_schema_async()
@@ -415,17 +419,6 @@ class AgentDatabase:
             await session.commit()
             return message_id
 
-    async def update_router_title(self, router_id: str, title: str) -> None:
-        """Update the title of an existing router"""
-        async with self.AsyncSessionLocal() as session:
-            result = await session.execute(
-                select(Router).where(Router.router_id == router_id)
-            )
-            router_record = result.scalar_one_or_none()
-            if router_record:
-                router_record.title = title
-                router_record.updated_at = datetime.now(timezone.utc)
-                await session.commit()
 
     async def update_router(self, router_id: str, **kwargs) -> bool:
         """Update router fields with arbitrary keyword arguments"""
@@ -514,17 +507,6 @@ class AgentDatabase:
             session.add(router)
             await session.commit()
 
-    async def update_router_status(self, router_id: str, status: str) -> None:
-        """Update router status"""
-        async with self.AsyncSessionLocal() as session:
-            result = await session.execute(
-                select(Router).where(Router.router_id == router_id)
-            )
-            router = result.scalar_one_or_none()
-            if router:
-                router.status = status
-                router.updated_at = datetime.now(timezone.utc)
-                await session.commit()
 
     async def get_router(self, router_id: str) -> Optional[Dict[str, Any]]:
         """Get router state by ID"""
@@ -916,9 +898,7 @@ class AgentDatabase:
                 return None
 
             planner_result = await session.execute(
-                select(Planner).where(
-                    Planner.planner_id == link.planner_id
-                )
+                select(Planner).where(Planner.planner_id == link.planner_id)
             )
             planner = planner_result.scalar_one_or_none()
 

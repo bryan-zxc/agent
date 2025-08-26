@@ -54,9 +54,9 @@ Indexing strategy, query optimization, connection management, and performance mo
 
 ### Agent Integration
 - `src/agent/core/base.py` - BaseAgent with database persistence
-- `src/agent/core/router.py` - RouterAgent state management
-- `src/agent/agents/planner.py` - PlannerAgent with TaskManager
-- `src/agent/agents/worker.py` - WorkerAgent task execution
+- `src/agent/core/router_operations.py` - Router state management (functional architecture)
+- `src/agent/tasks/planner_tasks.py` - Planner task execution functions
+- `src/agent/tasks/worker_tasks.py` - Worker task execution functions
 
 ## Getting Started
 

@@ -68,17 +68,23 @@ class LLMUsage(Base):
     __tablename__ = "llm_usage"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    timestamp = Column(DateTime, nullable=False, default=datetime.now, index=True)  # ADDED INDEX for cost queries
+    timestamp = Column(
+        DateTime, nullable=False, default=datetime.now, index=True
+    )  # ADDED INDEX for cost queries
     model = Column(String(100), nullable=False)
     input_tokens = Column(Integer, nullable=False)
     output_tokens = Column(Integer, nullable=False)
     cost = Column(Float, nullable=False)
     request_type = Column(Enum(RequestType), nullable=False)
-    caller = Column(String(100), nullable=False, index=True)  # ADDED INDEX for caller filtering
-    
+    caller = Column(
+        String(100), nullable=False, index=True
+    )  # ADDED INDEX for caller filtering
+
     # Add composite index for cost card queries
     __table_args__ = (
-        Index('idx_caller_timestamp', 'caller', 'timestamp'),  # For filtering by caller and time range
+        Index(
+            "idx_caller_timestamp", "caller", "timestamp"
+        ),  # For filtering by caller and time range
     )
 
 
@@ -120,10 +126,10 @@ class LLM:
 
         # SQLAlchemy setup with WAL mode and connection pooling
         self.db_path = Path(db_path)
-        
+
         # Ensure directory exists
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         self.engine = create_engine(
             f"sqlite:///{db_path}",
             # Connection pool settings for better concurrency
@@ -136,36 +142,41 @@ class LLM:
                 "check_same_thread": False,  # Allow connections across threads
                 "timeout": 30,  # 30 second timeout for database locks
             },
-            echo=False  # Set to True for SQL debugging
+            echo=False,  # Set to True for SQL debugging
         )
-        
+
         # Configure WAL mode and other SQLite optimisations
         self._configure_sqlite_optimisations()
-        
+
         Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine)
-    
+
     def _configure_sqlite_optimisations(self):
         """Configure SQLite for optimal concurrent performance"""
         with self.engine.connect() as conn:
             from sqlalchemy import text
+
             # Enable WAL mode for concurrent readers and writers
             conn.execute(text("PRAGMA journal_mode=WAL"))
-            
+
             # Set busy timeout to handle lock contention gracefully
             conn.execute(text("PRAGMA busy_timeout=5000"))  # 5 second timeout
-            
+
             # Enable synchronous mode for durability while maintaining performance
-            conn.execute(text("PRAGMA synchronous=NORMAL"))  # Balance safety vs performance
-            
+            conn.execute(
+                text("PRAGMA synchronous=NORMAL")
+            )  # Balance safety vs performance
+
             # Set cache size for better performance (negative value = KB)
             conn.execute(text("PRAGMA cache_size=-32000"))  # 32MB cache
-            
+
             # Optimize temp storage
             conn.execute(text("PRAGMA temp_store=MEMORY"))
-            
+
             conn.commit()
-            logger.info("SQLite WAL mode and optimisations enabled for LLM usage database")
+            logger.info(
+                "SQLite WAL mode and optimisations enabled for LLM usage database"
+            )
 
     def _calculate_cost(
         self, model: str, input_tokens: int, output_tokens: int

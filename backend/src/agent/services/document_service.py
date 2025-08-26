@@ -14,30 +14,28 @@ from ..models.schemas import (
 )
 
 
-def extract_images_from_page(
-    page: fitz.Page, page_number: int, min_tokens: int = 64
-):
+def extract_images_from_page(page: fitz.Page, page_number: int, min_tokens: int = 64):
     images = []
     pixel_limit = min_tokens * 32 * 32
-    
+
     # Get image list from page
     image_list = page.get_images()
-    
+
     for i, img in enumerate(image_list):
         # Get image object
         xref = img[0]
         pix = fitz.Pixmap(page.parent, xref)
-        
+
         # Skip if image is too small
         if pix.width * pix.height < pixel_limit:
             pix = None
             continue
-            
+
         # Convert to PIL Image if not GRAY or RGB
         if pix.n - pix.alpha < 4:  # GRAY or RGB
             img_data = pix.tobytes("png")
             pil_image = Image.open(io.BytesIO(img_data))
-            
+
             image_content = ImageContent(
                 image_name=f"pg{str(page_number).zfill(4)}_im_{str(i).zfill(3)}",
                 image_width=pix.width,
@@ -45,31 +43,31 @@ def extract_images_from_page(
                 image_data=base64.b64encode(img_data).decode("utf-8"),
             )
             images.append(image_content)
-        
+
         pix = None  # Free memory
-    
+
     return images
 
 
 def extract_document_content(pdf_path: str) -> PDFContent:
     # Use pymupdf4llm for markdown extraction with page chunks
     md_pages = pymupdf4llm.to_markdown(pdf_path, page_chunks=True)
-    
+
     # Open document with PyMuPDF for image extraction
     doc = fitz.open(pdf_path)
     pages = []
-    
+
     for i, page in enumerate(doc):
         # Use page label if available, otherwise use page number (1-indexed)
         page_label = page.get_label()
         page_number = page_label if page_label else str(i + 1)
-        
+
         # Get markdown text for this page
         if i < len(md_pages):
-            text = md_pages[i]['text']
+            text = md_pages[i]["text"]
         else:
             text = ""
-        
+
         # Extract images from the page
         images = extract_images_from_page(page, page_number)
 

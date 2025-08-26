@@ -231,9 +231,7 @@ def get_table_metadata(duck_conn, table_name: str) -> TableMeta:
     if selected_columns:
         selected_columns_str = ", ".join(selected_columns)
         top_10_md = (
-            duck_conn.sql(
-                f"SELECT {selected_columns_str} FROM {table_name} LIMIT 10"
-            )
+            duck_conn.sql(f"SELECT {selected_columns_str} FROM {table_name} LIMIT 10")
             .df()
             .to_markdown(index=False)
         )
@@ -312,19 +310,7 @@ async def execute_initial_planning(task_data: dict):
         planner_name = get_random_planner_name()
 
     try:
-        # Create message-planner link BEFORE creating new planner
-        if message_id and router_id:
-            await db.link_message_planner(
-                router_id=router_id,
-                message_id=message_id,
-                planner_id=planner_id,
-                relationship_type="initiated",
-            )
-            logger.info(
-                f"Created message-planner link: message {message_id} -> planner {planner_id}"
-            )
-
-        # Create planner database record
+        # Create planner database record FIRST (to satisfy foreign key constraints)
         await db.create_planner(
             planner_id=planner_id,
             planner_name=planner_name,
@@ -336,6 +322,18 @@ async def execute_initial_planning(task_data: dict):
             status="planning",
             next_task="execute_initial_planning",  # Current task for restart/resumability
         )
+
+        # Create message-planner link AFTER planner exists
+        if message_id and router_id:
+            await db.link_message_planner(
+                router_id=router_id,
+                message_id=message_id,
+                planner_id=planner_id,
+                relationship_type="initiated",
+            )
+            logger.info(
+                f"Created message-planner link: message {message_id} -> planner {planner_id}"
+            )
 
         # Create message manager for this planner (now that planner exists)
         message_manager = MessageManager(db, "planner", planner_id)
@@ -786,12 +784,20 @@ async def _complete_planner_execution(
         router_id = await db.get_router_id_for_planner(planner_id)
         if router_id:
             # Add assistant response directly to router messages
-            message_id = await db.add_message("router", router_id, "assistant", user_response)
-            logger.info(f"Added planner completion response to router {router_id} as message {message_id}")
+            message_id = await db.add_message(
+                "router", router_id, "assistant", user_response
+            )
+            logger.info(
+                f"Added planner completion response to router {router_id} as message {message_id}"
+            )
         else:
-            logger.warning(f"No router_id found for planner {planner_id} - response not added to router messages")
+            logger.warning(
+                f"No router_id found for planner {planner_id} - response not added to router messages"
+            )
     except Exception as e:
-        logger.error(f"Failed to add completion response to router messages for planner {planner_id}: {e}")
+        logger.error(
+            f"Failed to add completion response to router messages for planner {planner_id}: {e}"
+        )
         # Don't fail the entire planner - just log the error
 
     # Mark worker as recorded and skip variable processing - no future tasks need them
@@ -988,13 +994,17 @@ async def execute_synthesis(task_data: dict):
                         "2. Add new tasks if required, marking them with '(new)' in the description field\n"
                         "3. Leave next_action as False - separate logic will determine next action\n"
                         "4. Mark unnecessary tasks as obsolete=True\n"
-                        "If the answer template suggests that calculations are required, ""and you haven't performed the corresponding calculation action, ""you must create a calculation task, ""or keep existing calculation task, ""even if the answer template autofilled the calculation outcome.\n"
+                        "If the answer template suggests that calculations are required, "
+                        "and you haven't performed the corresponding calculation action, "
+                        "you must create a calculation task, "
+                        "or keep existing calculation task, "
+                        "even if the answer template autofilled the calculation outcome.\n"
                         "Tasks will be executed strictly in order on the list, if a new task is created please place it in the position of when it is supposed to be executed, don't leave it to the end.\n"
                         "Do not create tasks to formulate answer, as the answer is already being formulated progressively with the answer template. "
                         "You can return an empty todo list there is no further work to be done (for example, the answer template is completely populated).",
                     },
                 ]
-                
+
                 # Get LLM response
                 llm_updated_model = await llm.a_get_response(
                     messages=update_messages,
@@ -1048,7 +1058,9 @@ async def execute_synthesis(task_data: dict):
                 # Save updated execution plan (only if not completed)
                 save_execution_plan_model(planner_id, final_model)
                 execution_plan_markdown = execution_plan_model_to_markdown(final_model)
-                await db.update_planner(planner_id, execution_plan=execution_plan_markdown)
+                await db.update_planner(
+                    planner_id, execution_plan=execution_plan_markdown
+                )
 
                 logger.info(f"Execution plan updated for planner {planner_id}")
 

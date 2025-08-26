@@ -226,7 +226,7 @@ git commit --allow-empty -m "test async hooks"
 
 4. **WebSocket Async Communication** (`test_websocket_async_communication.py`):
    - Real-time communication integrity
-   - RouterAgent coordination across multiple planners
+   - Router coordination across multiple planners
    - Message delivery and connection stability
 
 **Performance Targets**:

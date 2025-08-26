@@ -16,7 +16,8 @@ class TestFileManagerSimple(unittest.TestCase):
         # Simple import test to verify module structure
         try:
             from src.agent.tasks import file_manager
-            self.assertTrue(hasattr(file_manager, 'clean_image_name'))
+
+            self.assertTrue(hasattr(file_manager, "clean_image_name"))
         except ImportError:
             # If import fails due to dependencies, skip this test
             self.skipTest("File manager module has unresolved dependencies")
@@ -26,9 +27,9 @@ class TestFileManagerSimple(unittest.TestCase):
         # Test that we can access the module without triggering complex imports
         import sys
         import importlib.util
-        
-        spec = importlib.util.find_spec('src.agent.tasks.file_manager')
+
+        spec = importlib.util.find_spec("src.agent.tasks.file_manager")
         self.assertIsNotNone(spec, "File manager module should be discoverable")
-        
+
         # This confirms the module structure is valid
-        self.assertTrue(spec.origin.endswith('file_manager.py'))
+        self.assertTrue(spec.origin.endswith("file_manager.py"))

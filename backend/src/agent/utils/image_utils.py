@@ -8,12 +8,12 @@ from PIL import Image
 def encode_image(image: Union[str, Path, Image.Image]):
     """
     Encodes an image to base64 format.
-    
+
     Parameters:
     ----------
     image : Union[str, Path, Image.Image]
         The image to encode, either as a file path or PIL Image object.
-        
+
     Returns:
     -------
     str
@@ -44,12 +44,12 @@ def decode_image(image_base64: str) -> Image.Image:
 def get_img_breakdown(base64_image: str):
     """
     Analyses an image and returns its breakdown using LLM.
-    
+
     Parameters:
     ----------
     base64_image : str
         Base64 encoded image string.
-        
+
     Returns:
     -------
     ImageBreakdown
@@ -58,7 +58,7 @@ def get_img_breakdown(base64_image: str):
     # Import LLM here to avoid circular imports
     from ..services.llm_service import LLM
     from ..models.schemas import ImageBreakdown
-    
+
     llm = LLM(caller="image_utils")
     messages = [
         {

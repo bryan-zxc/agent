@@ -8,7 +8,7 @@ FastAPI-based backend server that handles WebSocket communication, file processi
 backend/
 ├── src/agent/              # Core agent system (existing codebase)
 │   ├── agents/            # PlannerAgent and WorkerAgents
-│   ├── core/              # RouterAgent and base classes
+│   ├── core/              # Router operations and base classes
 │   ├── models/            # Pydantic schemas and database models
 │   ├── services/          # LLM, document, and image processing services
 │   ├── security/          # Security guardrails
@@ -28,7 +28,7 @@ backend/
 - **Router API** (`/routers/{router_id}`) - Get router history
 
 ### Agent System (src/agent/)
-- **RouterAgent** - WebSocket-enabled chat interface with intelligent routing
+- **Router Operations** - WebSocket-enabled chat interface with intelligent routing (functional architecture)
 - **PlannerAgent** - Breaks down complex tasks into subtasks (activated automatically)
 - **WorkerAgents** - Execute individual tasks (general and SQL-specialized)
 - **Database Layer** - SQLite-based router persistence
@@ -96,7 +96,7 @@ Response types:
 ## Agent Flow
 
 ### Intelligent Routing
-The RouterAgent automatically switches between simple chat and complex analysis modes:
+The router operations automatically switch between simple chat and complex analysis modes:
 
 **Simple Chat Mode:**
 - Direct LLM conversation for general questions
@@ -110,7 +110,7 @@ The RouterAgent automatically switches between simple chat and complex analysis 
 
 ### Processing Pipeline
 1. **WebSocket Connection** - Frontend connects with router ID
-2. **Message Handling** - RouterAgent receives and stores user message
+2. **Message Handling** - Router receives and stores user message
 3. **Route Decision** - Simple chat OR complex analysis
 4. **Processing** - Direct LLM response OR PlannerAgent → WorkerAgents
 5. **Response** - Store and send result via WebSocket
@@ -137,7 +137,7 @@ The RouterAgent automatically switches between simple chat and complex analysis 
 3. Update CORS settings if needed
 
 ### Extending Agent Capabilities
-1. Modify trigger detection in `RouterAgent`
+1. Modify trigger detection in `router_operations.py`
 2. Add new instruction templates
 3. Create specialized `WorkerAgent` subclasses
 

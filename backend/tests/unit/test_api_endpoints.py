@@ -16,10 +16,10 @@ class TestAPIEndpointsSimple(unittest.IsolatedAsyncioTestCase):
     async def test_health_check_endpoint(self):
         """Test health check endpoint returns expected response structure."""
         from main import health_check
-        
+
         # Simple endpoint test - no complex mocking needed
         response = await health_check()
-        
+
         # Verify basic response structure
         self.assertIsInstance(response, dict)
         self.assertIn("status", response)
@@ -28,15 +28,13 @@ class TestAPIEndpointsSimple(unittest.IsolatedAsyncioTestCase):
     async def test_get_routers_endpoint_structure(self):
         """Test get routers endpoint returns properly structured response."""
         from main import get_routers
-        
-        # Mock database to avoid complex setup
-        with patch('main.AgentDatabase') as MockDB:
-            mock_db = AsyncMock()
-            MockDB.return_value = mock_db
-            mock_db.get_all_routers.return_value = []
-            
+
+        # Mock the global database instance
+        with patch("main.db") as mock_db:
+            mock_db.get_all_routers = AsyncMock(return_value=[])
+
             response = await get_routers()
-            
+
             # Verify response structure (basic contract test)
             self.assertIsInstance(response, list)
             # Empty list is valid response when no routers exist
@@ -45,17 +43,24 @@ class TestAPIEndpointsSimple(unittest.IsolatedAsyncioTestCase):
         """Test that endpoints handle missing parameters gracefully."""
         from fastapi import HTTPException
         from main import get_router
-        
-        # Mock RouterAgent and its dependencies
-        with patch('main.RouterAgent') as MockRouter:
-            mock_router_instance = AsyncMock()
-            MockRouter.return_value = mock_router_instance
-            mock_router_instance._load_existing_state = AsyncMock()
-            mock_router_instance.message_manager.get_messages = AsyncMock(return_value=[])
-            
+
+        # Mock router_operations.create_router and its dependencies
+        with patch("main.router_operations.create_router") as mock_create_router:
+            # Create mock message manager
+            mock_message_manager = AsyncMock()
+            mock_message_manager.get_messages = AsyncMock(return_value=[])
+
+            # Mock router state returned by create_router
+            mock_router_state = {
+                "router_id": "non_existent_router",
+                "message_manager": mock_message_manager,
+                "active": False,
+            }
+            mock_create_router.return_value = mock_router_state
+
             # Test with non-existent router
             response = await get_router("non_existent_router")
-            
+
             # Should return a valid response structure, not crash
             self.assertIsInstance(response, dict)
             self.assertIn("router_id", response)
