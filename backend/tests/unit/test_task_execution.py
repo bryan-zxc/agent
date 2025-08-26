@@ -3,14 +3,21 @@ Lightweight Task Execution Tests
 
 Unit tests for core task execution functionality following lightweight testing principles.
 Tests focus on immediate feedback for glaring problems, not complex integration workflows.
+
+Enhanced with async/await correctness checking to detect missing awaits and runtime warnings.
 """
 
 import unittest
 import tempfile
 import uuid
 import os
+import warnings
+import gc
 from unittest.mock import patch, AsyncMock, MagicMock
 from PIL import Image
+
+# Import async testing utilities
+from tests.async_test_utils import AsyncWarningCaptureMixin
 
 from src.agent.tasks.task_utils import update_planner_next_task_and_queue
 from src.agent.models.agent_database import AgentDatabase
@@ -35,14 +42,18 @@ from src.agent.tasks.worker_tasks import (
 from src.agent.models.tasks import TaskResult, InitialExecutionPlan, TaskArtefact, TaskValidation, TaskArtefactSQL
 
 
-class TestTaskExecutionSimple(unittest.IsolatedAsyncioTestCase):
-    """Lightweight tests for core task execution functionality."""
+class TestTaskExecutionSimple(unittest.IsolatedAsyncioTestCase, AsyncWarningCaptureMixin):
+    """Lightweight tests for core task execution functionality with async warning detection."""
 
     async def asyncSetUp(self):
-        """Set up minimal test environment."""
+        """Set up minimal test environment with async warning capture."""
         # Test data only
         self.planner_id = f"test_planner_{uuid.uuid4().hex[:8]}"
         self.worker_id = f"test_worker_{uuid.uuid4().hex[:8]}"
+        
+        # Configure warnings for async testing
+        warnings.filterwarnings("ignore", category=DeprecationWarning)
+        warnings.filterwarnings("ignore", module="PIL")
 
     def test_task_queue_integration(self):
         """Test task queue operations work correctly."""
@@ -67,15 +78,101 @@ class TestTaskExecutionSimple(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(message_manager)
             self.assertEqual(message_manager.agent_type, "planner")
             self.assertEqual(message_manager.agent_id, self.planner_id)
+    
+    async def test_update_planner_next_task_and_queue_async_correctness(self):
+        """Test that update_planner_next_task_and_queue properly handles async operations."""
+        # Use temp file for database to avoid initialization issues
+        with tempfile.NamedTemporaryFile(delete=False) as temp_db:
+            db_path = temp_db.name
+        
+        try:
+            async with self.capture_async_warnings() as warning_list:
+                # Use temp database instead of in-memory to catch real async issues
+                db = AgentDatabase(db_path)
+                
+                # Create test planner
+                await db.create_planner(
+                    planner_id=self.planner_id,
+                    planner_name="Test Planner",
+                    user_question="Test question",
+                    instruction="Test instruction",
+                    status="active"
+                )
+                
+                # Mock the AgentDatabase constructor to return our test database
+                with patch('src.agent.tasks.task_utils.AgentDatabase') as mock_db_class:
+                    mock_db_class.return_value = db
+                    
+                    # This should work without async warnings
+                    result = await update_planner_next_task_and_queue(
+                        self.planner_id,
+                        "execute_task_creation"
+                    )
+                    
+                    self.assertTrue(result)
+            
+            # Verify no async warnings were produced
+            self.assert_no_unawaited_coroutines(warning_list)
+        finally:
+            # Clean up temp database file
+            if os.path.exists(db_path):
+                os.unlink(db_path)
+    
+    async def test_update_planner_negative_missing_await(self):
+        """Test that missing await produces warnings (negative test)."""
+        # Use temp file for database to avoid initialization issues
+        with tempfile.NamedTemporaryFile(delete=False) as temp_db:
+            db_path = temp_db.name
+        
+        try:
+            db = AgentDatabase(db_path)
+            
+            # Create test planner
+            await db.create_planner(
+                planner_id=self.planner_id,
+                planner_name="Test Planner", 
+                user_question="Test question",
+                instruction="Test instruction",
+                status="active"
+            )
+            
+            async with self.capture_async_warnings() as warning_list:
+                # Mock the AgentDatabase constructor to return our test database
+                with patch('src.agent.tasks.task_utils.AgentDatabase') as mock_db_class:
+                    mock_db_class.return_value = db
+                    
+                    # This is intentionally wrong - calling without await should produce warning
+                    coroutine = update_planner_next_task_and_queue(
+                        self.planner_id,
+                        "execute_task_creation" 
+                    )
+                    
+                    # Force garbage collection to trigger the warning
+                    gc.collect()
+                    
+                    # Let the coroutine be collected naturally to produce warning
+                    del coroutine
+                    gc.collect()
+            
+            # Should have captured unawaited coroutine warnings
+            self.assert_has_unawaited_coroutines(warning_list)
+        finally:
+            # Clean up temp database file
+            if os.path.exists(db_path):
+                os.unlink(db_path)
 
 
-class TestPlannerTasksExecution(unittest.IsolatedAsyncioTestCase):
-    """Lightweight tests for planner_tasks.py functions - vanilla flow only."""
+class TestPlannerTasksExecution(unittest.IsolatedAsyncioTestCase, AsyncWarningCaptureMixin):
+    """Lightweight tests for planner_tasks.py functions with async warning detection."""
 
     async def asyncSetUp(self):
-        """Set up minimal test environment."""
+        """Set up minimal test environment with async warning capture."""
         self.planner_id = f"test_planner_{uuid.uuid4().hex[:8]}"
         self.worker_id = f"test_worker_{uuid.uuid4().hex[:8]}"
+        
+        # Configure warnings for async testing
+        warnings.filterwarnings("ignore", category=DeprecationWarning)
+        warnings.filterwarnings("ignore", module="PIL")
 
     def test_clean_table_name_vanilla_execution(self):
         """Test clean_table_name executes without errors in vanilla scenario."""
@@ -144,66 +241,72 @@ class TestPlannerTasksExecution(unittest.IsolatedAsyncioTestCase):
             self.fail(f"Gold standard integration failed: {e}")
 
     async def test_execute_initial_planning_vanilla_execution(self):
-        """Test execute_initial_planning ACTUALLY EXECUTES without errors in vanilla scenario."""
-        # Mock all external dependencies to allow real function execution
-        with patch('src.agent.tasks.planner_tasks.AgentDatabase') as MockDB, \
-             patch('src.agent.tasks.planner_tasks.llm') as mock_llm_service, \
-             patch('src.agent.tasks.planner_tasks.save_execution_plan_model') as mock_save_plan, \
-             patch('src.agent.tasks.planner_tasks.save_answer_template') as mock_save_template, \
-             patch('src.agent.tasks.planner_tasks.save_wip_answer_template') as mock_save_wip, \
-             patch('src.agent.tasks.planner_tasks.update_planner_next_task_and_queue') as mock_queue, \
-             patch('src.agent.tasks.planner_tasks.MessageManager') as MockMM:
-            
-            # Configure database mock
-            mock_db_instance = AsyncMock()
-            MockDB.return_value = mock_db_instance
-            mock_db_instance.get_planner.return_value = None  # No existing planner
-            mock_db_instance.create_planner.return_value = None
-            mock_db_instance.update_planner.return_value = True
-            mock_db_instance.link_message_planner.return_value = True
-            
-            # Configure MessageManager mock
-            mock_mm_instance = AsyncMock()
-            MockMM.return_value = mock_mm_instance
-            mock_mm_instance.add_message.return_value = []
-            mock_mm_instance.get_messages.return_value = []
-            
-            # Configure LLM service mock - must return awaitables
-            async def mock_llm_response_1(*args, **kwargs):
-                return InitialExecutionPlan(objective="Test objective", todos=["task1", "task2"])
-            
-            async def mock_llm_response_2(*args, **kwargs):
-                return type('MockResponse', (), {'content': "# Test Answer Template"})()
-            
-            mock_llm_service.a_get_response.side_effect = [
-                mock_llm_response_1(),
-                mock_llm_response_2()
-            ]
-            
-            # Configure file operation mocks
-            mock_save_plan.return_value = True
-            mock_save_template.return_value = True
-            mock_save_wip.return_value = True
-            mock_queue.return_value = True
-            
-            # Test data
-            task_data = {
-                "entity_id": self.planner_id,
-                "payload": {
-                    "user_question": "Test question",
-                    "instruction": "Test instruction",
-                    "files": [],
-                    "planner_name": "Test Planner",
-                    "router_id": "test_router"
+        """Test execute_initial_planning ACTUALLY EXECUTES without errors and async warnings."""
+        async with self.capture_async_warnings() as warning_list:
+            # Mock all external dependencies to allow real function execution
+            with patch('src.agent.tasks.planner_tasks.AgentDatabase') as MockDB, \
+                 patch('src.agent.tasks.planner_tasks.llm') as mock_llm_service, \
+                 patch('src.agent.tasks.planner_tasks.save_execution_plan_model') as mock_save_plan, \
+                 patch('src.agent.tasks.planner_tasks.save_answer_template') as mock_save_template, \
+                 patch('src.agent.tasks.planner_tasks.save_wip_answer_template') as mock_save_wip, \
+                 patch('src.agent.tasks.planner_tasks.update_planner_next_task_and_queue') as mock_queue, \
+                 patch('src.agent.tasks.planner_tasks.MessageManager') as MockMM:
+                
+                # Configure database mock
+                mock_db_instance = AsyncMock()
+                MockDB.return_value = mock_db_instance
+                mock_db_instance.get_planner.return_value = None  # No existing planner
+                mock_db_instance.create_planner.return_value = None
+                mock_db_instance.update_planner.return_value = True
+                mock_db_instance.link_message_planner.return_value = True
+                
+                # Configure MessageManager mock
+                mock_mm_instance = AsyncMock()
+                MockMM.return_value = mock_mm_instance
+                mock_mm_instance.add_message.return_value = []
+                mock_mm_instance.get_messages.return_value = []
+                
+                # Configure LLM service mock - must return awaitables
+                async def mock_llm_response_1(*args, **kwargs):
+                    return InitialExecutionPlan(objective="Test objective", todos=["task1", "task2"])
+                
+                async def mock_llm_response_2(*args, **kwargs):
+                    return type('MockResponse', (), {'content': "# Test Answer Template"})()
+                
+                mock_llm_service.a_get_response.side_effect = [
+                    mock_llm_response_1(),
+                    mock_llm_response_2()
+                ]
+                
+                # Configure file operation mocks
+                mock_save_plan.return_value = True
+                mock_save_template.return_value = True
+                mock_save_wip.return_value = True
+                mock_queue.return_value = True
+                
+                # Test data
+                task_data = {
+                    "entity_id": self.planner_id,
+                    "payload": {
+                        "user_question": "Test question",
+                        "instruction": "Test instruction",
+                        "files": [],
+                        "planner_name": "Test Planner",
+                        "router_id": "test_router"
+                    }
                 }
-            }
-            
-            # ACTUALLY EXECUTE THE FUNCTION - this is real execution!
-            await execute_initial_planning(task_data)
-            
-            # Verify the function actually ran by checking mock calls
-            mock_db_instance.create_planner.assert_called_once()
-            self.assertEqual(mock_llm_service.a_get_response.call_count, 2)
+                
+                # ACTUALLY EXECUTE THE FUNCTION - this is real execution!
+                await execute_initial_planning(task_data)
+                
+                # Verify the function actually ran by checking mock calls
+                mock_db_instance.create_planner.assert_called_once()
+                self.assertEqual(mock_llm_service.a_get_response.call_count, 2)
+        
+        # Check for async warnings
+        async_warnings = [w for w in warning_list if "unawaited coroutine" in str(w.message) or "was never awaited" in str(w.message)]
+        if async_warnings:
+            self.fail(f"Async warnings detected: {[str(w.message) for w in async_warnings]}")
 
     async def test_execute_task_creation_vanilla_execution(self):
         """Test execute_task_creation ACTUALLY EXECUTES without errors."""

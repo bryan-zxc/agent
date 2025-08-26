@@ -1,17 +1,32 @@
 # Agent System Backend Tests
 
-Comprehensive two-tier test suite combining lightweight unit tests for rapid feedback with thorough integration tests for end-to-end validation.
+Multi-layer async/await validation test suite ensuring runtime correctness through static analysis, runtime warnings, pre-commit hooks, and comprehensive integration testing.
+
+## 🔍 Async/Await Correctness Strategy
+
+This test suite implements a **six-layer approach** to prevent async/await bugs from reaching production:
+
+1. **Static Analysis** (0.1-5 sec) - Ruff + MyPy catch missing awaits immediately
+2. **Runtime Warning Tests** (5-15 sec) - Unit tests detect unawaited coroutines  
+3. **Hybrid Mocking** (2-3 sec) - Real async execution with selective mocking
+4. **Pre-commit Hooks** (30-60 sec) - Block commits containing async issues
+5. **Integration Tests** (<2 min) - System-level async execution validation
+6. **End-to-End Validation** (<3 min) - Complete multi-layer effectiveness validation
+
+**Key Innovation**: Unlike traditional testing, our approach catches async bugs **during development** rather than during manual testing or production.
 
 ## Test Structure
 
 ```
 backend/tests/
+├── async_test_utils.py             # 🧪 Async testing utilities & mixins
 ├── unit/                           # Lightweight unit tests (<30s total)
-│   ├── test_async_validation.py    # Async/await compliance tests
+│   ├── test_async_validation.py    # ⚡ Runtime async/await compliance tests
+│   ├── test_hybrid_async_execution.py # 🚀 Advanced hybrid mocking + performance
 │   ├── test_import_structure.py    # Import and dependency tests
 │   ├── test_database_operations.py # Database functionality tests
 │   ├── test_router_agent.py       # RouterAgent ephemeral architecture
-│   ├── test_task_execution.py     # Task pipeline and functions
+│   ├── test_task_execution.py     # 🔄 Enhanced with async warning capture
 │   ├── test_file_manager.py       # File storage and retrieval
 │   ├── test_websocket_communication.py # WebSocket functionality
 │   ├── test_api_endpoints.py      # FastAPI endpoint tests
@@ -22,7 +37,15 @@ backend/tests/
 │   ├── test_multiple_conversations_concurrent.py # Multi-router isolation
 │   ├── test_fastapi_immediate_response.py      # API response validation
 │   ├── test_file_storage.py                    # File operations end-to-end
-│   └── test_websocket_updates_execution.py     # WebSocket workflows
+│   ├── test_websocket_updates_execution.py     # WebSocket workflows
+│   │
+│   │ ⚡ Phase 4: Enhanced Integration Testing for Real Async Execution
+│   ├── test_lightweight_async_flows.py         # Critical async paths (30s)
+│   ├── test_agent_activation_e2e.py            # Agent activation E2E (35s)
+│   ├── test_concurrent_async_operations.py     # Concurrent async validation (45s)
+│   └── test_websocket_async_communication.py   # WebSocket async flows (40s)
+├── validation/                     # ⭐ Phase 6: End-to-End Validation & Performance Optimization
+│   └── test_end_to_end_async_prevention.py     # Complete multi-layer validation (60s)
 ├── experimental/                   # Test data and experimental files
 │   ├── test.ipynb                  # Jupyter notebook experiments
 │   ├── Annual-Report-2023.pdf      # Test document
@@ -33,11 +56,35 @@ backend/tests/
 ├── run_unit_tests.py              # Unit test runner
 ├── run_integration_tests.py       # Integration test runner
 └── README.md                      # This file
+
+🔧 Async/Await Tools (in backend root):
+├── check_async.py                  # ⚡ Quick async validation (3-5 sec)
+├── setup_hooks.py                  # 🪝 Pre-commit hook installer
+├── ruff.toml                       # Static analysis config
+├── mypy.ini                        # Type checking config
+├── .pre-commit-config.yaml         # Git hook configuration
+└── docs/async_testing_strategy.md   # Complete strategy guide
 ```
 
-## Quick Start
+## 🚀 Quick Start
 
-### Daily Development Workflow
+### NEW: Async Validation Workflow (Recommended)
+
+```bash
+# 1. Install pre-commit hooks (one-time setup)
+python setup_hooks.py  # Installs git hooks automatically
+
+# 2. Quick async check while coding (3-5 seconds)
+python check_async.py  # Catches missing awaits immediately
+
+# 3. Run unit tests with async warnings (5-15 seconds)  
+docker-compose exec backend uv run python tests/run_tests.py
+
+# 4. Commit (hooks run automatically - blocks if async issues)
+git commit -m "Your changes"  # Automatic validation
+```
+
+### Traditional Development Workflow
 
 ```bash
 # Quick unit tests after code changes (recommended default)
@@ -48,6 +95,24 @@ docker-compose exec backend uv run python tests/run_tests.py --all
 
 # Run integration tests for performance validation
 docker-compose exec backend uv run python tests/run_tests.py --integration
+```
+
+### Async-Specific Commands
+
+```bash
+# Quick async validation (development iteration)
+python check_async.py --file src/agent/tasks/worker_tasks.py  # Specific file
+python check_async.py --module tasks                          # Specific module  
+python check_async.py --quiet                                 # Minimal output
+
+# Test async validation specifically
+docker-compose exec backend uv run python -m pytest tests/unit/test_async_validation.py -v
+
+# Test advanced hybrid async execution  
+docker-compose exec backend uv run python -m pytest tests/unit/test_hybrid_async_execution.py -v
+
+# Check if pre-commit hooks are working
+git commit --allow-empty -m "test hooks"  # Should run validation
 ```
 
 ### Specific Test Runners
@@ -68,11 +133,21 @@ docker-compose exec backend uv run python tests/run_all_tests.py
 ```bash
 # Unit test suites
 docker-compose exec backend uv run python tests/run_unit_tests.py --suite async_validation
+docker-compose exec backend uv run python tests/run_unit_tests.py --suite hybrid_async_execution
 docker-compose exec backend uv run python tests/run_unit_tests.py --suite database_operations
 
 # Integration test suites  
 docker-compose exec backend uv run python tests/run_integration_tests.py --suite background_processor_efficiency
 docker-compose exec backend uv run python tests/run_integration_tests.py --suite concurrent_planner_execution
+
+# Phase 4: Enhanced Integration Testing for Real Async Execution
+docker-compose exec backend uv run python tests/run_integration_tests.py --suite lightweight_async_flows
+docker-compose exec backend uv run python tests/run_integration_tests.py --suite agent_activation_e2e  
+docker-compose exec backend uv run python tests/run_integration_tests.py --suite concurrent_async_operations
+docker-compose exec backend uv run python tests/run_integration_tests.py --suite websocket_async_communication
+
+# Phase 6: End-to-End Validation & Performance Optimization
+docker-compose exec backend uv run python -m pytest tests/validation/test_end_to_end_async_prevention.py -v
 ```
 
 ### Verbose Output and Options
@@ -90,20 +165,50 @@ docker-compose exec backend uv run python tests/run_tests.py --all --verbose --f
 
 ## Test Categories
 
-### 1. Async/Await Validation (`test_async_validation.py`)
-**Purpose:** Catch missing `await` keywords that break coroutines
+### 1. Async/Await Validation (`test_async_validation.py`) ⭐ NEW
+**Purpose:** Runtime detection of missing `await` keywords and async execution correctness
 
-**Tests:**
-- RouterAgent async methods (activate_conversation, handle_message, etc.)
-- AgentDatabase async operations (all `a_*` methods)
-- Background Processor task execution
-- LLM Service async inference calls
-- Concurrent async operations
-- Error handling in async context
+**Four-Layer Strategy:**
+1. **Static Analysis**: `python check_async.py` - Immediate feedback (3-5 sec)
+2. **Runtime Warnings**: Test execution with warning capture
+3. **Pre-commit Hooks**: Automatic validation on `git commit`
+4. **Integration Tests**: End-to-end async execution flows
 
-**Performance Target:** <5 seconds
+**Key Tests:**
+- `TestUpdatePlannerNextTaskAndQueue` - Critical async function validation
+- `TestTaskFunctionAsyncCorrectness` - Task execution with real database
+- `TestAsyncContextManagerCorrectness` - Async context manager validation
+- `TestConcurrentAsyncOperations` - Concurrent execution correctness
 
-### 2. Import Structure (`test_import_structure.py`)
+**Enhanced Unit Tests:**
+- `test_task_execution.py` - Now includes `AsyncWarningCaptureMixin`
+- Automatic detection via `@async_warning_test` decorator
+- Real database operations (in-memory) instead of mocks for critical paths
+
+**Performance Target:** <15 seconds (includes real async execution)
+
+### 2. Hybrid Async Execution (`test_hybrid_async_execution.py`) ⭐ NEW  
+**Purpose:** Advanced async testing with hybrid mocking strategy and performance analysis
+
+**Hybrid Mocking Strategy:**
+- **Mock**: External services (LLM API calls, file I/O operations)  
+- **Real**: Internal async functions, database operations, task queueing
+- **Result**: Test real async execution paths while avoiding external dependencies
+
+**Key Tests:**
+- `TestHybridPlannerAsyncExecution` - Real planner function execution with mocked externals
+- `TestHybridWorkerAsyncExecution` - Worker task execution with real async flow  
+- `TestAsyncPerformanceAnalysis` - Performance benchmarking and concurrency analysis
+
+**Advanced Features:**
+- Performance measurement with `measure_async_performance()`
+- Concurrent execution overhead analysis  
+- Real database operations with temporary files
+- Comprehensive async warning detection across complex execution paths
+
+**Performance Target:** <3 seconds (optimised for rapid execution)
+
+### 3. Import Structure (`test_import_structure.py`)
 **Purpose:** Ensure all modules import correctly without circular dependencies
 
 **Tests:**
@@ -116,7 +221,7 @@ docker-compose exec backend uv run python tests/run_tests.py --all --verbose --f
 
 **Performance Target:** <1 second
 
-### 3. Database Operations (`test_database_operations.py`)
+### 4. Database Operations (`test_database_operations.py`)
 **Purpose:** Validate core async database functionality
 
 **Tests:**
@@ -130,7 +235,7 @@ docker-compose exec backend uv run python tests/run_tests.py --all --verbose --f
 
 **Performance Target:** <3 seconds
 
-### 4. RouterAgent (`test_router_agent.py`)
+### 5. RouterAgent (`test_router_agent.py`)
 **Purpose:** Validate ephemeral router lifecycle and operations
 
 **Tests:**
@@ -144,7 +249,7 @@ docker-compose exec backend uv run python tests/run_tests.py --all --verbose --f
 
 **Performance Target:** <5 seconds
 
-### 5. Task Execution (`test_task_execution.py`)
+### 6. Task Execution (`test_task_execution.py`)
 **Purpose:** Validate function-based task system
 
 **Tests:**
@@ -157,7 +262,7 @@ docker-compose exec backend uv run python tests/run_tests.py --all --verbose --f
 
 **Performance Target:** <5 seconds
 
-### 6. File Manager (`test_file_manager.py`)
+### 7. File Manager (`test_file_manager.py`)
 **Purpose:** Test file storage and retrieval operations
 
 **Tests:**
@@ -171,7 +276,7 @@ docker-compose exec backend uv run python tests/run_tests.py --all --verbose --f
 
 **Performance Target:** <5 seconds
 
-### 7. WebSocket Communication (`test_websocket_communication.py`)
+### 8. WebSocket Communication (`test_websocket_communication.py`)
 **Purpose:** Validate real-time WebSocket communication
 
 **Tests:**
@@ -185,7 +290,7 @@ docker-compose exec backend uv run python tests/run_tests.py --all --verbose --f
 
 **Performance Target:** <5 seconds
 
-### 8. API Endpoints (`test_api_endpoints.py`)
+### 9. API Endpoints (`test_api_endpoints.py`)
 **Purpose:** Ensure FastAPI endpoints work correctly
 
 **Tests:**
@@ -207,28 +312,74 @@ docker-compose exec backend uv run python tests/run_tests.py --all --verbose --f
 
 The test runner provides performance warnings when targets are exceeded.
 
+## 🧪 Async Testing Utilities (`async_test_utils.py`)
+
+### Core Components
+
+**`AsyncWarningCaptureMixin`**
+```python  
+class MyTest(unittest.IsolatedAsyncioTestCase, AsyncWarningCaptureMixin):
+    @async_warning_test  # Automatic async warning detection
+    async def test_my_function(self):
+        result = await my_async_function()  # Will fail if warnings detected
+        self.assertTrue(result)
+```
+
+**Manual Warning Capture**
+```python
+async with self.capture_async_warnings() as warnings_list:
+    coroutine = my_function()  # Missing await - intentional for testing
+    coroutine.close()
+    
+self.assert_has_unawaited_coroutines(warnings_list)  # Verify warnings captured
+```
+
+**Utility Functions**
+- `run_with_warning_check()` - Quick async function validation
+- `@async_warning_test` - Decorator for automatic warning detection
+- `AsyncTestCase` - Combined async testing with warning capture
+
+### Integration Strategy
+
+**For New Tests:**
+```python
+from tests.async_test_utils import AsyncWarningCaptureMixin, async_warning_test
+
+class TestMyAsyncFeature(unittest.IsolatedAsyncioTestCase, AsyncWarningCaptureMixin):
+    @async_warning_test
+    async def test_feature_async_correctness(self):
+        # Test will automatically fail if async warnings detected
+        pass
+```
+
+**For Existing Tests:**
+- Add `AsyncWarningCaptureMixin` to test classes
+- Use `@async_warning_test` decorator on critical async tests
+- Replace heavy database mocks with in-memory databases for async paths
+
 ## Design Principles
 
-### Lightweight Focus
-- Mock external dependencies (LLM APIs, file I/O, WebSocket connections)
-- Use in-memory databases for speed
-- Focus on vanilla flow testing, not comprehensive edge cases
-- Rapid execution for immediate feedback
+### Async-First Testing (NEW)
+- **Static Analysis First**: Catch issues before execution
+- **Runtime Warning Detection**: Validate real async execution  
+- **Selective Mocking**: Mock external services, use real internal async functions
+- **Pre-commit Protection**: Block commits with async issues
 
-### Error Detection Priority
-✅ Missing `await` keywords  
-✅ Import errors and circular dependencies  
-✅ Database connection failures  
-✅ WebSocket communication breaks  
-✅ Task execution failures  
-✅ File processing errors  
-✅ API integration issues  
+### Multi-Layer Validation
+✅ **Missing `await` keywords** (Static + Runtime + Hooks + Integration)
+✅ **Import errors and circular dependencies** (Static + Unit)  
+✅ **Database connection failures** (Runtime + Integration)  
+✅ **WebSocket communication breaks** (Unit + Integration)  
+✅ **Task execution failures** (All Layers)  
+✅ **File processing errors** (Unit + Integration)  
+✅ **API integration issues** (Unit + Integration)
 
-### Test Patterns
-- `unittest.IsolatedAsyncioTestCase` for async support
-- Extensive use of `AsyncMock` for async components
-- Temporary directories and in-memory databases for isolation
-- Proper setup/teardown with resource cleanup
+### Enhanced Test Patterns
+- `AsyncWarningCaptureMixin` for runtime async validation
+- `@async_warning_test` decorator for automatic detection
+- **Hybrid mocking**: Mock external services, real internal async functions
+- In-memory databases for async execution paths
+- Warning capture context managers
 
 ## Two-Tier Testing Strategy
 
@@ -247,12 +398,23 @@ The test suite implements a two-tier approach balancing speed and comprehensiven
 - **Focus:** System integration, performance characteristics, real-world scenarios
 
 ### Integration Test Suites
+
+**Existing Integration Tests:**
 - `test_background_processor_efficiency.py` - Performance and efficiency validation
 - `test_concurrent_planner_execution.py` - Complex concurrency scenarios  
 - `test_multiple_conversations_concurrent.py` - Multi-router isolation testing
 - `test_fastapi_immediate_response.py` - API endpoint integration
 - `test_file_storage.py` - End-to-end file operations
 - `test_websocket_updates_execution.py` - Full WebSocket workflows
+
+**Phase 4: Enhanced Integration Testing for Real Async Execution:**
+- `test_lightweight_async_flows.py` (30s) - Critical async paths with real database ops
+- `test_agent_activation_e2e.py` (35s) - Complete "Agents assemble!" flow validation
+- `test_concurrent_async_operations.py` (45s) - Race condition detection & concurrent validation
+- `test_websocket_async_communication.py` (40s) - WebSocket async integrity & performance
+
+**Phase 6: End-to-End Validation & Performance Optimization:**
+- `test_end_to_end_async_prevention.py` (60s) - Complete multi-layer validation effectiveness testing
 
 ## Running Tests in CI/CD
 
@@ -355,13 +517,52 @@ import logging
 logging.basicConfig(level=logging.DEBUG)
 ```
 
+## ⚡ Async Validation Quick Reference
+
+### Essential Commands
+```bash
+# Daily development
+python check_async.py                    # Quick async check (3-5 sec)
+python setup_hooks.py                    # One-time hook setup  
+git commit -m "changes"                  # Auto-validation
+
+# Debugging async issues
+python check_async.py --file worker_tasks.py  # Focus on specific file
+python check_async.py --mypy-only             # Type checking only
+python check_async.py --ruff-only             # Style checking only
+
+# Testing async validation
+docker-compose exec backend uv run python -m pytest tests/unit/test_async_validation.py -v
+```
+
+### Error Interpretation
+```bash
+# MyPy: Missing await
+"Maybe you forgot to use 'await'?" → Add await to async call
+
+# Ruff: Blocking call  
+"ASYNC251: Blocking sleep in async function" → Use asyncio.sleep()
+
+# Runtime: Unawaited coroutine
+"was never awaited" → Function called without await
+```
+
+### Files to Know
+- `check_async.py` - Quick async validation script
+- `setup_hooks.py` - Pre-commit hook installer  
+- `async_test_utils.py` - Testing utilities and mixins
+- `docs/async_testing_strategy.md` - Complete strategy guide
+- `.pre-commit-config.yaml` - Git hook configuration
+
 ## Maintenance Guidelines
 
-1. **Add tests for new async functions immediately**
-2. **Keep tests lightweight - mock heavy operations**
-3. **Focus on catching breaking changes, not perfection**
-4. **Run after every code change before manual testing**
-5. **Update when architecture changes occur**
+1. **NEW: Install hooks immediately**: `python setup_hooks.py`
+2. **NEW: Run async checks before commits**: `python check_async.py`
+3. **Add tests for new async functions with warning capture**
+4. **Use hybrid mocking**: Mock external services, real internal async functions
+5. **Focus on async correctness as top priority**
+6. **Update async tests when architecture changes occur**
+7. **Monitor pre-commit hook effectiveness and performance**
 
 ## Performance Monitoring
 

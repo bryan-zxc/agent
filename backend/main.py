@@ -37,14 +37,19 @@ load_dotenv(".env.local")  # Loads .env.local and overrides any duplicates
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize database
-db = AgentDatabase()
+# Database will be initialized in lifespan context
+db = None
 
 # Create lifespan handler before FastAPI app
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage FastAPI application lifespan - startup and shutdown"""
-    # Startup
+    # Startup: Initialize database with factory method
+    global db
+    logger.info("Initializing database...")
+    db = await AgentDatabase.create()
+    logger.info("Database initialized successfully")
+    
     logger.info("Starting background processor...")
     
     # Clear task queue on startup to prevent stale tasks from previous runs
@@ -390,7 +395,7 @@ async def health_check():
 async def get_routers():
     """Get all routers"""
     try:
-        db = AgentDatabase()
+        # Use the global db instance
         routers = await db.get_all_routers()
         
         # Transform to match expected API format
@@ -413,7 +418,11 @@ async def get_router(router_id: str):
     """Get router history"""
     try:
         router = RouterAgent(router_id=router_id)
-        return {"router_id": router_id, "messages": router.messages}
+        # Load existing router state to initialise MessageManager
+        await router._load_existing_state()
+        # Get messages through MessageManager
+        messages = await router.message_manager.get_messages()
+        return {"router_id": router_id, "messages": messages}
     except Exception as e:
         logger.error(f"Error fetching router: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -441,7 +450,7 @@ async def activate_router(router_id: str, request: dict):
         # Router state is persisted in database, not memory
 
         # Get the conversation messages to return the assistant's response
-        messages = router.messages
+        messages = await router.message_manager.get_messages()
         assistant_response = (
             messages[-1]["content"]
             if messages and messages[-1]["role"] == "assistant"

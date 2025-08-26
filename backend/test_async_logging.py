@@ -49,71 +49,59 @@ async def successful_task():
     return "success"
 
 
-async def test_taskgroup_logging():
-    """Test TaskGroup error logging with multiple failing tasks"""
-    logger.info("=== Testing TaskGroup with multiple failing tasks ===")
+import unittest
+
+class TestAsyncLogging(unittest.IsolatedAsyncioTestCase):
+    """Test async logging functionality."""
     
-    try:
-        async with TaskGroupWithLogging("test_multiple_failures") as tg:
-            tg.create_task(failing_task_1(), name="failing_task_1")
-            tg.create_task(failing_task_2(), name="failing_task_2") 
-            tg.create_task(successful_task(), name="successful_task")
-    except* ValueError as exc_group:
-        logger.info("Caught ValueError exception group as expected")
-    except* RuntimeError as exc_group:
-        logger.info("Caught RuntimeError exception group as expected")  
-    except BaseExceptionGroup as exc_group:
-        logger.info("Caught base exception group as expected")
+    async def test_taskgroup_logging(self):
+        """Test TaskGroup error logging with multiple failing tasks"""
+        logger.info("=== Testing TaskGroup with multiple failing tasks ===")
+        
+        try:
+            async with TaskGroupWithLogging("test_multiple_failures") as tg:
+                tg.create_task(failing_task_1(), name="failing_task_1")
+                tg.create_task(failing_task_2(), name="failing_task_2") 
+                tg.create_task(successful_task(), name="successful_task")
+        except BaseExceptionGroup as exc_group:
+            logger.info("Caught exception group as expected")
 
 
-async def test_standard_taskgroup_logging():
-    """Test standard TaskGroup error logging function"""
-    logger.info("=== Testing standard TaskGroup error logging ===")
-    
-    try:
-        async with asyncio.TaskGroup() as tg:
-            tg.create_task(failing_task_1())
-            tg.create_task(successful_task())
-    except BaseExceptionGroup as exc:
-        log_taskgroup_errors(exc, "test_standard_taskgroup")
+    async def test_standard_taskgroup_logging(self):
+        """Test standard TaskGroup error logging function"""
+        logger.info("=== Testing standard TaskGroup error logging ===")
+        
+        try:
+            async with asyncio.TaskGroup() as tg:
+                tg.create_task(failing_task_1())
+                tg.create_task(successful_task())
+        except BaseExceptionGroup as exc:
+            log_taskgroup_errors(exc, "test_standard_taskgroup")
 
 
-async def test_context_manager_logging():
-    """Test the context manager for async error logging"""
-    logger.info("=== Testing async context manager logging ===")
-    
-    try:
-        async with log_async_errors("context_manager_test"):
-            await failing_task_1()
-    except ValueError:
-        logger.info("Caught ValueError as expected")
+    async def test_context_manager_logging(self):
+        """Test the context manager for async error logging"""
+        logger.info("=== Testing async context manager logging ===")
+        
+        try:
+            async with log_async_errors("context_manager_test"):
+                await failing_task_1()
+        except ValueError:
+            logger.info("Caught ValueError as expected")
 
 
-async def test_function_wrapper_logging():
-    """Test the function wrapper for detailed logging"""
-    logger.info("=== Testing function wrapper logging ===")
-    
-    try:
-        await run_with_detailed_logging(
-            failing_task_2, 
-            context="function_wrapper_test"
-        )
-    except RuntimeError:
-        logger.info("Caught RuntimeError as expected")
-
-
-async def main():
-    """Run all tests"""
-    logger.info("Starting async error logging tests...")
-    
-    # Test different scenarios
-    await test_taskgroup_logging()
-    await test_standard_taskgroup_logging()
-    await test_context_manager_logging()
-    await test_function_wrapper_logging()
-    
-    logger.info("All async error logging tests completed!")
+    async def test_function_wrapper_logging(self):
+        """Test the function wrapper for detailed logging"""
+        logger.info("=== Testing function wrapper logging ===")
+        
+        try:
+            await run_with_detailed_logging(
+                failing_task_2, 
+                context="function_wrapper_test"
+            )
+        except RuntimeError:
+            logger.info("Caught RuntimeError as expected")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    unittest.main()

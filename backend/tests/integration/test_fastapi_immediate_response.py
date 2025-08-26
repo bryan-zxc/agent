@@ -36,10 +36,7 @@ class TestFastAPIImmediateResponse(unittest.TestCase):
         settings.collaterals_base_path = self.test_dir
         
         # Set up in-memory database for testing
-        self.db = AgentDatabase()
-        self.db.engine = self.db.create_engine("sqlite:///:memory:")
-        self.db.Base.metadata.create_all(self.db.engine)
-        self.db.SessionLocal = self.db.sessionmaker(bind=self.db.engine)
+        self.db = AgentDatabase(":memory:")
         
         # Response time tracking
         self.response_times = []

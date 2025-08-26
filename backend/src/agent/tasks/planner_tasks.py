@@ -269,7 +269,7 @@ async def execute_initial_planning(task_data: dict):
     payload = task_data.get("payload", {})
 
     # Check if this is a resume scenario (planner already exists)
-    db = AgentDatabase()
+    db = await AgentDatabase.create()
     existing_planner = await db.get_planner(planner_id) if planner_id else None
 
     if existing_planner:
@@ -277,7 +277,7 @@ async def execute_initial_planning(task_data: dict):
             f"Planner {planner_id} already exists - resuming execution, skipping initialisation"
         )
         # Queue next task: task creation (planner already initialised)
-        update_planner_next_task_and_queue(planner_id, "execute_task_creation")
+        await update_planner_next_task_and_queue(planner_id, "execute_task_creation")
         return
 
     # New planner scenario - create new planner
@@ -574,7 +574,7 @@ async def execute_initial_planning(task_data: dict):
         logger.info(f"Planner {planner_id}\nexecution plan: {execution_plan_markdown}")
 
         # Queue next task: task creation
-        update_planner_next_task_and_queue(planner_id, "execute_task_creation")
+        await update_planner_next_task_and_queue(planner_id, "execute_task_creation")
 
     except Exception as e:
         logger.error(f"Initial planning failed for planner {planner_id}: {e}")
@@ -591,7 +591,7 @@ async def execute_task_creation(task_data: dict):
     planner_id = task_data["entity_id"]
     logger.info(f"Starting task creation for planner {planner_id}")
 
-    db = AgentDatabase()
+    db = await AgentDatabase.create()
     planner_data = await db.get_planner(planner_id)
 
     if not planner_data:
@@ -710,7 +710,7 @@ async def execute_task_creation(task_data: dict):
         await db.update_planner(planner_id, next_task="waiting_for_worker")
 
         # Queue worker initialisation (worker will load task and create worker record)
-        queue_worker_task(worker_id, planner_id, "worker_initialisation")
+        await queue_worker_task(worker_id, planner_id, "worker_initialisation")
 
         logger.info(
             f"Created and queued worker initialisation for worker {worker_id}, planner {planner_id}"
@@ -816,7 +816,7 @@ async def execute_synthesis(task_data: dict):
     planner_id = task_data["entity_id"]
     logger.info(f"Starting synthesis for planner {planner_id}")
 
-    db = AgentDatabase()
+    db = await AgentDatabase.create()
     planner_data = await db.get_planner(planner_id)
 
     if not planner_data:
@@ -1116,7 +1116,7 @@ async def execute_synthesis(task_data: dict):
         logger.info(f"Synthesis completed for planner {planner_id}")
 
         # Queue next task: task creation (to continue planning cycle)
-        update_planner_next_task_and_queue(planner_id, "execute_task_creation")
+        await update_planner_next_task_and_queue(planner_id, "execute_task_creation")
 
     except Exception as e:
         logger.error(f"Synthesis failed for planner {planner_id}: {e}")

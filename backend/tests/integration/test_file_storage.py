@@ -10,7 +10,7 @@ import tempfile
 import uuid
 import shutil
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 import pickle
 
 # Import the modules under test
@@ -34,7 +34,7 @@ from agent.tasks.file_manager import (
 from agent.config.settings import settings
 
 
-class TestFileStorage(unittest.TestCase):
+class TestFileStorage(unittest.IsolatedAsyncioTestCase):
     """Test file storage operations for variables and images."""
     
     def setUp(self):
@@ -150,49 +150,49 @@ class TestFileStorage(unittest.TestCase):
         self.assertIsNone(loaded_data)
 
     @patch('agent.tasks.file_manager.AgentDatabase')
-    def test_save_planner_variable(self, mock_db_class):
+    async def test_save_planner_variable(self, mock_db_class):
         """Test saving planner variable with database integration."""
         # Mock database
-        mock_db = MagicMock()
+        mock_db = AsyncMock()
         mock_db_class.return_value = mock_db
         mock_db.get_planner.return_value = {"variable_file_paths": {}}
         
         # Test save
-        file_path, final_key = save_planner_variable(self.planner_id, "test_var", self.test_variable_data)
+        file_path, final_key = await save_planner_variable(self.planner_id, "test_var", self.test_variable_data)
         
         # Verify file was created
         self.assertTrue(Path(file_path).exists())
         self.assertEqual(final_key, "test_var")
         
         # Verify database was updated
-        mock_db.update_planner_file_paths.assert_called_once()
-        call_args = mock_db.update_planner_file_paths.call_args
+        mock_db.update_planner.assert_called_once()
+        call_args = mock_db.update_planner.call_args
         self.assertEqual(call_args[0][0], self.planner_id)  # planner_id
-        self.assertIn("variable_paths", call_args[1])  # variable_paths in kwargs
+        self.assertIn("variable_file_paths", call_args[1])  # variable_file_paths in kwargs
 
     @patch('agent.tasks.file_manager.AgentDatabase')
-    def test_save_planner_image(self, mock_db_class):
+    async def test_save_planner_image(self, mock_db_class):
         """Test saving planner image with database integration."""
         # Mock database
-        mock_db = MagicMock()
+        mock_db = AsyncMock()
         mock_db_class.return_value = mock_db
         mock_db.get_planner.return_value = {"image_file_paths": {}}
         
         # Test save
-        file_path, final_key = save_planner_image(self.planner_id, "test_img", self.test_image_data)
+        file_path, final_key = await save_planner_image(self.planner_id, "test_img", self.test_image_data)
         
         # Verify file was created
         self.assertTrue(Path(file_path).exists())
         self.assertEqual(final_key, "test_img")
         
         # Verify database was updated
-        mock_db.update_planner_file_paths.assert_called_once()
-        call_args = mock_db.update_planner_file_paths.call_args
+        mock_db.update_planner.assert_called_once()
+        call_args = mock_db.update_planner.call_args
         self.assertEqual(call_args[0][0], self.planner_id)  # planner_id
-        self.assertIn("image_paths", call_args[1])  # image_paths in kwargs
+        self.assertIn("image_file_paths", call_args[1])  # image_file_paths in kwargs
 
     @patch('agent.tasks.file_manager.AgentDatabase')
-    def test_get_planner_variable(self, mock_db_class):
+    async def test_get_planner_variable(self, mock_db_class):
         """Test retrieving planner variable."""
         # Create test file
         test_file = Path(self.test_dir) / "test_var.pkl"
@@ -201,18 +201,18 @@ class TestFileStorage(unittest.TestCase):
             pickle.dump(self.test_variable_data, f)
         
         # Mock database
-        mock_db = MagicMock()
+        mock_db = AsyncMock()
         mock_db_class.return_value = mock_db
         mock_db.get_planner.return_value = {
             "variable_file_paths": {"test_var": str(test_file)}
         }
         
         # Test retrieval
-        result = get_planner_variable(self.planner_id, "test_var")
+        result = await get_planner_variable(self.planner_id, "test_var")
         self.assertEqual(result, self.test_variable_data)
 
     @patch('agent.tasks.file_manager.AgentDatabase')
-    def test_get_planner_image(self, mock_db_class):
+    async def test_get_planner_image(self, mock_db_class):
         """Test retrieving planner image."""
         # Create test file
         test_file = Path(self.test_dir) / "test_img.b64"
@@ -220,14 +220,14 @@ class TestFileStorage(unittest.TestCase):
         test_file.write_text(self.test_image_data)
         
         # Mock database
-        mock_db = MagicMock()
+        mock_db = AsyncMock()
         mock_db_class.return_value = mock_db
         mock_db.get_planner.return_value = {
             "image_file_paths": {"test_img": str(test_file)}
         }
         
         # Test retrieval
-        result = get_planner_image(self.planner_id, "test_img")
+        result = await get_planner_image(self.planner_id, "test_img")
         self.assertEqual(result, self.test_image_data)
 
     def test_cleanup_planner_files(self):
@@ -275,19 +275,19 @@ class TestFileStorage(unittest.TestCase):
         self.assertEqual(clean_image_name("existing_image", existing_names), "existing_image_1")
 
     @patch('agent.tasks.file_manager.AgentDatabase')
-    def test_collision_avoidance_variables(self, mock_db_class):
+    async def test_collision_avoidance_variables(self, mock_db_class):
         """Test collision avoidance for variables."""
         # Mock database
-        mock_db = MagicMock()
+        mock_db = AsyncMock()
         mock_db_class.return_value = mock_db
         mock_db.get_planner.return_value = {"variable_file_paths": {}}
         
         # Save first variable
-        file_path1, key1 = save_planner_variable(self.planner_id, "test_var", {"data": 1})
+        file_path1, key1 = await save_planner_variable(self.planner_id, "test_var", {"data": 1})
         self.assertEqual(key1, "test_var")
         
         # Save second variable with same name but collision checking
-        file_path2, key2 = save_planner_variable(self.planner_id, "test_var", {"data": 2}, check_existing=True)
+        file_path2, key2 = await save_planner_variable(self.planner_id, "test_var", {"data": 2}, check_existing=True)
         self.assertNotEqual(key2, "test_var")
         self.assertTrue(key2.startswith("test_var_"))
         
@@ -297,19 +297,19 @@ class TestFileStorage(unittest.TestCase):
         self.assertNotEqual(file_path1, file_path2)
 
     @patch('agent.tasks.file_manager.AgentDatabase')
-    def test_collision_avoidance_images(self, mock_db_class):
+    async def test_collision_avoidance_images(self, mock_db_class):
         """Test collision avoidance for images."""
         # Mock database
-        mock_db = MagicMock()
+        mock_db = AsyncMock()
         mock_db_class.return_value = mock_db
         mock_db.get_planner.return_value = {"image_file_paths": {}}
         
         # Save first image
-        file_path1, key1 = save_planner_image(self.planner_id, "test_img", "image_data_1")
+        file_path1, key1 = await save_planner_image(self.planner_id, "test_img", "image_data_1")
         self.assertEqual(key1, "test_img")
         
         # Save second image with same name but collision checking
-        file_path2, key2 = save_planner_image(self.planner_id, "test_img", "image_data_2", check_existing=True)
+        file_path2, key2 = await save_planner_image(self.planner_id, "test_img", "image_data_2", check_existing=True)
         self.assertNotEqual(key2, "test_img")
         self.assertTrue(key2.startswith("test_img_"))
         
@@ -319,7 +319,7 @@ class TestFileStorage(unittest.TestCase):
         self.assertNotEqual(file_path1, file_path2)
 
     @patch('agent.tasks.file_manager.AgentDatabase')
-    def test_get_planner_variables_multiple(self, mock_db_class):
+    async def test_get_planner_variables_multiple(self, mock_db_class):
         """Test retrieving multiple planner variables."""
         # Create multiple test files
         var_dir = Path(self.test_dir) / "variables"
@@ -339,19 +339,19 @@ class TestFileStorage(unittest.TestCase):
             file_paths[var_name] = str(file_path)
         
         # Mock database
-        mock_db = MagicMock()
+        mock_db = AsyncMock()
         mock_db_class.return_value = mock_db
         mock_db.get_planner.return_value = {"variable_file_paths": file_paths}
         
         # Test retrieval
-        result = get_planner_variables(self.planner_id)
+        result = await get_planner_variables(self.planner_id)
         self.assertEqual(len(result), 3)
         for var_name, expected_data in test_data.items():
             self.assertIn(var_name, result)
             self.assertEqual(result[var_name], expected_data)
 
     @patch('agent.tasks.file_manager.AgentDatabase')
-    def test_get_planner_images_multiple(self, mock_db_class):
+    async def test_get_planner_images_multiple(self, mock_db_class):
         """Test retrieving multiple planner images."""
         # Create multiple test files
         img_dir = Path(self.test_dir) / "images"
@@ -370,12 +370,12 @@ class TestFileStorage(unittest.TestCase):
             file_paths[img_name] = str(file_path)
         
         # Mock database
-        mock_db = MagicMock()
+        mock_db = AsyncMock()
         mock_db_class.return_value = mock_db
         mock_db.get_planner.return_value = {"image_file_paths": file_paths}
         
         # Test retrieval
-        result = get_planner_images(self.planner_id)
+        result = await get_planner_images(self.planner_id)
         self.assertEqual(len(result), 3)
         for img_name, expected_data in test_data.items():
             self.assertIn(img_name, result)

@@ -171,7 +171,7 @@ async def save_planner_variable(planner_id: str, key: str, value: Any, check_exi
     
     if save_variable_to_file(file_path, value):
         # Update database with file path using the final key
-        db = AgentDatabase()
+        db = await AgentDatabase.create()
         planner = await db.get_planner(planner_id)
         if planner:
             variable_paths = planner.get("variable_file_paths", {})
@@ -234,7 +234,7 @@ async def save_planner_image(planner_id: str, raw_image_name: str, encoded_image
         tuple: (file_path, final_image_name_used)
     """
     # Get current image names from database to avoid duplicates
-    db = AgentDatabase()
+    db = await AgentDatabase.create()
     planner = await db.get_planner(planner_id)
     existing_image_paths = planner.get("image_file_paths", {}) if planner else {}
     existing_names = set(existing_image_paths.keys())
@@ -257,10 +257,10 @@ async def save_planner_image(planner_id: str, raw_image_name: str, encoded_image
         raise Exception(f"Failed to save image '{final_image_name}' for planner {planner_id}")
 
 
-def get_planner_variable(planner_id: str, key: str) -> Any:
+async def get_planner_variable(planner_id: str, key: str) -> Any:
     """Lazy load a specific variable for a planner"""
-    db = AgentDatabase()
-    planner = db.get_planner(planner_id)
+    db = await AgentDatabase.create()
+    planner = await db.get_planner(planner_id)
     
     if not planner:
         logger.warning(f"Planner {planner_id} not found")
@@ -275,10 +275,10 @@ def get_planner_variable(planner_id: str, key: str) -> Any:
     return load_variable_from_file(variable_paths[key])
 
 
-def get_planner_image(planner_id: str, key: str) -> Optional[str]:
+async def get_planner_image(planner_id: str, key: str) -> Optional[str]:
     """Lazy load a specific image for a planner"""
-    db = AgentDatabase()
-    planner = db.get_planner(planner_id)
+    db = await AgentDatabase.create()
+    planner = await db.get_planner(planner_id)
     
     if not planner:
         logger.warning(f"Planner {planner_id} not found")
@@ -293,33 +293,9 @@ def get_planner_image(planner_id: str, key: str) -> Optional[str]:
     return load_image_from_file(image_paths[key])
 
 
-def get_planner_variable_keys(planner_id: str) -> list[str]:
-    """Get list of available variable keys for a planner"""
-    db = AgentDatabase()
-    planner = db.get_planner(planner_id)
-    
-    if not planner:
-        return []
-    
-    variable_paths = planner.get("variable_file_paths", {})
-    return list(variable_paths.keys())
-
-
-def get_planner_image_keys(planner_id: str) -> list[str]:
-    """Get list of available image keys for a planner"""
-    db = AgentDatabase()
-    planner = db.get_planner(planner_id)
-    
-    if not planner:
-        return []
-    
-    image_paths = planner.get("image_file_paths", {})
-    return list(image_paths.keys())
-
-
 async def get_planner_variables(planner_id: str) -> Dict[str, Any]:
     """Load all variables for a planner"""
-    db = AgentDatabase()
+    db = await AgentDatabase.create()
     planner = await db.get_planner(planner_id)
     
     if not planner:
@@ -341,7 +317,7 @@ async def get_planner_variables(planner_id: str) -> Dict[str, Any]:
 
 async def get_planner_images(planner_id: str) -> Dict[str, str]:
     """Load all images for a planner"""
-    db = AgentDatabase()
+    db = await AgentDatabase.create()
     planner = await db.get_planner(planner_id)
     
     if not planner:

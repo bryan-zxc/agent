@@ -297,7 +297,7 @@ class TestConcurrentPlannerExecution(unittest.IsolatedAsyncioTestCase):
                 ))
                 
                 # Queue worker task
-                success = queue_worker_task(worker_id, planner_id, "worker_initialisation")
+                success = asyncio.run(queue_worker_task(worker_id, planner_id, "worker_initialisation"))
                 
                 if success:
                     created_workers.append(worker_id)

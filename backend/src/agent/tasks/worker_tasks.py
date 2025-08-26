@@ -214,7 +214,7 @@ async def worker_initialisation(task_data: dict):
         f"Starting worker initialisation for worker {worker_id}, planner {planner_id}"
     )
 
-    db = AgentDatabase()
+    db = await AgentDatabase.create()
 
     # Check if this is a resume scenario (worker already exists)
     existing_worker = await db.get_worker(worker_id)
@@ -224,7 +224,7 @@ async def worker_initialisation(task_data: dict):
             f"Worker {worker_id} already exists - resuming execution, skipping initialisation"
         )
         # Queue worker execution task (worker already initialised)
-        update_worker_next_task_and_queue(worker_id, "execute_worker_task")
+        await update_worker_next_task_and_queue(worker_id, "execute_worker_task")
         return
 
     try:
@@ -390,9 +390,9 @@ async def worker_initialisation(task_data: dict):
 
         # Queue worker execution task based on worker type
         if querying_structured_data:
-            update_worker_next_task_and_queue(worker_id, "execute_sql_worker")
+            await update_worker_next_task_and_queue(worker_id, "execute_sql_worker")
         else:
-            update_worker_next_task_and_queue(worker_id, "execute_standard_worker")
+            await update_worker_next_task_and_queue(worker_id, "execute_standard_worker")
 
         logger.info(
             f"Worker initialisation completed for worker {worker_id}, queued worker execution"
@@ -406,7 +406,7 @@ async def worker_initialisation(task_data: dict):
         except:
             pass
         # Update planner to continue despite worker failure
-        update_planner_next_task_and_queue(planner_id, "execute_synthesis")
+        await update_planner_next_task_and_queue(planner_id, "execute_synthesis")
         raise
 
 
@@ -426,7 +426,7 @@ async def execute_standard_worker(task_data: dict):
 
     logger.info(f"Starting standard worker execution attempt for worker {worker_id}")
 
-    db = AgentDatabase()
+    db = await AgentDatabase.create()
 
     # Load worker state from database
     worker_data = await db.get_worker(worker_id)
@@ -490,7 +490,7 @@ async def execute_standard_worker(task_data: dict):
 
                 # Queue retry if attempts remain
                 if current_attempt < max_retry:
-                    update_worker_next_task_and_queue(
+                    await update_worker_next_task_and_queue(
                         worker_id, "execute_standard_worker"
                     )
                 else:
@@ -500,7 +500,7 @@ async def execute_standard_worker(task_data: dict):
                         task_status="failed_validation",
                         task_result="Task failed: Malicious code detected after multiple attempts.",
                     )
-                    update_planner_next_task_and_queue(planner_id, "execute_synthesis")
+                    await update_planner_next_task_and_queue(planner_id, "execute_synthesis")
                 return
 
             messages = await message_manager.add_message(
@@ -589,7 +589,7 @@ async def execute_standard_worker(task_data: dict):
 
                             # Queue retry
                             if current_attempt < max_retry:
-                                update_worker_next_task_and_queue(
+                                await update_worker_next_task_and_queue(
                                     worker_id, "execute_standard_worker"
                                 )
                             else:
@@ -622,7 +622,7 @@ async def execute_standard_worker(task_data: dict):
                 )
                 if validated:
                     # Queue planner synthesis on successful completion
-                    update_planner_next_task_and_queue(planner_id, "execute_synthesis")
+                    await update_planner_next_task_and_queue(planner_id, "execute_synthesis")
                     return
 
             else:
@@ -656,7 +656,7 @@ async def execute_standard_worker(task_data: dict):
                         content=f"{failure_message}\\n\\n{sandbox_result['stack_trace']}\\n\\nRequired tool is not available, please supply the task with the required tool and try again.",
                     )
                     # Queue synthesis regardless of tool failure
-                    update_planner_next_task_and_queue(planner_id, "execute_synthesis")
+                    await update_planner_next_task_and_queue(planner_id, "execute_synthesis")
                     return
 
                 messages = await message_manager.add_message(
@@ -692,7 +692,7 @@ async def execute_standard_worker(task_data: dict):
                         task_result=failure_message,
                     )
                     # Queue synthesis for repeated failure
-                    update_planner_next_task_and_queue(planner_id, "execute_synthesis")
+                    await update_planner_next_task_and_queue(planner_id, "execute_synthesis")
                     return
 
         else:
@@ -706,7 +706,7 @@ async def execute_standard_worker(task_data: dict):
             )
             if validated:
                 # Queue planner synthesis on successful completion
-                update_planner_next_task_and_queue(planner_id, "execute_synthesis")
+                await update_planner_next_task_and_queue(planner_id, "execute_synthesis")
                 return
 
         # If we reach here, validation failed - check if more retries available
@@ -714,7 +714,7 @@ async def execute_standard_worker(task_data: dict):
             logger.info(
                 f"Worker {worker_id} validation failed, queueing retry {current_attempt + 1}/{max_retry}"
             )
-            update_worker_next_task_and_queue(worker_id, "execute_standard_worker")
+            await update_worker_next_task_and_queue(worker_id, "execute_standard_worker")
         else:
             # All retries exhausted - mark as failed and queue synthesis
             logger.info(
@@ -725,7 +725,7 @@ async def execute_standard_worker(task_data: dict):
                 task_status="failed_validation",
                 task_result="Task failed after multiple tries.",
             )
-            update_planner_next_task_and_queue(planner_id, "execute_synthesis")
+            await update_planner_next_task_and_queue(planner_id, "execute_synthesis")
 
     except Exception as e:
         logger.error(f"Standard worker execution failed for worker {worker_id}: {e}")
@@ -735,7 +735,7 @@ async def execute_standard_worker(task_data: dict):
             task_result=f"Worker execution failed: {str(e)}",
         )
         # Always queue synthesis even on unexpected errors
-        update_planner_next_task_and_queue(planner_id, "execute_synthesis")
+        await update_planner_next_task_and_queue(planner_id, "execute_synthesis")
         raise
 
 
@@ -756,7 +756,7 @@ async def execute_sql_worker(task_data: dict):
 
     logger.info(f"Starting SQL worker execution attempt for worker {worker_id}")
 
-    db = AgentDatabase()
+    db = await AgentDatabase.create()
 
     # Load worker state from database
     worker_data = await db.get_worker(worker_id)
@@ -818,7 +818,7 @@ async def execute_sql_worker(task_data: dict):
                 )
                 if validated:
                     # Queue planner synthesis on successful completion
-                    update_planner_next_task_and_queue(planner_id, "execute_synthesis")
+                    await update_planner_next_task_and_queue(planner_id, "execute_synthesis")
                     return
 
             except Exception as e:
@@ -842,7 +842,7 @@ async def execute_sql_worker(task_data: dict):
                 role="assistant", content=error_message
             )
             # Queue synthesis for SQL generation failure
-            update_planner_next_task_and_queue(planner_id, "execute_synthesis")
+            await update_planner_next_task_and_queue(planner_id, "execute_synthesis")
             return
 
         # If we reach here, validation failed - check if more retries available
@@ -850,7 +850,7 @@ async def execute_sql_worker(task_data: dict):
             logger.info(
                 f"SQL Worker {worker_id} validation failed, queueing retry {current_attempt + 1}/{max_retry}"
             )
-            update_worker_next_task_and_queue(worker_id, "execute_sql_worker")
+            await update_worker_next_task_and_queue(worker_id, "execute_sql_worker")
         else:
             # All retries exhausted - mark as failed and queue synthesis
             logger.info(
@@ -861,7 +861,7 @@ async def execute_sql_worker(task_data: dict):
                 task_status="failed_validation",
                 task_result="SQL task failed after multiple tries.",
             )
-            update_planner_next_task_and_queue(planner_id, "execute_synthesis")
+            await update_planner_next_task_and_queue(planner_id, "execute_synthesis")
 
     except Exception as e:
         logger.error(f"SQL worker execution failed for worker {worker_id}: {e}")
@@ -871,7 +871,7 @@ async def execute_sql_worker(task_data: dict):
             task_result=f"SQL worker execution failed: {str(e)}",
         )
         # Always queue synthesis even on unexpected errors
-        update_planner_next_task_and_queue(planner_id, "execute_synthesis")
+        await update_planner_next_task_and_queue(planner_id, "execute_synthesis")
         raise
     finally:
         # Clean up DuckDB connection

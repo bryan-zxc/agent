@@ -7,18 +7,45 @@ export const useWebSocket = (url?: string) => {
   console.log('useWebSocket called with wsUrl:', wsUrl);
   const ws = useRef<WebSocket | null>(null);
   const reconnectRef = useRef<NodeJS.Timeout | null>(null);
+  const connectionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const shouldReconnect = useRef<boolean>(true);
   const store = useChatStore();
 
   const connect = useCallback(() => {
     try {
+      // Validate WebSocket URL before attempting connection
+      if (!wsUrl || !wsUrl.startsWith('ws://') && !wsUrl.startsWith('wss://')) {
+        const errorMsg = `Invalid WebSocket URL: ${wsUrl}. Expected format: ws://hostname:port/path`;
+        console.error(errorMsg);
+        store.setConnecting(false);
+        store.updateStatus({ status: 'error', message: 'Invalid WebSocket URL configuration' });
+        return;
+      }
+      
       console.log('Creating WebSocket connection to:', wsUrl);
       console.log('Full WebSocket URL being used:', wsUrl);
       store.setConnecting(true);
       ws.current = new WebSocket(wsUrl);
       
+      // Set up connection timeout (10 seconds)
+      connectionTimeoutRef.current = setTimeout(() => {
+        if (ws.current && ws.current.readyState === WebSocket.CONNECTING) {
+          console.error('WebSocket connection timeout after 10 seconds');
+          ws.current.close();
+          store.setConnecting(false);
+          store.updateStatus({ status: 'error', message: 'Connection timeout - backend may be unreachable' });
+        }
+      }, 10000);
+      
       ws.current.onopen = () => {
         console.log('WebSocket connected to:', wsUrl);
+        
+        // Clear connection timeout on successful connection
+        if (connectionTimeoutRef.current) {
+          clearTimeout(connectionTimeoutRef.current);
+          connectionTimeoutRef.current = null;
+        }
+        
         store.setConnected(true);
         store.updateStatus({ status: 'idle', message: 'Connected to agent' });
       };
@@ -132,6 +159,13 @@ export const useWebSocket = (url?: string) => {
 
       ws.current.onclose = () => {
         console.log('WebSocket disconnected');
+        
+        // Clear connection timeout
+        if (connectionTimeoutRef.current) {
+          clearTimeout(connectionTimeoutRef.current);
+          connectionTimeoutRef.current = null;
+        }
+        
         store.setConnected(false);
         store.setConnecting(false);
         store.updateStatus({ status: 'idle', message: 'Disconnected from agent' });
@@ -144,16 +178,41 @@ export const useWebSocket = (url?: string) => {
 
       ws.current.onerror = (error) => {
         console.error('WebSocket error details:', {
-          error,
+          error: error instanceof Event ? {
+            type: error.type,
+            target: error.target,
+            message: 'WebSocket connection failed'
+          } : error,
           wsUrl,
-          readyState: ws.current?.readyState
+          readyState: ws.current?.readyState,
+          readyStateText: ws.current?.readyState === WebSocket.CONNECTING ? 'CONNECTING' :
+                         ws.current?.readyState === WebSocket.OPEN ? 'OPEN' :
+                         ws.current?.readyState === WebSocket.CLOSING ? 'CLOSING' :
+                         ws.current?.readyState === WebSocket.CLOSED ? 'CLOSED' : 'UNKNOWN'
         });
+        
+        // Clear connection timeout on error
+        if (connectionTimeoutRef.current) {
+          clearTimeout(connectionTimeoutRef.current);
+          connectionTimeoutRef.current = null;
+        }
+        
         store.setConnecting(false);
-        store.updateStatus({ status: 'error', message: 'Connection error' });
+        store.updateStatus({ status: 'error', message: 'Connection error - check if backend is running' });
       };
       
     } catch (error) {
-      console.error('Failed to create WebSocket connection:', error);
+      console.error('Failed to create WebSocket connection:', {
+        error: error instanceof Error ? {
+          name: error.name,
+          message: error.message,
+          stack: error.stack
+        } : error,
+        wsUrl,
+        timestamp: new Date().toISOString()
+      });
+      store.setConnecting(false);
+      store.updateStatus({ status: 'error', message: 'Failed to initialise WebSocket connection' });
     }
   }, [wsUrl]); // Remove store functions to prevent recreation
 
@@ -219,6 +278,10 @@ export const useWebSocket = (url?: string) => {
     if (reconnectRef.current) {
       clearTimeout(reconnectRef.current);
       reconnectRef.current = null;
+    }
+    if (connectionTimeoutRef.current) {
+      clearTimeout(connectionTimeoutRef.current);
+      connectionTimeoutRef.current = null;
     }
     if (ws.current) {
       ws.current.close();

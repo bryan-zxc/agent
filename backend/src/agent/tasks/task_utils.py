@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 
-def queue_worker_task(worker_id: str, planner_id: str, function_name: str = "worker_initialisation") -> bool:
+async def queue_worker_task(worker_id: str, planner_id: str, function_name: str = "worker_initialisation") -> bool:
     """
     Queue a worker task for execution.
     
@@ -25,11 +25,11 @@ def queue_worker_task(worker_id: str, planner_id: str, function_name: str = "wor
     
     Returns True if task was queued, False otherwise.
     """
-    db = AgentDatabase()
+    db = await AgentDatabase.create()
     
     # Queue the worker task with planner_id in payload
     task_id = uuid.uuid4().hex
-    success = db.enqueue_task(
+    success = await db.enqueue_task(
         task_id=task_id,
         entity_type="worker",
         entity_id=worker_id,
@@ -45,7 +45,7 @@ def queue_worker_task(worker_id: str, planner_id: str, function_name: str = "wor
         return False
 
 
-def update_worker_next_task_and_queue(worker_id: str, next_function_name: str) -> bool:
+async def update_worker_next_task_and_queue(worker_id: str, next_function_name: str) -> bool:
     """
     Update worker's next task and queue it for execution.
     
@@ -55,16 +55,16 @@ def update_worker_next_task_and_queue(worker_id: str, next_function_name: str) -
         
     Returns True if task was queued, False otherwise.
     """
-    db = AgentDatabase()
+    db = await AgentDatabase.create()
     
     # Update next task in database using main update_worker method
-    if not db.update_worker(worker_id, next_task=next_function_name):
+    if not await db.update_worker(worker_id, next_task=next_function_name):
         logger.error(f"Failed to update next task for worker {worker_id}")
         return False
     
     # Queue the worker task
     task_id = uuid.uuid4().hex
-    success = db.enqueue_task(
+    success = await db.enqueue_task(
         task_id=task_id,
         entity_type="worker",
         entity_id=worker_id,
@@ -80,22 +80,22 @@ def update_worker_next_task_and_queue(worker_id: str, next_function_name: str) -
         return False
 
 
-def update_planner_next_task_and_queue(planner_id: str, next_function_name: str) -> bool:
+async def update_planner_next_task_and_queue(planner_id: str, next_function_name: str) -> bool:
     """
     Update planner's next task and immediately queue it.
     This is the main way task functions chain to the next task.
     Background processor will pick it up within 1 second.
     """
-    db = AgentDatabase()
+    db = await AgentDatabase.create()
     
     # Update next task in database using main update_planner method
-    if not db.update_planner(planner_id, next_task=next_function_name):
+    if not await db.update_planner(planner_id, next_task=next_function_name):
         logger.error(f"Failed to update next task for planner {planner_id}")
         return False
     
     # Queue the task directly - background processor will pick it up
     task_id = uuid.uuid4().hex
-    success = db.enqueue_task(
+    success = await db.enqueue_task(
         task_id=task_id,
         entity_type="planner",
         entity_id=planner_id,
@@ -111,16 +111,21 @@ def update_planner_next_task_and_queue(planner_id: str, next_function_name: str)
         return False
 
 
-def get_router_id_for_planner(planner_id: str) -> Optional[str]:
+async def get_router_id_for_planner(planner_id: str) -> Optional[str]:
     """Get the router ID for a planner"""
-    db = AgentDatabase()
-    return db.get_router_id_for_planner(planner_id)
+    db = await AgentDatabase.create()
+    return await db.get_router_id_for_planner(planner_id)
 
 
-def is_router_busy(router_id: str) -> bool:
+async def is_router_busy(router_id: str) -> bool:
     """Check if a router has any active tasks"""
-    db = AgentDatabase()
-    pending_tasks = db.get_pending_tasks_by_router()
-    return router_id in pending_tasks
+    db = await AgentDatabase.create()
+    # Note: Need to check if get_pending_tasks_by_router exists or use get_pending_tasks
+    pending_tasks = await db.get_pending_tasks()
+    # Check if any pending task belongs to this router
+    for task in pending_tasks:
+        if task.get('router_id') == router_id:
+            return True
+    return False
 
 

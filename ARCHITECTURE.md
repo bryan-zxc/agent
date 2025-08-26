@@ -416,6 +416,362 @@ agent/
 └── README.md
 ```
 
+## Testing Architecture
+
+The Agent System implements a comprehensive **six-layer async/await validation strategy** to prevent runtime errors before they reach production. This testing harness ensures async correctness throughout the development lifecycle.
+
+### Multi-Layer Testing Strategy
+
+```mermaid
+graph TD
+    subgraph "Layer 1: Static Analysis (0.1-5s)"
+        SA1[check_async.py]
+        SA2[Ruff ASYNC rules]
+        SA3[MyPy coroutine checking]
+        SA4[IDE integration]
+    end
+    
+    subgraph "Layer 2: Runtime Warning Tests (5-15s)"
+        RT1[async_test_utils.py]
+        RT2[Enhanced unit tests]
+        RT3[@async_warning_test decorator]
+        RT4[In-memory database testing]
+    end
+    
+    subgraph "Layer 3: Pre-commit Hooks (30-60s)"
+        PC1[.pre-commit-config.yaml]
+        PC2[setup_hooks.py installer]
+        PC3[Automatic git validation]
+        PC4[Commit blocking]
+    end
+    
+    subgraph "Layer 4: Hybrid Mocking (2-3s)"
+        HM1[test_hybrid_async_execution.py]
+        HM2[Real async internal functions]
+        HM3[Mock external services]
+        HM4[Performance benchmarking]
+    end
+    
+    subgraph "Layer 5: Integration Tests (<2min)"
+        IT1[test_lightweight_async_flows.py]
+        IT2[test_agent_activation_e2e.py]
+        IT3[test_concurrent_async_operations.py]
+        IT4[test_websocket_async_communication.py]
+    end
+    
+    subgraph "Layer 6: End-to-End Validation (<3min)"
+        E2E1[test_end_to_end_async_prevention.py]
+        E2E2[Multi-layer effectiveness validation]
+        E2E3[Performance profiling & optimization]
+        E2E4[Success metrics collection]
+    end
+    
+    DEV[Developer Workflow] --> SA1
+    SA1 --> RT1
+    RT1 --> PC1
+    PC1 --> IT1
+    IT1 --> E2E1
+    
+    SA1 --> SA2
+    SA2 --> SA3
+    SA3 --> SA4
+    
+    RT1 --> RT2
+    RT2 --> RT3
+    RT3 --> RT4
+    
+    PC1 --> PC2
+    PC2 --> PC3
+    PC3 --> PC4
+    
+    IT1 --> IT2
+    IT2 --> IT3
+    IT3 --> IT4
+    
+    style SA1 fill:#e1f5fe
+    style RT1 fill:#f3e5f5
+    style PC1 fill:#fff3e0
+    style IT1 fill:#e8f5e8
+```
+
+### Testing Component Architecture
+
+```mermaid
+graph LR
+    subgraph "Development Tools"
+        CA[check_async.py<br/>Quick validation]
+        SH[setup_hooks.py<br/>Hook installer]
+        RU[ruff.toml<br/>Config]
+        MY[mypy.ini<br/>Config]
+    end
+    
+    subgraph "Test Framework"
+        ATU[async_test_utils.py<br/>Warning capture mixins]
+        TAV[test_async_validation.py<br/>Comprehensive suite]
+        TTE[test_task_execution.py<br/>Enhanced with async detection]
+    end
+    
+    subgraph "Quality Gates"
+        PC[.pre-commit-config.yaml<br/>Git hooks]
+        CI[CI/CD Pipeline<br/>Automated validation]
+    end
+    
+    subgraph "Target Code"
+        TC[src/agent/tasks/<br/>Async functions]
+        DB[Database operations<br/>Async methods]
+        RT[Router & messaging<br/>WebSocket async]
+    end
+    
+    CA --> TC
+    ATU --> TAV
+    TAV --> TC
+    TTE --> TC
+    PC --> CA
+    PC --> ATU
+    CI --> PC
+    
+    SH --> PC
+    RU --> CA
+    MY --> CA
+    
+    style CA fill:#e3f2fd
+    style ATU fill:#f3e5f5
+    style PC fill:#fff3e0
+    style TC fill:#e8f5e8
+```
+
+### Error Detection Flow
+
+```mermaid
+sequenceDiagram
+    participant DEV as Developer
+    participant IDE as IDE/Editor
+    participant SA as Static Analysis
+    participant UT as Unit Tests
+    participant GIT as Git Commit
+    participant CI as CI/CD
+    
+    DEV->>IDE: Write async code
+    IDE->>SA: Real-time validation
+    SA-->>IDE: Missing await detected
+    IDE-->>DEV: Show error inline
+    
+    DEV->>DEV: Fix missing await
+    DEV->>UT: Run unit tests
+    UT->>UT: Execute with warning capture
+    
+    alt Async Warning Detected
+        UT-->>DEV: Test fails with warning details
+        DEV->>DEV: Fix async issue
+    else No Warnings
+        UT-->>DEV: Tests pass
+    end
+    
+    DEV->>GIT: git commit
+    GIT->>SA: Pre-commit hooks run
+    
+    alt Async Issues Found
+        SA-->>GIT: Block commit
+        GIT-->>DEV: Show errors, prevent commit
+        DEV->>DEV: Fix issues
+        DEV->>GIT: git commit (retry)
+    else No Issues
+        GIT->>CI: Commit accepted
+    end
+    
+    CI->>CI: Run integration tests
+    CI->>CI: Full async validation
+    CI-->>DEV: Build status
+```
+
+### Test Coverage Matrix
+
+```mermaid
+graph TD
+    subgraph "Test Types vs Components"
+        subgraph "Static Analysis"
+            SA_T[task_utils.py ✓]
+            SA_P[planner_tasks.py ✓]
+            SA_W[worker_tasks.py ✓]
+            SA_R[router.py ✓]
+        end
+        
+        subgraph "Unit Tests"
+            UT_T[TestTaskExecution ✓]
+            UT_A[TestAsyncValidation ✓]
+            UT_D[TestDatabaseOps ✓]
+            UT_R[TestRouterAgent ✓]
+        end
+        
+        subgraph "Integration Tests"
+            IT_C[Concurrent execution ✓]
+            IT_E[End-to-end flows ✓]
+            IT_P[Performance validation ✓]
+            IT_W[WebSocket workflows ✓]
+        end
+        
+        subgraph "Components Under Test"
+            COMP_T[Task Functions]
+            COMP_D[Database Async Ops]
+            COMP_R[Router WebSocket]
+            COMP_Q[Task Queue]
+        end
+    end
+    
+    SA_T --> COMP_T
+    SA_P --> COMP_T
+    SA_W --> COMP_T
+    SA_R --> COMP_R
+    
+    UT_T --> COMP_T
+    UT_A --> COMP_T
+    UT_D --> COMP_D
+    UT_R --> COMP_R
+    
+    IT_C --> COMP_Q
+    IT_E --> COMP_T
+    IT_P --> COMP_D
+    IT_W --> COMP_R
+    
+    style SA_T fill:#e1f5fe
+    style UT_T fill:#f3e5f5
+    style IT_C fill:#e8f5e8
+    style COMP_T fill:#fff3e0
+```
+
+### Async Testing Utilities Architecture
+
+```mermaid
+classDiagram
+    class AsyncWarningCaptureMixin {
+        +capture_async_warnings() asynccontextmanager
+        +assert_no_unawaited_coroutines(warnings)
+        +assert_has_unawaited_coroutines(warnings)
+        +get_async_warnings(warnings) List[str]
+    }
+    
+    class async_warning_test {
+        +decorator function
+        +automatic warning detection
+        +test failure on warnings
+    }
+    
+    class AsyncTestCase {
+        +IsolatedAsyncioTestCase
+        +AsyncWarningCaptureMixin
+        +Combined base class
+    }
+    
+    class TestAsyncValidation {
+        +TestUpdatePlannerNextTaskAndQueue
+        +TestTaskFunctionAsyncCorrectness  
+        +TestAsyncContextManagerCorrectness
+        +TestConcurrentAsyncOperations
+    }
+    
+    class TestTaskExecution {
+        +AsyncWarningCaptureMixin
+        +@async_warning_test methods
+        +Enhanced existing tests
+    }
+    
+    AsyncWarningCaptureMixin <|-- AsyncTestCase
+    AsyncTestCase <|-- TestAsyncValidation
+    AsyncWarningCaptureMixin <|-- TestTaskExecution
+    async_warning_test ..> AsyncWarningCaptureMixin : uses
+    TestAsyncValidation ..> async_warning_test : uses
+    TestTaskExecution ..> async_warning_test : uses
+```
+
+### Development Workflow Integration
+
+```mermaid
+flowchart TD
+    START[Start Development] --> SETUP{Hooks Installed?}
+    SETUP -->|No| INSTALL[python setup_hooks.py]
+    SETUP -->|Yes| CODE[Write/Modify Code]
+    INSTALL --> CODE
+    
+    CODE --> CHECK[python check_async.py]
+    CHECK --> ISSUES{Async Issues?}
+    
+    ISSUES -->|Yes| FIX[Fix Issues]
+    FIX --> CHECK
+    ISSUES -->|No| TEST[Run Unit Tests]
+    
+    TEST --> TRESULT{Tests Pass?}
+    TRESULT -->|No| DEBUG[Debug Test Failures]
+    DEBUG --> FIX
+    TRESULT -->|Yes| COMMIT[git commit]
+    
+    COMMIT --> HOOKS[Pre-commit Hooks Run]
+    HOOKS --> HRESULT{Hooks Pass?}
+    
+    HRESULT -->|No| HFIX[Fix Hook Issues]
+    HFIX --> COMMIT
+    HRESULT -->|Yes| PUSH[git push]
+    
+    PUSH --> CI[CI/CD Pipeline]
+    CI --> CRESULT{Integration Tests Pass?}
+    
+    CRESULT -->|No| CIFIX[Fix Integration Issues]
+    CIFIX --> FIX
+    CRESULT -->|Yes| DEPLOY[Deploy]
+    
+    style SETUP fill:#e1f5fe
+    style CHECK fill:#f3e5f5
+    style HOOKS fill:#fff3e0
+    style CI fill:#e8f5e8
+```
+
+### Performance Characteristics
+
+| Layer | Target Time | Coverage | Error Types Caught |
+|-------|------------|----------|-------------------|
+| **Static Analysis** | <5 seconds | Syntax + Types | Missing awaits, blocking calls |
+| **Runtime Warnings** | <15 seconds | Function execution | Unawaited coroutines |
+| **Pre-commit Hooks** | <60 seconds | All validation | Complete async validation |
+| **Hybrid Mocking Tests** | 2-3 seconds | Real async execution | Internal async path issues |
+| **Integration Tests** | <2 minutes | System workflows | System-level async issues |
+
+### Key Testing Innovations
+
+1. **Hybrid Mocking Strategy**: Mock external services (LLMs, file I/O) but use real implementations for internal async functions
+2. **Warning Capture System**: Runtime detection of `was never awaited` warnings during test execution  
+3. **Automatic Quality Gates**: Pre-commit hooks block commits containing async issues
+4. **Multi-Layer Validation**: Six complementary layers catch different types of async problems
+5. **Phase 4 Integration Innovation**: System-level async validation with race condition detection and performance regression monitoring
+6. **Phase 6 Effectiveness Validation**: End-to-end proof that all layers work together to prevent async bugs
+7. **Developer-Friendly Tools**: Quick validation scripts and clear error messages with fix suggestions
+
+### Test File Organization
+
+```
+tests/
+├── async_test_utils.py              # Core testing utilities
+├── unit/
+│   ├── test_async_validation.py     # Comprehensive async testing
+│   ├── test_hybrid_async_execution.py # Advanced hybrid mocking + performance
+│   ├── test_task_execution.py       # Enhanced with async warnings
+│   ├── test_database_operations.py  # Database async methods
+│   └── test_router_agent.py         # WebSocket async operations
+├── integration/
+│   ├── test_concurrent_planner_execution.py  # Concurrency testing
+│   ├── test_websocket_updates_execution.py   # Real-time communication
+│   │
+│   │ Phase 4: Enhanced Integration Testing for Real Async Execution
+│   ├── test_lightweight_async_flows.py       # Critical async paths (30s)
+│   ├── test_agent_activation_e2e.py          # Agent activation E2E (35s)
+│   ├── test_concurrent_async_operations.py   # Concurrent validation (45s)
+│   └── test_websocket_async_communication.py # WebSocket async flows (40s)
+├── validation/
+│   │ Phase 6: End-to-End Validation & Performance Optimization
+│   └── test_end_to_end_async_prevention.py   # Complete multi-layer validation (60s)
+└── run_*.py                         # Test runners with performance tracking
+```
+
+This testing architecture ensures that async/await correctness is validated at every stage of development, preventing the original `update_planner_next_task_and_queue` type of bug from ever reaching production.
+
 ## Technical Benefits
 
 ### Function-Based Architecture

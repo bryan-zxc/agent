@@ -46,11 +46,12 @@ class TestAPIEndpointsSimple(unittest.IsolatedAsyncioTestCase):
         from fastapi import HTTPException
         from main import get_router
         
-        # Mock database
-        with patch('main.AgentDatabase') as MockDB:
-            mock_db = AsyncMock()
-            MockDB.return_value = mock_db
-            mock_db.get_router.return_value = None
+        # Mock RouterAgent and its dependencies
+        with patch('main.RouterAgent') as MockRouter:
+            mock_router_instance = AsyncMock()
+            MockRouter.return_value = mock_router_instance
+            mock_router_instance._load_existing_state = AsyncMock()
+            mock_router_instance.message_manager.get_messages = AsyncMock(return_value=[])
             
             # Test with non-existent router
             response = await get_router("non_existent_router")
@@ -59,3 +60,5 @@ class TestAPIEndpointsSimple(unittest.IsolatedAsyncioTestCase):
             self.assertIsInstance(response, dict)
             self.assertIn("router_id", response)
             self.assertEqual(response["router_id"], "non_existent_router")
+            self.assertIn("messages", response)
+            self.assertEqual(response["messages"], [])

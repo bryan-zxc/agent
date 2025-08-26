@@ -186,6 +186,7 @@ Database models and service for agent message persistence and state management.
   - `create_planner()`: Create new planner instance
   - `update_planner()`: Update planner state
   - `get_planner()`: Retrieve planner information
+  - `get_router()`: Retrieve router information (now includes title and preview fields)
   - `create_worker()`: Create new worker/task instance
   - `get_workers_by_planner()`: Get all workers for a planner
   - `enqueue_task()`: Add task to execution queue

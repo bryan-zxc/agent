@@ -65,8 +65,8 @@ class RouterAgent:
 
         if router_id:
             self.id = router_id
-            # Load existing router from database
-            self._load_existing_state()
+            # Note: For existing routers, state loading happens in activate_conversation() or other async methods
+            # Cannot call async _load_existing_state() from __init__
         else:
             self.id = uuid.uuid4().hex
             # Note: For new routers, initialization happens in activate_conversation()
@@ -85,31 +85,32 @@ class RouterAgent:
                 )
 
             # Load core router configuration
-            self._model = state.get("model")
-            self._temperature = state.get("temperature")
-            self._status = state.get("status")
+            self.model = state.get("model")
+            self.temperature = state.get("temperature")
+            loaded_status = state.get("status")
 
             # Validate critical properties were loaded
-            if self._model is None:
+            if self.model is None:
                 logger.warning(
                     f"Router {self.id} loaded with null model - using default"
                 )
-                self._model = settings.router_model
+                self.model = settings.router_model
 
-            if self._temperature is None:
+            if self.temperature is None:
                 logger.warning(
                     f"Router {self.id} loaded with null temperature - using default"
                 )
-                self._temperature = 0.0
+                self.temperature = 0.0
 
-            if self._status is None:
+            if loaded_status is None:
                 logger.warning(
-                    f"Router {self.id} loaded with null status - using default"
+                    f"Router {self.id} loaded with null status - setting default to active"
                 )
-                self._status = "active"
+                await self._agent_db.update_router(self.id, status="active")
+                loaded_status = "active"
 
             logger.info(
-                f"Router {self.id} state loaded successfully - model: {self._model}, temp: {self._temperature}, status: {self._status}"
+                f"Router {self.id} state loaded successfully - model: {self.model}, temp: {self.temperature}, status: {loaded_status}"
             )
 
             # Initialize MessageManager for existing router
@@ -170,14 +171,6 @@ class RouterAgent:
 
     # Router-specific properties
 
-    @property
-    def status(self):
-        return getattr(self, "_status", None)
-
-    @status.setter
-    def status(self, value):
-        self._status = value
-        # Note: update_agent_state is now async - consider using async context
 
     async def activate_conversation(
         self, user_message: str, websocket: WebSocket, files: list = None
@@ -207,8 +200,8 @@ class RouterAgent:
 
         # Add system message to database
         await self.message_manager.add_message(
-            "system",
-            "Your name is Bandit Heeler, your main role is to have a conversation with the user and for complex requests activate agents."
+            role="system",
+            content="Your name is Bandit Heeler, your main role is to have a conversation with the user and for complex requests activate agents."
             "Otherwise, you are a fictional character from the show Bluey.",
         )
 
@@ -274,7 +267,7 @@ class RouterAgent:
         )
 
         # Store user message
-        await self.message_manager.add_message("user", user_message)
+        await self.message_manager.add_message(role="user", content=user_message)
 
         try:
             # Send processing status
@@ -318,7 +311,7 @@ class RouterAgent:
                     response = simple_chat_task.result()
                     logger.info(f"Response generated in router:\n{response}")
                     # Store and send response for simple chat only
-                    await self.message_manager.add_message("assistant", response)
+                    await self.message_manager.add_message(role="assistant", content=response)
                     await self.send_assistant_message(
                         content=response, websocket=websocket
                     )
@@ -696,7 +689,7 @@ class RouterAgent:
 
         # Send "Agents assemble!" message first and capture its ID
         result = await self.message_manager.add_message(
-            "assistant", "Agents assemble!", need_message_id=True
+            role="assistant", content="Agents assemble!", need_message_id=True
         )
         agents_assemble_message_id = result["message_id"]
         logger.info(
@@ -839,7 +832,7 @@ class RouterAgent:
     async def send_input_lock(self, websocket: WebSocket):
         """Lock input for this specific router"""
         # Update router status to processing
-        self.status = "processing"
+        await self._agent_db.update_router(self.id, status="processing")
 
         if websocket:
             await websocket.send_json(
@@ -852,7 +845,7 @@ class RouterAgent:
     async def send_input_unlock(self, websocket: WebSocket):
         """Unlock input for this specific router"""
         # Update router status back to active
-        self.status = "active"
+        await self._agent_db.update_router(self.id, status="active")
 
         if websocket:
             await websocket.send_json(
@@ -881,7 +874,7 @@ class RouterAgent:
                 return
 
             # Add to router's message chain
-            await self.message_manager.add_message("assistant", user_response)
+            await self.message_manager.add_message(role="assistant", content=user_response)
 
             # Send to frontend via WebSocket (if connected) - no message_id needed for final response
             if websocket:
@@ -895,7 +888,7 @@ class RouterAgent:
                 )
 
             # Update router status back to active
-            self.status = "active"
+            await self._agent_db.update_router(self.id, status="active")
 
             logger.info(
                 f"Successfully handled planner completion for planner {planner_id}"

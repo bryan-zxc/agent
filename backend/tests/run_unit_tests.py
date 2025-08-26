@@ -28,13 +28,14 @@ from pathlib import Path
 from typing import List, Dict, Optional
 
 
-class TestRunner:
+class UnitTestRunner:
     """Lightweight test runner with performance tracking."""
     
     def __init__(self):
         self.test_dir = Path(__file__).parent / "unit"
         self.test_suites = {
             "async_validation": "test_async_validation.py",
+            "hybrid_async_execution": "test_hybrid_async_execution.py",
             "import_structure": "test_import_structure.py", 
             "database_operations": "test_database_operations.py",
             "router_agent": "test_router_agent.py",
@@ -154,6 +155,7 @@ class TestRunner:
         ordered_suites = [
             "import_structure",  # Fastest - import validation
             "async_validation",  # Critical - catch await errors
+            "hybrid_async_execution",  # Advanced async testing with performance benchmarks
             "database_operations",  # Core functionality
             "file_manager",  # File operations
             "router_agent",  # Main component
@@ -257,7 +259,7 @@ Examples:
     parser.add_argument(
         "--suite", 
         help="Run specific test suite",
-        choices=["async_validation", "import_structure", "database_operations", 
+        choices=["async_validation", "hybrid_async_execution", "import_structure", "database_operations", 
                 "router_agent", "task_execution", "file_manager"]
     )
     parser.add_argument(
@@ -278,7 +280,7 @@ Examples:
     
     args = parser.parse_args()
     
-    runner = TestRunner()
+    runner = UnitTestRunner()
     
     # Show Docker suggestion if requested
     if args.docker_suggest:

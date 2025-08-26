@@ -34,12 +34,19 @@ class IntegrationTestRunner:
     def __init__(self):
         self.test_dir = Path(__file__).parent / "integration"
         self.integration_suites = {
+            # Existing integration tests
             "background_processor_efficiency": "test_background_processor_efficiency.py",
             "concurrent_planner_execution": "test_concurrent_planner_execution.py", 
             "multiple_conversations_concurrent": "test_multiple_conversations_concurrent.py",
             "fastapi_immediate_response": "test_fastapi_immediate_response.py",
             "file_storage": "test_file_storage.py",
-            "websocket_updates_execution": "test_websocket_updates_execution.py"
+            "websocket_updates_execution": "test_websocket_updates_execution.py",
+            
+            # Phase 4: Enhanced Integration Testing for Real Async Execution
+            "lightweight_async_flows": "test_lightweight_async_flows.py",
+            "agent_activation_e2e": "test_agent_activation_e2e.py",
+            "concurrent_async_operations": "test_concurrent_async_operations.py",
+            "websocket_async_communication": "test_websocket_async_communication.py"
         }
         
         # Performance tracking (no strict limits for integration tests)
@@ -137,6 +144,31 @@ class IntegrationTestRunner:
             else:
                 return f"Multi-conversation test completed in {duration:.1f}s"
         
+        # Phase 4 async integration test performance analysis
+        elif suite_name == "lightweight_async_flows":
+            if duration > 30:
+                return f"Async flows test took {duration:.1f}s - may indicate async execution issues"
+            else:
+                return f"Async flows test completed in {duration:.1f}s - async execution performing well"
+        
+        elif suite_name == "agent_activation_e2e":
+            if duration > 35:
+                return f"Agent activation E2E took {duration:.1f}s - check activation flow efficiency"
+            else:
+                return f"Agent activation E2E completed in {duration:.1f}s"
+        
+        elif suite_name == "concurrent_async_operations":
+            if duration > 45:
+                return f"Concurrent async test took {duration:.1f}s - possible async contention issues"
+            else:
+                return f"Concurrent async operations completed in {duration:.1f}s"
+        
+        elif suite_name == "websocket_async_communication":
+            if duration > 40:
+                return f"WebSocket async test took {duration:.1f}s - check WebSocket async performance"
+            else:
+                return f"WebSocket async communication completed in {duration:.1f}s"
+        
         else:
             return f"Completed in {duration:.1f}s"
 
@@ -152,12 +184,19 @@ class IntegrationTestRunner:
         
         # Order tests by expected execution time (fastest first for early feedback)
         ordered_suites = [
+            # Existing integration tests
             "fastapi_immediate_response",        # ~10-30s
             "file_storage",                      # ~15-35s  
             "websocket_updates_execution",       # ~20-40s
             "multiple_conversations_concurrent", # ~20-40s
             "concurrent_planner_execution",      # ~30-60s
-            "background_processor_efficiency"    # ~45-120s
+            "background_processor_efficiency",   # ~45-120s
+            
+            # Phase 4 async integration tests (optimised for 30s target)
+            "lightweight_async_flows",          # ~15-30s - Critical async paths
+            "agent_activation_e2e",             # ~20-35s - E2E agent activation
+            "websocket_async_communication",    # ~25-40s - WebSocket async flows
+            "concurrent_async_operations"       # ~30-45s - Concurrent async validation
         ]
         
         for suite_name in ordered_suites:
@@ -255,12 +294,19 @@ class IntegrationTestRunner:
     def get_performance_baseline(self) -> Dict[str, float]:
         """Get expected performance baseline for comparison."""
         return {
+            # Existing integration test baselines
             "fastapi_immediate_response": 15.0,      # Should be quick
             "file_storage": 25.0,                    # File operations
             "websocket_updates_execution": 30.0,     # Real-time communication
             "multiple_conversations_concurrent": 35.0, # Moderate complexity  
             "concurrent_planner_execution": 50.0,    # High complexity
-            "background_processor_efficiency": 90.0   # Most comprehensive
+            "background_processor_efficiency": 90.0,  # Most comprehensive
+            
+            # Phase 4 async integration test baselines (optimised for rapid feedback)
+            "lightweight_async_flows": 30.0,         # Critical async paths validation
+            "agent_activation_e2e": 35.0,            # Complete activation flow
+            "websocket_async_communication": 40.0,   # WebSocket async operations
+            "concurrent_async_operations": 45.0      # Concurrent async validation
         }
 
 
@@ -283,7 +329,10 @@ Examples:
         help="Run specific integration test suite",
         choices=["background_processor_efficiency", "concurrent_planner_execution", 
                 "multiple_conversations_concurrent", "fastapi_immediate_response",
-                "file_storage", "websocket_updates_execution"]
+                "file_storage", "websocket_updates_execution",
+                # Phase 4 async integration tests
+                "lightweight_async_flows", "agent_activation_e2e", 
+                "concurrent_async_operations", "websocket_async_communication"]
     )
     parser.add_argument(
         "--verbose", "-v",

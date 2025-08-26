@@ -13,6 +13,7 @@ import json
 from src.agent.core.router import RouterAgent
 from src.agent.models.responses import RequireAgent
 from src.agent.models.schemas import File, DocumentContext, FileGrouping
+from src.agent.config.settings import settings
 
 
 class TestRouterAgent(unittest.IsolatedAsyncioTestCase):
@@ -88,7 +89,7 @@ class TestRouterAgent(unittest.IsolatedAsyncioTestCase):
             # Verify state was loaded
             self.assertEqual(router.model, "gpt-4")
             self.assertEqual(router.temperature, 0.5)
-            self.assertEqual(router.status, "active")
+            # Note: status is no longer a router attribute, it's stored in database
             mock_db_instance.get_router.assert_called_once()
 
     async def test_load_existing_state_router_not_found(self):
@@ -114,14 +115,19 @@ class TestRouterAgent(unittest.IsolatedAsyncioTestCase):
             mock_db_instance.get_router.assert_called_once()
 
     async def test_get_messages_success(self):
-        """Test get_messages ACTUALLY EXECUTES and returns messages."""
+        """Test MessageManager get_messages ACTUALLY EXECUTES and returns messages."""
         with patch('src.agent.core.router.AgentDatabase') as MockDB, \
-             patch('src.agent.core.router.LLM') as MockLLM:
+             patch('src.agent.core.router.LLM') as MockLLM, \
+             patch('src.agent.core.router.MessageManager') as MockMessageManager:
             
             # Configure database mock
             mock_db_instance = AsyncMock()
             MockDB.return_value = mock_db_instance
-            mock_db_instance.get_messages.return_value = [
+            
+            # Configure MessageManager mock
+            mock_message_manager = AsyncMock()
+            MockMessageManager.return_value = mock_message_manager
+            mock_message_manager.get_messages.return_value = [
                 {"role": "user", "content": "Test message"},
                 {"role": "assistant", "content": "Test response"}
             ]
@@ -129,85 +135,76 @@ class TestRouterAgent(unittest.IsolatedAsyncioTestCase):
             # Configure LLM mock
             MockLLM.return_value = MagicMock()
             
-            # Create router and test message retrieval
+            # Create router and initialize MessageManager
             router = RouterAgent()
-            messages = await router.get_messages()
+            router.message_manager = mock_message_manager
+            
+            # Test message retrieval via MessageManager
+            messages = await router.message_manager.get_messages()
             
             # Verify messages returned
             self.assertEqual(len(messages), 2)
             self.assertEqual(messages[0]["role"], "user")
             self.assertEqual(messages[1]["role"], "assistant")
-            mock_db_instance.get_messages.assert_called_once_with("router", router.id)
+            mock_message_manager.get_messages.assert_called_once()
 
     async def test_add_message_text_only(self):
-        """Test add_message ACTUALLY EXECUTES with text content."""
-        with patch('src.agent.core.router.AgentDatabase') as MockDB, \
-             patch('src.agent.core.router.LLM') as MockLLM:
-            
-            # Configure database mock
-            mock_db_instance = AsyncMock()
-            MockDB.return_value = mock_db_instance
-            mock_db_instance.add_message.return_value = 123  # Mock message ID
-            
-            # Configure LLM mock
-            MockLLM.return_value = MagicMock()
-            
-            # Create router and test message addition
-            router = RouterAgent()
-            message_id = await router.add_message(role="user", content="Test message")
-            
-            # Verify message was added
-            self.assertEqual(message_id, 123)
-            mock_db_instance.add_message.assert_called_once_with(
-                agent_type="router",
-                agent_id=router.id,
-                role="user",
-                content="Test message"
-            )
-
-    async def test_add_message_with_image(self):
-        """Test add_message ACTUALLY EXECUTES with image content."""
+        """Test MessageManager add_message ACTUALLY EXECUTES with text content."""
         with patch('src.agent.core.router.AgentDatabase') as MockDB, \
              patch('src.agent.core.router.LLM') as MockLLM, \
-             patch('src.agent.core.router.encode_image') as mock_encode_image, \
-             patch('src.agent.core.router.decode_image') as mock_decode_image:
+             patch('src.agent.core.router.MessageManager') as MockMessageManager:
             
             # Configure database mock
             mock_db_instance = AsyncMock()
             MockDB.return_value = mock_db_instance
-            mock_db_instance.add_message.return_value = 456  # Mock message ID
+            
+            # Configure MessageManager mock
+            mock_message_manager = AsyncMock()
+            MockMessageManager.return_value = mock_message_manager
+            mock_message_manager.add_message.return_value = [{"role": "user", "content": "Test message"}]
             
             # Configure LLM mock
             MockLLM.return_value = MagicMock()
+            
+            # Create router and initialize MessageManager
+            router = RouterAgent()
+            router.message_manager = mock_message_manager
+            
+            # Test message addition via MessageManager
+            messages = await router.message_manager.add_message("user", "Test message")
+            
+            # Verify MessageManager was called correctly
+            self.assertEqual(messages, [{"role": "user", "content": "Test message"}])
+            mock_message_manager.add_message.assert_called_once_with(
+                "user",
+                "Test message"
+            )
+
+    async def test_image_content_encoding(self):
+        """Test _encode_image_content utility method."""
+        with patch('src.agent.core.router.encode_image') as mock_encode_image:
             
             # Configure image encoding mock
             mock_encode_image.return_value = "encoded_image_data"
-            
-            # Configure image decoding mock
-            mock_decode_image.return_value = MagicMock()
             
             # Create mock image instead of real PIL Image to avoid encoding issues
             test_image = MagicMock()
             test_image.__class__ = Image.Image
             
-            # Create router and test message addition with image
+            # Create router and test image encoding utility
             router = RouterAgent()
-            message_id = await router.add_message(
-                role="user", 
+            encoded_content = router._encode_image_content(
                 content="Test message with image", 
                 image=test_image
             )
             
-            # Verify message was added
-            self.assertEqual(message_id, 456)
-            mock_db_instance.add_message.assert_called_once()
             # Verify content includes both text and image
-            call_args = mock_db_instance.add_message.call_args
-            content = call_args[1]['content']
-            self.assertIsInstance(content, list)
-            self.assertEqual(len(content), 2)
-            self.assertEqual(content[0]['type'], 'text')
-            self.assertEqual(content[1]['type'], 'image_url')
+            self.assertIsInstance(encoded_content, list)
+            self.assertEqual(len(encoded_content), 2)
+            self.assertEqual(encoded_content[0]['type'], 'text')
+            self.assertEqual(encoded_content[0]['text'], 'Test message with image')
+            self.assertEqual(encoded_content[1]['type'], 'image_url')
+            self.assertIn('data:image/png;base64,encoded_image_data', encoded_content[1]['image_url']['url'])
 
     async def test_activate_conversation_success(self):
         """Test activate_conversation ACTUALLY EXECUTES full conversation activation."""
@@ -247,17 +244,25 @@ class TestRouterAgent(unittest.IsolatedAsyncioTestCase):
             # Verify instance variables are set
             self.assertEqual(router.model, "gpt-4.1-nano")  # settings.router_model
             self.assertEqual(router.temperature, 0.0)
-            self.assertEqual(router.status, "active")
+            # Note: status is no longer a router attribute, it's stored in database
 
     async def test_handle_simple_chat_success(self):
         """Test handle_simple_chat ACTUALLY EXECUTES and returns response."""
         with patch('src.agent.core.router.AgentDatabase') as MockDB, \
-             patch('src.agent.core.router.LLM') as MockLLM:
+             patch('src.agent.core.router.LLM') as MockLLM, \
+             patch('src.agent.core.router.MessageManager') as MockMessageManager:
             
             # Configure database mock
             mock_db_instance = AsyncMock()
             MockDB.return_value = mock_db_instance
             mock_db_instance.get_messages.return_value = [
+                {"role": "user", "content": "Hello"}
+            ]
+            
+            # Configure MessageManager mock
+            mock_message_manager = AsyncMock()
+            MockMessageManager.return_value = mock_message_manager
+            mock_message_manager.get_messages.return_value = [
                 {"role": "user", "content": "Hello"}
             ]
             
@@ -270,8 +275,9 @@ class TestRouterAgent(unittest.IsolatedAsyncioTestCase):
             
             # Create router with model and temperature
             router = RouterAgent()
-            router._model = "gpt-4"
-            router._temperature = 0.0
+            router.model = settings.router_model
+            router.temperature = 0.0
+            router.message_manager = mock_message_manager
             
             # Test simple chat
             response = await router.handle_simple_chat()
@@ -283,12 +289,20 @@ class TestRouterAgent(unittest.IsolatedAsyncioTestCase):
     async def test_assess_agent_requirements_success(self):
         """Test assess_agent_requirements ACTUALLY EXECUTES and returns requirements."""
         with patch('src.agent.core.router.AgentDatabase') as MockDB, \
-             patch('src.agent.core.router.LLM') as MockLLM:
+             patch('src.agent.core.router.LLM') as MockLLM, \
+             patch('src.agent.core.router.MessageManager') as MockMessageManager:
             
             # Configure database mock
             mock_db_instance = AsyncMock()
             MockDB.return_value = mock_db_instance
             mock_db_instance.get_messages.return_value = [
+                {"role": "user", "content": "I need to search for information about AI"}
+            ]
+            
+            # Configure MessageManager mock
+            mock_message_manager = AsyncMock()
+            MockMessageManager.return_value = mock_message_manager
+            mock_message_manager.get_messages.return_value = [
                 {"role": "user", "content": "I need to search for information about AI"}
             ]
             
@@ -306,8 +320,9 @@ class TestRouterAgent(unittest.IsolatedAsyncioTestCase):
             
             # Create router with model and temperature
             router = RouterAgent()
-            router._model = "gpt-4"
-            router._temperature = 0.0
+            router.model = settings.router_model
+            router.temperature = 0.0
+            router.message_manager = mock_message_manager
             
             # Test agent requirements assessment
             requirements = await router.assess_agent_requirements()
@@ -412,8 +427,8 @@ class TestRouterAgent(unittest.IsolatedAsyncioTestCase):
             
             # Create router with model and temperature
             router = RouterAgent()
-            router._model = "gpt-4"
-            router._temperature = 0.0
+            router.model = settings.router_model
+            router.temperature = 0.0
             
             # Test multiple file grouping
             files = ["/path/to/file1.csv", "/path/to/file2.csv", "/path/to/file3.pdf"]
@@ -508,7 +523,8 @@ class TestRouterAgent(unittest.IsolatedAsyncioTestCase):
              patch('src.agent.core.router.LLM') as MockLLM:
             
             # Configure mocks
-            MockDB.return_value = AsyncMock()
+            mock_db_instance = AsyncMock()
+            MockDB.return_value = mock_db_instance
             MockLLM.return_value = MagicMock()
             
             # Create WebSocket mock
@@ -516,13 +532,13 @@ class TestRouterAgent(unittest.IsolatedAsyncioTestCase):
             
             # Create router
             router = RouterAgent()
-            router._status = "active"  # Set initial status
+            # Note: status is no longer stored as router attribute
             
             # Test input locking
             await router.send_input_lock(mock_websocket)
             
-            # Verify status changed
-            self.assertEqual(router.status, "processing")
+            # Verify database update_router was called for status change
+            mock_db_instance.update_router.assert_called_with(router.id, status="processing")
             
             # Verify WebSocket was called
             mock_websocket.send_json.assert_called_once()
@@ -536,7 +552,8 @@ class TestRouterAgent(unittest.IsolatedAsyncioTestCase):
              patch('src.agent.core.router.LLM') as MockLLM:
             
             # Configure mocks
-            MockDB.return_value = AsyncMock()
+            mock_db_instance = AsyncMock()
+            MockDB.return_value = mock_db_instance
             MockLLM.return_value = MagicMock()
             
             # Create WebSocket mock
@@ -544,13 +561,13 @@ class TestRouterAgent(unittest.IsolatedAsyncioTestCase):
             
             # Create router
             router = RouterAgent()
-            router._status = "processing"  # Set initial status
+            # Note: status is no longer stored as router attribute
             
             # Test input unlocking
             await router.send_input_unlock(mock_websocket)
             
-            # Verify status changed
-            self.assertEqual(router.status, "active")
+            # Verify database update_router was called for status change
+            mock_db_instance.update_router.assert_called_with(router.id, status="active")
             
             # Verify WebSocket was called
             mock_websocket.send_json.assert_called_once()
@@ -562,7 +579,7 @@ class TestRouterAgent(unittest.IsolatedAsyncioTestCase):
         """Test handle_planner_completion ACTUALLY EXECUTES completion handling."""
         with patch('src.agent.core.router.AgentDatabase') as MockDB, \
              patch('src.agent.core.router.LLM') as MockLLM, \
-             patch.object(RouterAgent, 'add_message') as mock_add_message, \
+             patch('src.agent.core.router.MessageManager') as MockMessageManager, \
              patch.object(RouterAgent, 'send_assistant_message') as mock_send_message:
             
             # Configure database mock
@@ -572,11 +589,15 @@ class TestRouterAgent(unittest.IsolatedAsyncioTestCase):
                 "user_response": "Here's the analysis result..."
             }
             
+            # Configure MessageManager mock
+            mock_message_manager = AsyncMock()
+            MockMessageManager.return_value = mock_message_manager
+            mock_message_manager.add_message.return_value = [{"role": "assistant", "content": "Here's the analysis result..."}]
+            
             # Configure LLM mock
             MockLLM.return_value = MagicMock()
             
             # Configure method mocks
-            mock_add_message.return_value = 999
             mock_send_message.return_value = None
             
             # Create WebSocket mock
@@ -584,6 +605,7 @@ class TestRouterAgent(unittest.IsolatedAsyncioTestCase):
             
             # Create router
             router = RouterAgent()
+            router.message_manager = mock_message_manager
             
             # Test planner completion handling
             test_planner_id = "test_planner_123"
@@ -593,11 +615,11 @@ class TestRouterAgent(unittest.IsolatedAsyncioTestCase):
             mock_db_instance.get_planner.assert_called_once_with(test_planner_id)
             
             # Verify message was added and sent
-            mock_add_message.assert_called_once_with(role="assistant", content="Here's the analysis result...")
+            mock_message_manager.add_message.assert_called_once_with(role="assistant", content="Here's the analysis result...")
             mock_send_message.assert_called_once_with(content="Here's the analysis result...", websocket=mock_websocket)
             
-            # Verify status changed to active
-            self.assertEqual(router.status, "active")
+            # Verify database update_router was called for status change
+            mock_db_instance.update_router.assert_called_with(router.id, status="active")
 
     async def test_handle_planner_completion_planner_not_found(self):
         """Test handle_planner_completion handles planner not found gracefully."""

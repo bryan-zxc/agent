@@ -15,15 +15,9 @@ Base agent class that provides common functionality for all agents in the system
 
 **Key Methods:**
 - `__init__()`: Initialize base agent with LLM service
-- `add_message(role, content, image, verbose)`: Add messages to router history
-  - Supports text content and image attachments
-  - Handles multimodal content with base64 image encoding
-  - Optional verbose logging for debugging
 
 **Features:**
-- **Multimodal Support**: Handles text and image content in conversations
-- **Image Processing**: Automatic base64 encoding for image attachments
-- **Router Management**: Maintains message history across interactions
+- **LLM Integration**: Unified interface for language model interactions
 - **Logging Integration**: Built-in logging with configurable verbosity
 
 ### `router.py`
@@ -31,10 +25,12 @@ WebSocket-enabled router for real-time chat and file processing orchestration.
 
 #### Classes
 
-**`RouterAgent(BaseAgent)`**
-- Main entry point for WebSocket-based chat interface
+**`RouterAgent`**
+- Main entry point for WebSocket-based chat interface  
 - Intelligently routes between simple router and complex analysis
 - Built-in database persistence for router history
+- **Simplified Architecture**: Uses simple attributes and direct database calls
+- **MessageManager Integration**: All message operations handled via MessageManager
 - **Architecture**: All communication methods require active WebSocket connections (no optional WebSocket parameters)
 
 **Key Methods (all async):**
@@ -45,6 +41,12 @@ WebSocket-enabled router for real-time chat and file processing orchestration.
 - `handle_complex_request(websocket, files?, agent_requirements?)`: Delegate to background agents
 - `assess_agent_requirements()`: LLM-based assessment for agent assistance needs
 - `process_files(file_paths)`: Convert file paths to File objects
+
+**Router State Management:**
+- **Model/Temperature**: Simple attributes set during initialization, never change
+- **Status**: Direct database calls via `update_router(id, status="value")` and `get_router(id)`
+- **Messages**: Handled exclusively through MessageManager instance
+- **Database Pattern**: Consistent with planner and worker agents
 
 **WebSocket Communication (Required Parameter):**
 - `send_user_message(content, websocket)`: Send user messages to frontend
@@ -79,11 +81,13 @@ WebSocket-enabled router for real-time chat and file processing orchestration.
 ### Basic Agent Setup
 ```python
 from agent.core.base import BaseAgent
+from agent.tasks.message_manager import MessageManager
 
 class CustomAgent(BaseAgent):
-    def __init__(self):
+    def __init__(self, agent_id: str):
         super().__init__()
-        self.add_message("system", "You are a helpful assistant")
+        self.message_manager = MessageManager(db, "custom", agent_id)
+        # Messages handled through MessageManager
 ```
 
 ### WebSocket Chat Interface
@@ -114,10 +118,19 @@ async def start_new_conversation(websocket: WebSocket, user_message: str, files:
     )
 ```
 
-### Adding Multimodal Content
+### MessageManager Integration
 ```python
-agent = BaseAgent()
-agent.add_message("user", "Analyze this image", image="path/to/image.png")
+from agent.tasks.message_manager import MessageManager
+
+# Initialize MessageManager for any agent type
+message_manager = MessageManager(db, "router", router_id)
+
+# Add messages with qualified parameters
+await message_manager.add_message(role="user", content="Hello")
+await message_manager.add_message(role="assistant", content="Hi there!")
+
+# Get message history
+messages = await message_manager.get_messages()
 ```
 
 ## File Type Processing
