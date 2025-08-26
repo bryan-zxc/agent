@@ -27,6 +27,7 @@ class AnswerTemplate(BaseModel):
         "Based on new information available, update the above template if required. "
         "Remember that if you choose not to update the template just return the same template as is. "
         "If you do update the template, make sure that you continue to use placeholders even if you have the information, this should be just a template, not the actual answer. "
+        "Keep the template succinct."
     )
     wip_filled_template: str = Field(
         description="The work in progress filled answer template, which is the latest population of placeholders with information currently available."
@@ -234,7 +235,7 @@ class ExecutionPlanModel(BaseModel):
         "Even if the answer template has already done its own calculation and pre-filled the answer, still have a calculation todo item.",
     )
     todos: list[TodoItem] = Field(
-        description="List of todo items. Make the list succinct - meaning all required actions to get remaining information should be done, but don't break actions that can be done in one step into multiple unnecessarily, nor create filler tasks."
+        description="List of todo items. ""Can be empty if there are no more todos, for example when the answer template is completely filled out. ""Make the list succinct - meaning all required actions to get remaining information should be done, but don't break actions that can be done in one step into multiple unnecessarily, nor create filler tasks."
     )
 
 
