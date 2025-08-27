@@ -219,9 +219,16 @@ async def handle_websocket_message(websocket: WebSocket, data: dict):
         error_logger = AsyncErrorLogger("websocket_message_handler")
         error_logger.log_detailed_exception(e, "WebSocket message processing")
 
-        await websocket.send_json(
-            {"type": "error", "message": f"Error processing message: {str(e)}"}
-        )
+        # Only try to send error if WebSocket is still open
+        try:
+            await websocket.send_json(
+                {"type": "error", "message": f"Error processing message: {str(e)}"}
+            )
+        except RuntimeError as ws_error:
+            if "close message has been sent" in str(ws_error):
+                logger.warning(f"WebSocket closed while sending error response: {ws_error}")
+            else:
+                raise
 
 
 @app.post("/upload")

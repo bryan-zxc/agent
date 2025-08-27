@@ -319,17 +319,22 @@ class AgentDatabase:
         # Store database path for schema operations
         self.database_path = database_path
 
-        # Async engine for all database operations
+        # Async engine for all database operations with improved concurrency settings
         async_database_url = f"sqlite+aiosqlite:///{database_path}"
         self.async_engine = create_async_engine(
             async_database_url,
             echo=False,
             connect_args={
                 "timeout": 30,  # Connection timeout
+                "check_same_thread": False,  # Allow cross-thread access for better concurrency
             },
+            pool_size=20,  # Increase from default 5 to handle concurrent requests
+            max_overflow=10,  # Allow 10 additional connections beyond pool_size
+            pool_pre_ping=True,  # Verify connections before use to avoid stale connections
+            pool_recycle=3600,  # Recycle connections every hour to prevent issues
         )
 
-        # Async session factory
+        # Async session factory with optimised settings
         self.AsyncSessionLocal = async_sessionmaker(
             bind=self.async_engine,
             class_=AsyncSession,
@@ -385,15 +390,18 @@ class AgentDatabase:
         async with self.async_engine.begin() as conn:
             from sqlalchemy import text
 
-            # Apply same pragmas to async connections
+            # Apply optimised pragmas for better concurrency
             await conn.execute(text("PRAGMA journal_mode=WAL"))
             await conn.execute(
-                text("PRAGMA busy_timeout=10000")
-            )  # 10 second timeout for async
+                text("PRAGMA busy_timeout=30000")
+            )  # 30 second timeout to prevent blocking on concurrent access
             await conn.execute(text("PRAGMA synchronous=NORMAL"))
-            await conn.execute(text("PRAGMA cache_size=-64000"))
+            await conn.execute(text("PRAGMA cache_size=-64000"))  # 64MB cache
             await conn.execute(text("PRAGMA foreign_keys=ON"))
             await conn.execute(text("PRAGMA temp_store=MEMORY"))
+            # Additional optimisations for read-heavy workloads
+            await conn.execute(text("PRAGMA wal_autocheckpoint=1000"))  # Checkpoint every 1000 pages
+            await conn.execute(text("PRAGMA mmap_size=268435456"))  # 256MB memory-mapped I/O
             logger.info("SQLite WAL mode and optimisations enabled for agent database")
 
     # Removed initialise_async() - now handled automatically in create()
@@ -885,43 +893,43 @@ class AgentDatabase:
                 return planners
 
     async def get_planner_by_message(self, message_id: int) -> Optional[Dict[str, Any]]:
-        """Get planner associated with a specific message (V2)"""
+        """Get planner associated with a specific message (V2) - Optimised for read-only polling
+        
+        This method is heavily used by frontend polling and is optimised to minimise blocking.
+        Uses a single query with JOIN to reduce round trips and avoid lock contention.
+        """
         async with self.AsyncSessionLocal() as session:
+            # Single optimised query with JOIN to get both link and planner data
             result = await session.execute(
-                select(RouterMessagePlannerLink).where(
-                    RouterMessagePlannerLink.message_id == message_id
-                )
+                select(Planner, RouterMessagePlannerLink)
+                .join(RouterMessagePlannerLink, Planner.planner_id == RouterMessagePlannerLink.planner_id)
+                .where(RouterMessagePlannerLink.message_id == message_id)
             )
-            link = result.scalar_one_or_none()
+            row = result.first()
 
-            if not link:
+            if not row:
                 return None
 
-            planner_result = await session.execute(
-                select(Planner).where(Planner.planner_id == link.planner_id)
-            )
-            planner = planner_result.scalar_one_or_none()
+            planner, link = row
 
-            if planner:
-                return {
-                    "planner_id": planner.planner_id,
-                    "planner_name": planner.planner_name,
-                    "user_question": planner.user_question,
-                    "instruction": planner.instruction,
-                    "execution_plan": planner.execution_plan,
-                    "model": planner.model,
-                    "temperature": planner.temperature,
-                    "failed_task_limit": planner.failed_task_limit,
-                    "status": planner.status,
-                    "agent_metadata": planner.agent_metadata,
-                    "schema_version": planner.schema_version,
-                    "created_at": planner.created_at,
-                    "updated_at": planner.updated_at,
-                    "relationship_type": link.relationship_type,
-                    "message_id": link.message_id,
-                    "router_id": link.router_id,
-                }
-            return None
+            return {
+                "planner_id": planner.planner_id,
+                "planner_name": planner.planner_name,
+                "user_question": planner.user_question,
+                "instruction": planner.instruction,
+                "execution_plan": planner.execution_plan,
+                "model": planner.model,
+                "temperature": planner.temperature,
+                "failed_task_limit": planner.failed_task_limit,
+                "status": planner.status,
+                "agent_metadata": planner.agent_metadata,
+                "schema_version": planner.schema_version,
+                "created_at": planner.created_at,
+                "updated_at": planner.updated_at,
+                "relationship_type": link.relationship_type,
+                "message_id": link.message_id,
+                "router_id": link.router_id,
+            }
 
     async def get_message_by_planner(self, planner_id: str) -> Optional[int]:
         """Get message ID associated with a specific planner (V2)"""

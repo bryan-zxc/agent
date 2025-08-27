@@ -177,19 +177,25 @@ export const useWebSocket = (url?: string) => {
       };
 
       ws.current.onerror = (error) => {
-        console.error('WebSocket error details:', {
-          error: error instanceof Event ? {
-            type: error.type,
-            target: error.target,
-            message: 'WebSocket connection failed'
-          } : error,
-          wsUrl,
-          readyState: ws.current?.readyState,
-          readyStateText: ws.current?.readyState === WebSocket.CONNECTING ? 'CONNECTING' :
-                         ws.current?.readyState === WebSocket.OPEN ? 'OPEN' :
-                         ws.current?.readyState === WebSocket.CLOSING ? 'CLOSING' :
-                         ws.current?.readyState === WebSocket.CLOSED ? 'CLOSED' : 'UNKNOWN'
-        });
+        // Only log errors when connection actually fails (not during normal connection)
+        const readyState = ws.current?.readyState;
+        
+        // Don't log errors during normal connection establishment
+        if (readyState === WebSocket.CONNECTING) {
+          console.log('WebSocket connecting to:', wsUrl);
+          return;
+        }
+        
+        // Log actual connection failures
+        const errorType = error instanceof Event ? error.type : 'unknown';
+        const readyStateText = readyState === WebSocket.OPEN ? 'OPEN' :
+                              readyState === WebSocket.CLOSING ? 'CLOSING' :
+                              readyState === WebSocket.CLOSED ? 'CLOSED' : 'UNKNOWN';
+        
+        console.error(`WebSocket connection failed: ${errorType}`);
+        console.error(`URL: ${wsUrl}`);
+        console.error(`ReadyState: ${readyStateText} (${readyState})`);
+        console.error('Check if backend is running on port 8001');
         
         // Clear connection timeout on error
         if (connectionTimeoutRef.current) {

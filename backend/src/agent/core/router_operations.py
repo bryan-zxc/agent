@@ -401,22 +401,34 @@ async def assess_agent_requirements(router_state: Dict[str, Any]) -> RequireAgen
 async def send_user_message(content: str, router_id: str, websocket: WebSocket):
     """Send user message to frontend"""
     if websocket:
-        await websocket.send_json(
-            {
-                "type": "message",
-                "role": "user",
-                "content": content,
-                "router_id": router_id,
-            }
-        )
+        try:
+            await websocket.send_json(
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": content,
+                    "router_id": router_id,
+                }
+            )
+        except RuntimeError as e:
+            if "close message has been sent" in str(e):
+                logger.warning(f"WebSocket closed while sending user message: {e}")
+            else:
+                raise
 
 
 async def send_status(status: str, router_id: str, websocket: WebSocket):
     """Send status update to frontend"""
     if websocket:
-        await websocket.send_json(
-            {"type": "status", "message": status, "router_id": router_id}
-        )
+        try:
+            await websocket.send_json(
+                {"type": "status", "message": status, "router_id": router_id}
+            )
+        except RuntimeError as e:
+            if "close message has been sent" in str(e):
+                logger.warning(f"WebSocket closed while sending status: {e}")
+            else:
+                raise
 
 
 async def send_assistant_message(
@@ -444,7 +456,13 @@ async def send_assistant_message(
                 f"DEBUG: Sending Agents assemble WebSocket message: {response_data}"
             )
 
-        await websocket.send_json(response_data)
+        try:
+            await websocket.send_json(response_data)
+        except RuntimeError as e:
+            if "close message has been sent" in str(e):
+                logger.warning(f"WebSocket closed while sending assistant response: {e}")
+            else:
+                raise
     else:
         # Debug logging when websocket is None
         if content == "Agents assemble!":
@@ -456,9 +474,15 @@ async def send_assistant_message(
 async def send_error(error: str, router_id: str, websocket: WebSocket):
     """Send error message to frontend"""
     if websocket:
-        await websocket.send_json(
-            {"type": "error", "message": error, "router_id": router_id}
-        )
+        try:
+            await websocket.send_json(
+                {"type": "error", "message": error, "router_id": router_id}
+            )
+        except RuntimeError as e:
+            if "close message has been sent" in str(e):
+                logger.warning(f"WebSocket closed while sending error: {e}")
+            else:
+                raise
 
 
 async def send_message_history(router_state: Dict[str, Any], websocket: WebSocket):
@@ -468,13 +492,19 @@ async def send_message_history(router_state: Dict[str, Any], websocket: WebSocke
         messages = await message_manager.get_messages()
         # Only send non-system messages
         router_messages = [msg for msg in messages if msg.get("role") != "system"]
-        await websocket.send_json(
-            {
-                "type": "message_history",
-                "messages": router_messages,
-                "router_id": router_state["id"],
-            }
-        )
+        try:
+            await websocket.send_json(
+                {
+                    "type": "message_history",
+                    "messages": router_messages,
+                    "router_id": router_state["id"],
+                }
+            )
+        except RuntimeError as e:
+            if "close message has been sent" in str(e):
+                logger.warning(f"WebSocket closed while sending message history: {e}")
+            else:
+                raise
 
 
 async def send_input_lock(
@@ -485,12 +515,18 @@ async def send_input_lock(
     await agent_db.update_router(router_id=router_id, status="processing")
 
     if websocket:
-        await websocket.send_json(
-            {
-                "type": "input_lock",
-                "router_id": router_id,
-            }
-        )
+        try:
+            await websocket.send_json(
+                {
+                    "type": "input_lock",
+                    "router_id": router_id,
+                }
+            )
+        except RuntimeError as e:
+            if "close message has been sent" in str(e):
+                logger.warning(f"WebSocket closed while sending input lock: {e}")
+            else:
+                raise
 
 
 async def send_input_unlock(
@@ -501,12 +537,18 @@ async def send_input_unlock(
     await agent_db.update_router(router_id=router_id, status="active")
 
     if websocket:
-        await websocket.send_json(
-            {
-                "type": "input_unlock",
-                "router_id": router_id,
-            }
-        )
+        try:
+            await websocket.send_json(
+                {
+                    "type": "input_unlock",
+                    "router_id": router_id,
+                }
+            )
+        except RuntimeError as e:
+            if "close message has been sent" in str(e):
+                logger.warning(f"WebSocket closed while sending input unlock: {e}")
+            else:
+                raise
 
 
 async def handle_complex_request(
