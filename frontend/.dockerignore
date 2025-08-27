@@ -1,0 +1,5 @@
+node_modules
+npm-debug.log*
+.next
+# Only ignore the .local variants, not base .env files
+.env.*.local

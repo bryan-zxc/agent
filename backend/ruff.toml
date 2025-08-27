@@ -1,0 +1,43 @@
+# Ruff configuration for async/await correctness detection
+target-version = "py313"
+line-length = 120
+
+[lint]
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings  
+    "F",     # pyflakes
+    "I",     # isort
+    "B",     # flake8-bugbear
+    "C4",    # flake8-comprehensions
+    "UP",    # pyupgrade
+    "ASYNC", # flake8-async (async/await correctness)
+]
+
+ignore = [
+    "E501",  # line too long (handled by line-length)
+    "B008",  # do not perform function calls in argument defaults
+]
+
+[lint.extend-per-file-ignores]
+"tests/**/*.py" = [
+    "ASYNC230",  # Allow blocking open calls in tests
+    "ASYNC251",  # Allow time.sleep in tests
+]
+
+[lint.isort]
+known-first-party = ["agent"]
+
+# Async-specific rules that will catch missing awaits:
+# ASYNC100: Cancel scope without checkpoint  
+# ASYNC105: Trio sync call
+# ASYNC109: Async function with timeout
+# ASYNC110: Async busy wait
+# ASYNC115: Async zero sleep
+# ASYNC116: Long sleep not forever
+# ASYNC210: Blocking HTTP call in async function
+# ASYNC220: Create subprocess in async function
+# ASYNC221: Run process in async function  
+# ASYNC222: Wait for process in async function
+# ASYNC230: Blocking open call in async function
+# ASYNC251: Blocking sleep in async function

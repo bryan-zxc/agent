@@ -1,0 +1,8 @@
+*.pyc
+db/
+files/
+*.db
+.env.local
+*.egg-info/
+*.log
+backend/metrics/async_validation

@@ -1,0 +1,45 @@
+# Pre-commit hooks for async/await correctness and code quality
+# Install with: pip install pre-commit && pre-commit install
+# Run manually: pre-commit run --all-files
+
+repos:
+  # Ruff - Fast Python linter with async checks
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.12.10
+    hooks:
+      - id: ruff
+        name: ruff-async-checks
+        description: "Check async/await correctness with Ruff"
+        args: [--select=ASYNC, --fix]
+        files: ^src/agent/(tasks|core|models)/.*\.py$
+        
+      - id: ruff
+        name: ruff-general-checks
+        description: "General code quality checks"
+        args: [--fix]
+        files: ^src/agent/.*\.py$
+        exclude: ^(tests/|migrations/|scripts/)
+
+  # MyPy - Static type checking for coroutine correctness
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.17.1
+    hooks:
+      - id: mypy
+        name: mypy-async-validation
+        description: "Check for missing awaits and type issues"
+        args: [--config-file=mypy.ini, --show-error-codes]
+        files: ^src/agent/(tasks|core)/.*\.py$
+        additional_dependencies: [types-requests, types-PyMySQL]
+
+  # Basic file formatting
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.4.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+        exclude: ^.*\.ipynb$
+      - id: check-added-large-files
+        args: [--maxkb=1000]
