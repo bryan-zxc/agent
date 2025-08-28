@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { MessageInput } from './MessageInput';
-import { useChatStore } from '../stores/chatStore';
+import { useChatStore, RouterMode } from '../stores/chatStore';
 import { cn } from '@/lib/utils';
 import { DuplicateFileInfo } from '../lib/fileUpload';
 
@@ -17,7 +17,15 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   onDuplicateFound,
   isConnected,
 }) => {
-  const { currentRouterId, isConversationLocked } = useChatStore();
+  const { currentRouterId, currentMode, setMode, isConversationLocked } = useChatStore();
+  
+  console.log('LandingPage: Rendering with mode:', currentMode);
+  
+  const handleModeChange = (mode: RouterMode) => {
+    console.log('LandingPage: Mode change requested:', mode);
+    setMode(mode);
+  };
+  
   return (
     <div 
       className={cn(
@@ -48,6 +56,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               disabled={!isConnected || isConversationLocked(currentRouterId)}
               className="border-0 bg-transparent rounded-2xl"
               placeholder={isConversationLocked(currentRouterId) ? "Processing... Please wait" : "Type your message to start a conversation..."}
+              mode={currentMode}
+              onModeChange={handleModeChange}
             />
           </div>
         </div>

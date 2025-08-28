@@ -1,5 +1,13 @@
 from pydantic import BaseModel, Field
 from typing import Literal, Optional
+from enum import Enum
+
+
+class RouterMode(str, Enum):
+    """Mode for router message handling."""
+    AUTO = "auto"  # Default: Assess and route automatically
+    RAPID = "rapid"  # Force simple chat handling only
+    AGENT = "agent"  # Force complex/agent handling only
 
 
 class ImageElement(BaseModel):

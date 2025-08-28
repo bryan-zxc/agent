@@ -35,8 +35,7 @@ from async_test_utils import AsyncWarningCaptureMixin
 
 # Import system components
 from src.agent.models.agent_database import AgentDatabase
-
-# from src.agent.core.router import RouterAgent
+from src.agent.core import router_operations
 from src.agent.tasks.planner_tasks import execute_initial_planning
 from src.agent.tasks.task_utils import update_planner_next_task_and_queue
 from src.agent.models.tasks import InitialExecutionPlan
@@ -312,9 +311,8 @@ class WebSocketAsyncCommunicationTestCase(
             yield {"mock_llm": mock_llm, "ws_manager": self.ws_manager}
 
 
-@unittest.skip("RouterAgent class refactored - needs update")
 class TestRouterAgentWebSocketCoordination(WebSocketAsyncCommunicationTestCase):
-    """Test RouterAgent coordination through WebSocket channels."""
+    """Test Router operations coordination through WebSocket channels."""
 
     async def test_router_websocket_coordination_async_flow(self):
         """Test RouterAgent coordination with WebSocket communication."""
@@ -348,14 +346,35 @@ class TestRouterAgentWebSocketCoordination(WebSocketAsyncCommunicationTestCase):
                 self.assertEqual(result["connection_status"], "connected")
 
     async def _execute_router_websocket_coordination(self):
-        """Execute RouterAgent WebSocket coordination flow."""
+        """Execute Router WebSocket coordination flow."""
         # Set up WebSocket connection
         connection = await self.ws_manager.add_connection(
             self.connection_id, self.router_id
         )
 
-        # Create RouterAgent instance
-        router_agent = RouterAgent(self.router_id)
+        # Create router in database
+        await self.db.create_router(
+            self.router_id,
+            status="active",
+            model="gpt-4.1-nano",
+            temperature=0.0,
+            title="WebSocket Test Router",
+            preview="Testing WebSocket coordination"
+        )
+        
+        # Create router state manually (avoid database lookup issue)
+        from unittest.mock import AsyncMock
+        mock_message_manager = AsyncMock()
+        mock_message_manager.get_messages.return_value = []
+        
+        router_state = {
+            "id": self.router_id,
+            "llm": None,
+            "model": "gpt-4.1-nano",
+            "temperature": 0.0,
+            "agent_db": self.db,
+            "message_manager": mock_message_manager,
+        }
 
         # Create planner for coordination testing
         await self.db.create_planner(
@@ -423,7 +442,6 @@ class TestRouterAgentWebSocketCoordination(WebSocketAsyncCommunicationTestCase):
             await asyncio.sleep(0.01)  # Small delay between updates
 
 
-@unittest.skip("RouterAgent class refactored - needs update")
 class TestWebSocketMessageDelivery(WebSocketAsyncCommunicationTestCase):
     """Test WebSocket message delivery integrity under various conditions."""
 
@@ -534,7 +552,6 @@ class TestWebSocketMessageDelivery(WebSocketAsyncCommunicationTestCase):
             }
 
 
-@unittest.skip("RouterAgent class refactored - needs update")
 class TestWebSocketConnectionStability(WebSocketAsyncCommunicationTestCase):
     """Test WebSocket connection stability during async operations."""
 

@@ -34,8 +34,7 @@ from async_test_utils import AsyncWarningCaptureMixin
 
 # Import system components
 from src.agent.models.agent_database import AgentDatabase
-
-# from src.agent.core.router import RouterAgent
+from src.agent.core import router_operations
 from src.agent.tasks.planner_tasks import (
     execute_initial_planning,
     execute_task_creation,
@@ -199,192 +198,7 @@ class ConcurrentAsyncOperationsTestCase(
             )
 
 
-@unittest.skip("RouterAgent class refactored - needs update")
-class TestConcurrentPlannerExecution(ConcurrentAsyncOperationsTestCase):
-    """Test concurrent execution of multiple planners for async safety."""
 
-    async def test_multiple_planners_concurrent_execution(self):
-        """Test multiple planners executing concurrently without interference."""
-
-        async with self.capture_async_warnings() as warnings_list:
-            async with self.concurrent_mock_context() as mocks:
-                # Measure concurrent planner performance
-                performance = await self.measure_concurrent_performance(
-                    "concurrent_planners", self._execute_concurrent_planners
-                )
-
-                # Validate async execution
-                self.assertTrue(
-                    performance["success"],
-                    f"Concurrent planners failed: {performance['error']}",
-                )
-                self.assert_no_unawaited_coroutines(warnings_list)
-
-                # Validate performance targets
-                perf_data = performance["performance_data"]
-                self.assertTrue(
-                    perf_data["within_target"],
-                    f"Concurrent planners took {perf_data['actual']:.2f}s "
-                    f"(target: {perf_data['target']}s)",
-                )
-
-                # Validate concurrent execution results
-                result = performance["result"]
-                self.assertEqual(
-                    result["successful_planners"],
-                    self.concurrent_params["max_concurrent_planners"],
-                )
-                self.assertEqual(result["database_consistency_check"], "passed")
-
-                # Validate no race conditions detected
-                self.assertFalse(
-                    result["race_conditions_detected"],
-                    "Race conditions detected in concurrent planner execution",
-                )
-
-    async def _execute_concurrent_planners(self):
-        """Execute multiple planners concurrently with validation."""
-        planner_count = self.concurrent_params["max_concurrent_planners"]
-        concurrent_tasks = []
-
-        # Create concurrent planner execution tasks
-        for i in range(planner_count):
-            planner_id = f"{self.base_planner_id}_concurrent_{i}"
-            task = self._single_planner_concurrent_execution(planner_id, i)
-            concurrent_tasks.append(task)
-
-        # Execute all planners concurrently
-        planner_results = await asyncio.gather(
-            *concurrent_tasks, return_exceptions=True
-        )
-
-        # Analyse concurrent execution results
-        successful_planners = sum(
-            1
-            for result in planner_results
-            if not isinstance(result, Exception) and result.get("success", False)
-        )
-
-        # Check for race conditions by validating operation counts
-        race_conditions_detected = await self._detect_race_conditions(planner_results)
-
-        # Validate database consistency after concurrent operations
-        database_consistency = await self._validate_concurrent_database_consistency()
-
-        return {
-            "total_operations": len(concurrent_tasks),
-            "successful_planners": successful_planners,
-            "failed_planners": planner_count - successful_planners,
-            "race_conditions_detected": race_conditions_detected,
-            "database_consistency_check": database_consistency,
-            "operation_metrics": self.operation_counts,
-        }
-
-    async def _single_planner_concurrent_execution(self, planner_id, index):
-        """Execute a single planner in concurrent context."""
-        try:
-            self.track_operation("planner_creation", planner_id)
-
-            # Create planner
-            await self.db.create_planner(
-                planner_id=planner_id,
-                planner_name=f"ConcurrentPlanner{index}",
-                user_question=f"Concurrent execution test {index}",
-                instruction="Execute concurrently with other planners",
-                status="planning",
-            )
-
-            self.track_operation("initial_planning", planner_id)
-
-            # Execute initial planning
-            planning_data = {
-                "entity_id": planner_id,
-                "payload": {
-                    "user_question": f"Concurrent execution test {index}",
-                    "instruction": "Execute concurrently",
-                    "files": [],
-                    "planner_name": f"ConcurrentPlanner{index}",
-                    "router_id": self.router_id,
-                },
-            }
-
-            await execute_initial_planning(planning_data)
-
-            self.track_operation("task_progression", planner_id)
-
-            # Progress through task pipeline
-            await update_planner_next_task_and_queue(
-                planner_id, "execute_task_creation"
-            )
-
-            self.track_operation("planner_completion", planner_id)
-
-            return {
-                "success": True,
-                "planner_id": planner_id,
-                "index": index,
-                "operations_completed": 4,  # creation, planning, progression, completion
-            }
-
-        except Exception as e:
-            return {
-                "success": False,
-                "planner_id": planner_id,
-                "index": index,
-                "error": str(e),
-                "operations_completed": 0,
-            }
-
-    async def _detect_race_conditions(self, planner_results):
-        """Detect potential race conditions from concurrent execution."""
-        # Check for overlapping operations that might indicate race conditions
-        operation_times = []
-
-        for op_type, operations in self.operation_counts.items():
-            for operation in operations:
-                operation_times.append(
-                    {
-                        "type": op_type,
-                        "timestamp": operation["timestamp"],
-                        "thread_id": operation["thread_id"],
-                    }
-                )
-
-        # Sort operations by timestamp
-        operation_times.sort(key=lambda x: x["timestamp"])
-
-        # Look for suspicious patterns (this is a simplified check)
-        race_condition_indicators = []
-
-        for i in range(len(operation_times) - 1):
-            current_op = operation_times[i]
-            next_op = operation_times[i + 1]
-
-            # Check for operations happening too close together
-            time_diff = next_op["timestamp"] - current_op["timestamp"]
-            if time_diff < 0.001:  # Less than 1ms apart
-                race_condition_indicators.append(
-                    {
-                        "type": "rapid_succession",
-                        "operations": [current_op, next_op],
-                        "time_difference": time_diff,
-                    }
-                )
-
-        return len(race_condition_indicators) > 0
-
-    async def _validate_concurrent_database_consistency(self):
-        """Validate database consistency after concurrent operations."""
-        try:
-            # Check that all planners were created successfully
-            # This is a simplified consistency check
-            operation_count = sum(len(ops) for ops in self.operation_counts.values())
-            return "passed" if operation_count > 0 else "failed"
-        except Exception:
-            return "failed"
-
-
-@unittest.skip("RouterAgent class refactored - needs update")
 class TestDatabaseConcurrencyStress(ConcurrentAsyncOperationsTestCase):
     """Test database operations under high concurrent load."""
 
@@ -485,7 +299,6 @@ class TestDatabaseConcurrencyStress(ConcurrentAsyncOperationsTestCase):
             }
 
 
-@unittest.skip("RouterAgent class refactored - needs update")
 class TestResourceContentionPrevention(ConcurrentAsyncOperationsTestCase):
     """Test resource contention prevention in concurrent async scenarios."""
 

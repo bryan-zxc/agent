@@ -17,6 +17,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy.pool import StaticPool
 from datetime import datetime, timezone
 import json
 import logging
@@ -104,6 +105,7 @@ class Router(Base):
     status = Column(String(50), nullable=False)  # active, completed, failed, archived
     model = Column(String(100))  # LLM model used
     temperature = Column(Float)  # LLM temperature setting
+    mode = Column(String(10), nullable=False, default="auto")  # auto, rapid, agent
     title = Column(String(255), nullable=False, default="New conversation")
     preview = Column(String(255), nullable=False, default="")
     agent_metadata = Column(JSON, default=lambda: {})  # Future extensibility
@@ -321,18 +323,34 @@ class AgentDatabase:
 
         # Async engine for all database operations with improved concurrency settings
         async_database_url = f"sqlite+aiosqlite:///{database_path}"
-        self.async_engine = create_async_engine(
-            async_database_url,
-            echo=False,
-            connect_args={
-                "timeout": 30,  # Connection timeout
-                "check_same_thread": False,  # Allow cross-thread access for better concurrency
-            },
-            pool_size=20,  # Increase from default 5 to handle concurrent requests
-            max_overflow=10,  # Allow 10 additional connections beyond pool_size
-            pool_pre_ping=True,  # Verify connections before use to avoid stale connections
-            pool_recycle=3600,  # Recycle connections every hour to prevent issues
-        )
+        
+        # Different configuration for in-memory vs file-based databases
+        if database_path == ":memory:":
+            # In-memory databases use StaticPool, which doesn't support pool_size/max_overflow
+            self.async_engine = create_async_engine(
+                async_database_url,
+                echo=False,
+                connect_args={
+                    "timeout": 30,  # Connection timeout
+                    "check_same_thread": False,  # Allow cross-thread access for better concurrency
+                },
+                pool_pre_ping=True,  # Verify connections before use to avoid stale connections
+                poolclass=StaticPool,  # Use StaticPool for in-memory databases
+            )
+        else:
+            # File-based databases can use normal pooling
+            self.async_engine = create_async_engine(
+                async_database_url,
+                echo=False,
+                connect_args={
+                    "timeout": 30,  # Connection timeout
+                    "check_same_thread": False,  # Allow cross-thread access for better concurrency
+                },
+                pool_size=20,  # Increase from default 5 to handle concurrent requests
+                max_overflow=10,  # Allow 10 additional connections beyond pool_size
+                pool_pre_ping=True,  # Verify connections before use to avoid stale connections
+                pool_recycle=3600,  # Recycle connections every hour to prevent issues
+            )
 
         # Async session factory with optimised settings
         self.AsyncSessionLocal = async_sessionmaker(
@@ -499,6 +517,7 @@ class AgentDatabase:
         status: str,
         model: str = None,
         temperature: float = None,
+        mode: str = None,
         title: str = None,
         preview: str = None,
     ) -> None:
@@ -509,6 +528,7 @@ class AgentDatabase:
                 status=status,
                 model=model or settings.router_model,
                 temperature=temperature or 0.0,
+                mode=mode or "auto",
                 title=title or "New conversation",
                 preview=preview or "",
             )
@@ -529,6 +549,7 @@ class AgentDatabase:
                     "status": router.status,
                     "model": router.model,
                     "temperature": router.temperature,
+                    "mode": router.mode,
                     "title": router.title,
                     "preview": router.preview,
                     "agent_metadata": router.agent_metadata,

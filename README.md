@@ -31,6 +31,12 @@ agent/
 
 ## Features
 
+### Router Modes
+- **Auto Mode** (Default): Intelligently assesses each query and automatically determines whether to use simple chat or activate agents
+- **Rapid Mode**: Forces simple chat responses only for fastest response times - no file processing or agent activation
+- **Agent Mode**: Always activates the agent system for comprehensive analysis, even for simple queries
+- Mode toggle available in the message input area for easy switching during conversations
+
 ### Real-time Interaction
 - Token-by-token response streaming for smooth UX
 - Multi-message sequences with user interruption

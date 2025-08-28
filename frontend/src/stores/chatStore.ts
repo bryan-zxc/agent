@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { ChatMessage, AgentStatus } from '../../../shared/types';
 
+export type RouterMode = 'auto' | 'rapid' | 'agent';
+
 interface Conversation {
   id: string;
   title: string;
@@ -16,6 +18,7 @@ interface ChatStore {
   currentModel: string;
   temperature: number;
   currentRouterId: string;
+  currentMode: RouterMode;
   conversations: Conversation[];
   lockedConversations: Set<string>;
   
@@ -26,6 +29,7 @@ interface ChatStore {
   setConnecting: (connecting: boolean) => void;
   setModel: (model: string) => void;
   setTemperature: (temperature: number) => void;
+  setMode: (mode: RouterMode) => void;
   clearMessages: () => void;
   setCurrentConversation: (routerId: string) => void;
   setConversations: (conversations: Conversation[]) => void;
@@ -45,6 +49,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   currentModel: 'gpt-4',
   temperature: 0.7,
   currentRouterId: '', // Start with empty router_id - backend will provide one
+  currentMode: 'auto', // Default to auto mode
   conversations: [],
   lockedConversations: new Set(),
   
@@ -67,6 +72,12 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     
   setTemperature: (temperature) =>
     set({ temperature }),
+    
+  setMode: (mode) => 
+    set((state) => {
+      console.log('ChatStore: setMode changing from', state.currentMode, 'to', mode);
+      return { currentMode: mode };
+    }),
     
   clearMessages: () =>
     set({ messages: [] }),

@@ -3,6 +3,7 @@
 import { useState, useRef, KeyboardEvent } from 'react';
 import { cn } from '@/lib/utils';
 import { FileAttachment } from './FileAttachment';
+import { ModeToggle, RouterMode } from './ModeToggle';
 import { Button } from './ui/button';
 import { Textarea } from './ui/textarea';
 import { Send, Paperclip } from 'lucide-react';
@@ -14,6 +15,8 @@ interface MessageInputProps {
   disabled?: boolean;
   className?: string;
   placeholder?: string;
+  mode: RouterMode;
+  onModeChange: (mode: RouterMode) => void;
 }
 
 export const MessageInput: React.FC<MessageInputProps> = ({
@@ -21,13 +24,22 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   onDuplicateFound,
   disabled = false,
   className,
-  placeholder = "Type your message... (Enter to send, Shift+Enter for new line)"
+  placeholder = "Type your message... (Enter to send, Shift+Enter for new line)",
+  mode,
+  onModeChange
 }) => {
+  console.log('MessageInput: Rendering with mode:', mode);
+  
   const [inputMessage, setInputMessage] = useState('');
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  
+  const handleModeChange = (newMode: RouterMode) => {
+    console.log('MessageInput: onModeChange called with:', newMode);
+    onModeChange(newMode);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -86,6 +98,16 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       )}
       role="contentinfo"
     >
+      {/* Mode toggle - show above input area */}
+      <div className="flex items-center justify-between mb-3">
+        <ModeToggle
+          mode={mode}
+          onModeChange={handleModeChange}
+          disabled={disabled}
+          className="ml-auto"
+        />
+      </div>
+      
       <form onSubmit={handleSubmit} className={cn(selectedFiles.length > 0 ? "space-y-3" : "")}>
         {selectedFiles.length > 0 && (
           <FileAttachment

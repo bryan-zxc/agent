@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { useChatStore } from '../stores/chatStore';
+import { useChatStore, RouterMode } from '../stores/chatStore';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { ChatHeader } from './ChatHeader';
 import { MessageList } from './MessageList';
@@ -16,7 +16,7 @@ import { SidebarProvider, SidebarInset } from './ui/sidebar';
 import { fileUploadService, DuplicateFileInfo } from '../lib/fileUpload';
 
 export const ChatInterface: React.FC = () => {
-  const { messages, status, currentRouterId, createNewConversation, setCurrentConversation, isConversationLocked } = useChatStore();
+  const { messages, status, currentRouterId, currentMode, setMode, createNewConversation, setCurrentConversation, isConversationLocked } = useChatStore();
   console.log('ChatInterface render - currentRouterId:', currentRouterId);
   const [conversationStarted, setConversationStarted] = useState(false);
   const [, setPendingRouterId] = useState<string | null>(null);
@@ -34,7 +34,7 @@ export const ChatInterface: React.FC = () => {
   });
   
   // Use single persistent WebSocket connection
-  const { sendMessage, loadConversation, isConnected: wsConnected, isWebSocketOpen } = useWebSocket();
+  const { sendMessage, loadConversation, updateMode, isConnected: wsConnected, isWebSocketOpen } = useWebSocket();
 
   const waitForWebSocketConnection = (): Promise<void> => {
     return new Promise((resolve, reject) => {
@@ -246,6 +246,14 @@ export const ChatInterface: React.FC = () => {
                     disabled={!wsConnected || isConversationLocked(currentRouterId)}
                     className="border-0 bg-transparent"
                     placeholder={isConversationLocked(currentRouterId) ? "Processing... Please wait" : "Type your message... (Enter to send, Shift+Enter for new line)"}
+                    mode={currentMode}
+                    onModeChange={(mode) => {
+                      setMode(mode);
+                      // Update mode in backend for existing conversations
+                      if (currentRouterId) {
+                        updateMode(mode, currentRouterId);
+                      }
+                    }}
                   />
                 </div>
               </div>

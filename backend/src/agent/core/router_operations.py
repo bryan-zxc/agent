@@ -10,7 +10,7 @@ import duckdb
 from ..config.settings import settings
 from ..models import File, DocumentContext
 from ..models.responses import RequireAgent
-from ..models.schemas import FileGrouping
+from ..models.schemas import FileGrouping, RouterMode
 from ..models.agent_database import AgentDatabase, AgentType, Router
 from sqlalchemy import select, update
 from ..services.image_service import process_image_file, is_image
@@ -62,6 +62,7 @@ async def create_router(router_id: Optional[str] = None) -> Dict[str, Any]:
             "llm": llm,
             "model": loaded_state["model"],
             "temperature": loaded_state["temperature"],
+            "mode": loaded_state.get("mode", "auto"),
             "agent_db": agent_db,
             "message_manager": message_manager,
         }
@@ -153,7 +154,10 @@ def encode_image_content(
 
 
 async def activate_conversation(
-    user_message: str, websocket: WebSocket, files: Optional[List[str]] = None
+    user_message: str,
+    websocket: WebSocket,
+    files: Optional[List[str]] = None,
+    mode: str = "auto",
 ) -> Dict[str, Any]:
     """
     Create and activate a new conversation.
@@ -163,6 +167,7 @@ async def activate_conversation(
         user_message: The user's initial message
         websocket: WebSocket connection for real-time communication
         files: Optional list of file paths to process
+        mode: Router mode (auto, rapid, agent) - defaults to auto
 
     Returns:
         Router state dictionary from create_router
@@ -182,6 +187,7 @@ async def activate_conversation(
         status="active",
         model=router_state["model"],
         temperature=router_state["temperature"],
+        mode=mode,
         title=title,
         preview=preview,
     )
@@ -191,12 +197,18 @@ async def activate_conversation(
         db=agent_db, agent_type="router", agent_id=router_id
     )
     router_state["message_manager"] = message_manager
+    router_state["mode"] = mode
 
     # Add system message
     await message_manager.add_message(
         role="system",
-        content="Your name is Bandit Heeler, your main role is to have a conversation with the user and for complex requests activate agents."
-        "Otherwise, you are a fictional character from the show Bluey.",
+        content="Your name is Bandit Heeler, your main role is to have a conversation with the user and for complex requests activate agents. "
+        "Now you maybe forced to be operating on rapid mode, in which case you will need to answer more complex questions yourself without agents. "
+        "In such situations where you sense the question is complex, or requiring information that you don't have, remember to warn the user that your answers is not validated against any files or external sources, and may be incorrect. "
+        "If they want a proper answer, they should either switch to auto or agent mode (note web searches, amongst other things) all need to be performed under agent mode). "
+        "IMPORTANT: under rapid mode you CANNOT activate agent yourself, so you should ask the user to switch the toggle themselves, but be careful of the wording and don't make it sound like you can activate agent yourself. "
+        "The toggle for mode switching is located just above the send button. "
+        "By the way, you are a fictional character from the show Bluey.",
     )
 
     # Process the initial message
@@ -279,56 +291,93 @@ async def handle_message(
         # Send processing status
         await send_status(status="Thinking", router_id=router_id, websocket=websocket)
 
-        # Determine response type
-        logger.info(
-            f"DEBUG: Checking if files exist - files: {files}, bool(files): {bool(files)}"
-        )
-        if files:
-            logger.info(f"DEBUG: Taking complex request path with files: {files}")
-            await handle_complex_request(
-                router_state=router_state, websocket=websocket, files=files
-            )
-            # Complex request handles its own messaging - no response to send
-        else:
-            logger.info(f"DEBUG: Taking simple chat path - no files provided")
-            # Run assessment and simple chat concurrently to reduce wait time
-            async with asyncio.TaskGroup() as tg:
-                assessment_task = tg.create_task(
-                    assess_agent_requirements(router_state=router_state)
-                )
-                simple_chat_task = tg.create_task(
-                    handle_simple_chat(router_state=router_state)
-                )
+        # Get router mode
+        router_mode = router_state.get("mode", "auto")
+        logger.info(f"Router {router_id} handling message in {router_mode} mode")
 
-            agent_requirements = assessment_task.result()
-            logger.info(
-                f"Agent requirements assessed for router {router_id}: {agent_requirements.model_dump_json(indent=2)}"
+        # Determine response type based on mode
+        if router_mode == "rapid":
+            # RAPID mode: Always use simple chat, skip assessment
+            logger.info(f"RAPID mode: Using simple chat only")
+            response = await handle_simple_chat(router_state=router_state)
+            await message_manager.add_message(role="assistant", content=response)
+            await send_assistant_message(
+                content=response, router_id=router_id, websocket=websocket
             )
-
-            # Check if agent is needed
-            boolean_requirements = [
-                getattr(agent_requirements, field_name)
-                for field_name, field_info in agent_requirements.__class__.model_fields.items()
-                if field_info.annotation == bool
-                and hasattr(agent_requirements, field_name)
-            ]
-            if any(boolean_requirements):
-                # We need complex handling - simple chat result is discarded
-                await handle_complex_request(
-                    router_state=router_state,
-                    websocket=websocket,
-                    agent_requirements=agent_requirements,
+        elif router_mode == "agent":
+            # AGENT mode: Always use complex handling
+            logger.info(f"AGENT mode: Forcing complex request handling")
+            # First assess requirements even without files
+            if not files:
+                agent_requirements = await assess_agent_requirements(
+                    router_state=router_state
                 )
-                # Complex request handles its own messaging
+                # Force at least one requirement to be true to trigger complex handling
+                agent_requirements.require_agent = True
             else:
-                # Use the already completed simple chat response
-                response = simple_chat_task.result()
-                logger.info(f"Response generated in router:\n{response}")
-                # Store and send response for simple chat only
-                await message_manager.add_message(role="assistant", content=response)
-                await send_assistant_message(
-                    content=response, router_id=router_id, websocket=websocket
+                agent_requirements = None
+
+            await handle_complex_request(
+                router_state=router_state,
+                websocket=websocket,
+                files=files,
+                agent_requirements=agent_requirements,
+            )
+        else:
+            # AUTO mode: Original behaviour
+            logger.info(
+                f"AUTO mode: Checking if files exist - files: {files}, bool(files): {bool(files)}"
+            )
+            if files:
+                logger.info(
+                    f"AUTO mode: Taking complex request path with files: {files}"
                 )
+                await handle_complex_request(
+                    router_state=router_state, websocket=websocket, files=files
+                )
+                # Complex request handles its own messaging - no response to send
+            else:
+                logger.info(f"AUTO mode: Taking simple chat path - no files provided")
+                # Run assessment and simple chat concurrently to reduce wait time
+                async with asyncio.TaskGroup() as tg:
+                    assessment_task = tg.create_task(
+                        assess_agent_requirements(router_state=router_state)
+                    )
+                    simple_chat_task = tg.create_task(
+                        handle_simple_chat(router_state=router_state)
+                    )
+
+                agent_requirements = assessment_task.result()
+                logger.info(
+                    f"Agent requirements assessed for router {router_id}: {agent_requirements.model_dump_json(indent=2)}"
+                )
+
+                # Check if agent is needed
+                boolean_requirements = [
+                    getattr(agent_requirements, field_name)
+                    for field_name, field_info in agent_requirements.__class__.model_fields.items()
+                    if field_info.annotation == bool
+                    and hasattr(agent_requirements, field_name)
+                ]
+                if any(boolean_requirements):
+                    # We need complex handling - simple chat result is discarded
+                    await handle_complex_request(
+                        router_state=router_state,
+                        websocket=websocket,
+                        agent_requirements=agent_requirements,
+                    )
+                    # Complex request handles its own messaging
+                else:
+                    # Use the already completed simple chat response
+                    response = simple_chat_task.result()
+                    logger.info(f"Response generated in router:\n{response}")
+                    # Store and send response for simple chat only
+                    await message_manager.add_message(
+                        role="assistant", content=response
+                    )
+                    await send_assistant_message(
+                        content=response, router_id=router_id, websocket=websocket
+                    )
 
     except Exception as e:
         logger.error(
@@ -355,10 +404,17 @@ async def handle_simple_chat(router_state: Dict[str, Any]) -> str:
         The LLM response content
     """
     message_manager = router_state["message_manager"]
+    router_mode = router_state.get("mode", "auto")
     messages = await message_manager.get_messages()
 
     response = await router_state["llm"].a_get_response(
-        messages=messages,
+        messages=messages
+        + [
+            {
+                "role": "user",
+                "content": f"You are currently operating in {router_mode} mode.",
+            }
+        ],
         model=router_state["model"],
         temperature=router_state["temperature"],
     )
@@ -460,7 +516,9 @@ async def send_assistant_message(
             await websocket.send_json(response_data)
         except RuntimeError as e:
             if "close message has been sent" in str(e):
-                logger.warning(f"WebSocket closed while sending assistant response: {e}")
+                logger.warning(
+                    f"WebSocket closed while sending assistant response: {e}"
+                )
             else:
                 raise
     else:

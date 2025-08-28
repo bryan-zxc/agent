@@ -175,6 +175,23 @@ async def handle_websocket_message(websocket: WebSocket, data: dict):
                 logger.info(f"Sent message history for router {router_id}")
                 # Router state discarded after use
 
+        elif message_type == "update_mode":
+            # Update router mode
+            router_id = data.get("router_id")
+            mode = data.get("mode", "auto")
+            if router_id:
+                logger.info(f"Updating router {router_id} mode to {mode}")
+                # Update mode in database
+                agent_db = await AgentDatabase.create()
+                await agent_db.update_router(router_id=router_id, mode=mode)
+                # Send confirmation
+                await websocket.send_json({
+                    "type": "mode_updated",
+                    "router_id": router_id,
+                    "mode": mode
+                })
+                logger.info(f"Router {router_id} mode updated to {mode}")
+        
         elif message_type == "message":
             # Regular chat message - ephemeral router creation
             router_id = data.get("router_id")
@@ -187,8 +204,9 @@ async def handle_websocket_message(websocket: WebSocket, data: dict):
                 # For new conversations, use activate_conversation with WebSocket
                 user_message = data.get("message", "")
                 files = data.get("files", [])
+                mode = data.get("mode", "auto")  # Get mode from frontend, default to auto
                 router_state = await router_operations.activate_conversation(
-                    user_message=user_message, files=files, websocket=websocket
+                    user_message=user_message, files=files, websocket=websocket, mode=mode
                 )
                 router_id = router_state[
                     "id"

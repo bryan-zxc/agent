@@ -37,8 +37,11 @@ Function-based router operations for real-time chat and file processing orchestr
 - `generate_and_update_title(router_state)`: Generate LLM-based title for conversation
 
 **Message Processing:**
-- `activate_conversation(user_message, websocket, files?)`: Initialize new conversation via WebSocket
-- `handle_message(router_state, message_data, websocket)`: Main message handler
+- `activate_conversation(user_message, websocket, files?, mode?)`: Initialize new conversation via WebSocket with optional mode
+- `handle_message(router_state, message_data, websocket)`: Main message handler with mode-based routing
+  - **Auto Mode**: Assesses requirements and routes to simple/complex handling
+  - **Rapid Mode**: Always routes to simple chat for fastest responses
+  - **Agent Mode**: Always activates complex handling with agents
 - `handle_simple_chat(router_state)`: Process simple conversational messages
 - `handle_complex_request(router_state, websocket, files?, agent_requirements?)`: Handle complex requests
 - `assess_agent_requirements(router_state)`: Determine if agent assistance is needed

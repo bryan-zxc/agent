@@ -147,6 +147,13 @@ export const useWebSocket = (url?: string) => {
               }
               break;
               
+            case 'mode_updated':
+              if (data.mode) {
+                store.setMode(data.mode);
+                console.log('Mode updated to:', data.mode);
+              }
+              break;
+              
             // execution_plan_update case removed - now using frontend polling instead
               
             default:
@@ -226,7 +233,7 @@ export const useWebSocket = (url?: string) => {
     console.log('sendMessage called, WebSocket readyState:', ws.current?.readyState, 'URL:', ws.current?.url);
     
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-      const { currentModel, temperature, currentRouterId } = useChatStore.getState();
+      const { currentModel, temperature, currentRouterId, currentMode } = useChatStore.getState();
       const targetRouterId = routerId || currentRouterId;
       
       const payload: any = {
@@ -235,6 +242,7 @@ export const useWebSocket = (url?: string) => {
         files,
         model: currentModel,
         temperature,
+        mode: currentMode, // Include current mode in message
       };
       
       // Only include router_id if we have one (for continuing conversations)
@@ -313,10 +321,29 @@ export const useWebSocket = (url?: string) => {
     return ws.current?.readyState === WebSocket.OPEN;
   }, []);
 
+  const updateMode = useCallback((mode: string, routerId?: string) => {
+    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+      const { currentRouterId } = useChatStore.getState();
+      const targetRouterId = routerId || currentRouterId;
+      
+      if (targetRouterId) {
+        const payload = {
+          type: 'update_mode',
+          router_id: targetRouterId,
+          mode: mode,
+        };
+        
+        console.log('Updating router mode via WebSocket:', payload);
+        ws.current.send(JSON.stringify(payload));
+      }
+    }
+  }, []);
+
   return {
     sendMessage,
     loadConversation,
     disconnect,
+    updateMode,
     isConnected: ws.current?.readyState === WebSocket.OPEN,
     isWebSocketOpen,
   };

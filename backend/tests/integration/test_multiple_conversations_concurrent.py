@@ -22,13 +22,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Import the modules under test
 from agent.models.agent_database import AgentDatabase
-
-# from agent.core.router import RouterAgent
+from agent.core import router_operations
 from agent.tasks.task_utils import get_router_id_for_planner, is_router_busy
 from agent.config.settings import settings
 
 
-@unittest.skip("RouterAgent class refactored - needs update")
 class TestMultipleConversationsConcurrent(unittest.IsolatedAsyncioTestCase):
     """Test concurrent execution of multiple router conversations."""
 
@@ -307,16 +305,13 @@ class TestMultipleConversationsConcurrent(unittest.IsolatedAsyncioTestCase):
             "Research renewable energy market trends and opportunities",
         ]
 
-        # Create planners concurrently across different conversations
-        with ThreadPoolExecutor(max_workers=3) as executor:
-            futures = [
-                executor.submit(create_planner_for_router, router_id, description)
-                for router_id, description in zip(router_ids, task_descriptions)
-            ]
-
-            created_planners = []
-            for future in as_completed(futures):
-                created_planners.append(future.result())
+        # Create planners concurrently across different conversations using asyncio
+        tasks = [
+            create_planner_for_router(router_id, description)
+            for router_id, description in zip(router_ids, task_descriptions)
+        ]
+        
+        created_planners = await asyncio.gather(*tasks)
 
         # Verify all planners were created successfully
         self.assertEqual(len(created_planners), 3)
@@ -324,7 +319,7 @@ class TestMultipleConversationsConcurrent(unittest.IsolatedAsyncioTestCase):
 
         # Verify each router has exactly one planner
         for router_id in router_ids:
-            planners = self.db.get_planners_by_router(router_id)
+            planners = await self.db.get_planners_by_router(router_id)
             self.assertEqual(len(planners), 1)
 
             planner = planners[0]
@@ -342,10 +337,10 @@ class TestMultipleConversationsConcurrent(unittest.IsolatedAsyncioTestCase):
                 planner["user_question"],
             )
 
-    def test_concurrent_conversation_file_operations(self):
+    async def test_concurrent_conversation_file_operations(self):
         """Test file operations across different conversations remain isolated."""
         # Create test routers
-        router_ids = [self.create_test_router(conv) for conv in self.test_conversations]
+        router_ids = [await self.create_test_router(conv) for conv in self.test_conversations]
 
         def perform_file_operations(router_id, file_prefix):
             """Perform file operations for a specific conversation."""
