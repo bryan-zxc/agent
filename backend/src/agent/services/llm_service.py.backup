@@ -14,7 +14,7 @@ from anthropic import Anthropic
 from google import genai
 from google.genai import types
 import httpx
-from typing import Literal, Optional, Union, Type, Dict, List, Any, Callable
+from typing import Literal, Optional, Union, Type
 from sqlalchemy import (
     create_engine,
     Column,
@@ -104,7 +104,6 @@ class LLM:
         self,
         db_path: str | Path = Path("/app/db/llm_usage.db"),
         caller: str = "general",
-        mcp_manager=None,  # Optional MCP manager for tool support
     ):
         # Load settings which automatically loads .env and .env.local
         settings = AgentSettings()
@@ -124,9 +123,6 @@ class LLM:
 
         # Store caller for usage tracking
         self.caller = caller
-        
-        # Store MCP manager for tool support
-        self.mcp_manager = mcp_manager
 
         # SQLAlchemy setup with WAL mode and connection pooling
         self.db_path = Path(db_path)
@@ -546,213 +542,13 @@ class LLM:
 
     async def a_get_response(
         self,
-        messages: List[Dict],
+        messages: list[dict],
         model: Literal["gpt-4.1-nano", "sonnet-4", "gemini-2.5-pro"],
         temperature: float = 0,
-        response_format: Any = None,
-        tools: Optional[List] = None,  # Regular tools to use
-        tool_filter: Optional[Callable] = None,  # Filter for MCP tools only
-        max_tool_rounds: int = 10,
-        on_tool_start: Optional[Callable] = None,  # async (tool_name, args) -> None
-        on_tool_complete: Optional[Callable] = None,  # async (tool_name, result) -> None
-        on_tool_error: Optional[Callable] = None,  # async (tool_name, error) -> None
+        response_format: BaseModel = None,
+        tools: list = None,
     ):
-        """
-        Get LLM response with optional tool support (regular and/or MCP).
-        
-        Args:
-            messages: Conversation messages
-            model: Model to use
-            temperature: Temperature setting for randomness
-            response_format: Structured output format (incompatible with tools)
-            tools: Explicit tools to use (OpenAI/Anthropic format)
-            tool_filter: Optional function to filter MCP tools (server_name, tool) -> bool
-            max_tool_rounds: Maximum rounds of tool calling to prevent infinite loops
-            on_tool_start: Callback when tool execution starts
-            on_tool_complete: Callback when tool execution completes
-            on_tool_error: Callback when tool execution fails
-            
-        Returns:
-            LLM response, either as structured object or string content
-        """
-        
-        # Combine regular tools and MCP tools
-        final_tools = []
-        
-        # Add explicitly provided tools
-        if tools:
-            final_tools.extend(tools)
-        
-        # Add MCP tools if manager exists
-        if self.mcp_manager:
-            try:
-                if tool_filter:
-                    mcp_tools = await self.mcp_manager.get_filtered_tools(tool_filter)
-                else:
-                    mcp_tools = await self.mcp_manager.get_tools_for_llm()
-                final_tools.extend(mcp_tools)
-                logger.info(f"Loaded {len(mcp_tools)} MCP tools for {self.caller}")
-            except Exception as e:
-                logger.warning(f"Failed to load MCP tools: {e}")
-        
-        # If no tools at all, use regular get_response
-        if not final_tools:
-            return self.get_response(messages, model, temperature, response_format)
-        
-        # Tool-enabled flow with callbacks
-        return await self._get_response_with_tools(
-            messages=messages,
-            model=model,
-            temperature=temperature,
-            response_format=response_format,
-            tools=final_tools,
-            max_tool_rounds=max_tool_rounds,
-            on_tool_start=on_tool_start,
-            on_tool_complete=on_tool_complete,
-            on_tool_error=on_tool_error
-        )
-    
-    async def _get_response_with_tools(
-        self,
-        messages: List[Dict],
-        model: str,
-        temperature: float,
-        response_format: Any,
-        tools: List[Dict],
-        max_tool_rounds: int,
-        on_tool_start: Optional[Callable],
-        on_tool_complete: Optional[Callable],
-        on_tool_error: Optional[Callable],
-    ):
-        """
-        Internal method to handle tool-calling loop for both regular and MCP tools.
-        """
-        current_messages = messages.copy()
-        rounds = 0
-        
-        while rounds < max_tool_rounds:
-            # Call LLM with tools (using sync method since we don't have async LLM calls)
-            response = self.get_response_with_tools(
-                messages=current_messages,
-                model=model,
-                temperature=temperature,
-                tools=tools
-            )
-            
-            # If no tool calls, return the response
-            if not hasattr(response, 'tool_calls') or not response.tool_calls:
-                return response
-            
-            # Process tool calls
-            tool_results = []
-            for tool_call in response.tool_calls:
-                # Extract tool name and arguments
-                if hasattr(tool_call, 'function'):
-                    # OpenAI format
-                    tool_name = tool_call.function.name
-                    try:
-                        tool_args = json.loads(tool_call.function.arguments)
-                    except json.JSONDecodeError as e:
-                        logger.error(f"Failed to parse tool arguments: {e}")
-                        tool_args = {}
-                    tool_id = tool_call.id
-                else:
-                    # Anthropic format
-                    tool_name = tool_call.name if hasattr(tool_call, 'name') else str(tool_call)
-                    tool_args = tool_call.input if hasattr(tool_call, 'input') else {}
-                    tool_id = tool_call.id if hasattr(tool_call, 'id') else tool_name
-                
-                # Notify start
-                if on_tool_start:
-                    try:
-                        await on_tool_start(tool_name, tool_args)
-                    except Exception as e:
-                        logger.warning(f"on_tool_start callback failed: {e}")
-                
-                # Execute tool
-                try:
-                    # Check if this is an MCP tool (has __ separator)
-                    if '__' in tool_name and self.mcp_manager:
-                        # MCP tool execution
-                        result = await self.mcp_manager.execute_llm_tool_call(tool_call)
-                    else:
-                        # For regular tools, we'd need the actual tool function
-                        # This is a placeholder - in practice, the caller would need to provide tool functions
-                        result = {"error": "Tool execution not implemented for non-MCP tools"}
-                        logger.warning(f"Cannot execute non-MCP tool {tool_name} - no executor provided")
-                    
-                    # Notify completion
-                    if on_tool_complete:
-                        try:
-                            await on_tool_complete(tool_name, result)
-                        except Exception as e:
-                            logger.warning(f"on_tool_complete callback failed: {e}")
-                    
-                    # Format result
-                    content = json.dumps(result) if not isinstance(result, str) else result
-                    
-                except Exception as e:
-                    error_msg = str(e)
-                    logger.error(f"Tool {tool_name} failed: {error_msg}")
-                    
-                    # Notify error
-                    if on_tool_error:
-                        try:
-                            await on_tool_error(tool_name, error_msg)
-                        except Exception as e:
-                            logger.warning(f"on_tool_error callback failed: {e}")
-                    
-                    content = json.dumps({"error": error_msg})
-                
-                # Add tool result
-                tool_results.append({
-                    "tool_call_id": tool_id,
-                    "role": "tool",
-                    "content": content
-                })
-            
-            # Add assistant's tool call message and tool results
-            current_messages.append({
-                "role": "assistant",
-                "tool_calls": response.tool_calls
-            })
-            current_messages.extend(tool_results)
-            
-            rounds += 1
-            logger.debug(f"Completed tool round {rounds}/{max_tool_rounds}")
-        
-        # Final response without tools after max rounds
-        logger.warning(f"Reached max tool rounds ({max_tool_rounds}), getting final response")
-        return self.get_response(current_messages, model, temperature, response_format)
-    
-    def get_response_with_tools(self, messages, model, temperature, tools):
-        """Helper method to get response with tools from sync context."""
-        # Map to actual model name
-        actual_model = MODEL_MAPPING.get(model, model)
-        
-        if self._is_anthropic_model(model):
-            # Use native Anthropic SDK with message conversion
-            anthropic_messages, system_content = (
-                self._convert_openai_to_anthropic_messages(messages)
-            )
-            result = self._anthropic_tools_response(
-                anthropic_messages,
-                actual_model,
-                temperature,
-                tools,
-                system_content,
-            )
-            if result is None:
-                raise Exception("Anthropic tools response returned None")
-            return type(
-                "MockMessage", (), result
-            )()  # Convert dict to object for compatibility
-        else:
-            # Use existing logic for OpenAI and Gemini models
-            client = self._get_client_for_model(model)
-            return self._get_response_tools(
-                messages, actual_model, temperature, tools, client
-            )
+        return self.get_response(messages, model, temperature, response_format, tools)
 
     def get_response(
         self,
@@ -760,6 +556,7 @@ class LLM:
         model: Literal["gpt-4.1-nano", "sonnet-4", "gemini-2.5-pro"],
         temperature: float = 0,
         response_format: BaseModel | dict = None,
+        tools: list = None,
     ):
         # Map to actual model name
         actual_model = MODEL_MAPPING.get(model, model)
@@ -772,7 +569,20 @@ class LLM:
                         self._convert_openai_to_anthropic_messages(messages)
                     )
 
-                    if response_format:
+                    if tools:
+                        result = self._anthropic_tools_response(
+                            anthropic_messages,
+                            actual_model,
+                            temperature,
+                            tools,
+                            system_content,
+                        )
+                        if result is None:
+                            raise Exception("Anthropic tools response returned None")
+                        return type(
+                            "MockMessage", (), result
+                        )()  # Convert dict to object for compatibility
+                    elif response_format:
                         # Unified handler for both Pydantic models and JSON objects
                         result = self._anthropic_structured_response(
                             anthropic_messages,
@@ -802,6 +612,10 @@ class LLM:
                     # Use existing logic for OpenAI and Gemini models
                     client = self._get_client_for_model(model)
 
+                    if tools:
+                        return self._get_response_tools(
+                            messages, actual_model, temperature, tools, client
+                        )
                     if response_format:
                         return self._get_response_structured(
                             messages, actual_model, temperature, response_format, client

@@ -1,6 +1,7 @@
 from pydantic import Field, ConfigDict
 from pydantic_settings import BaseSettings
 from typing import Optional
+from .mcp_config import load_mcp_config, MCPConfig
 
 
 class AgentSettings(BaseSettings):
@@ -77,6 +78,33 @@ class AgentSettings(BaseSettings):
     # Environment
     environment: str = Field(default="development", description="Current environment")
     debug_mode: bool = Field(default=False, description="Enable debug mode")
+    
+    # MCP Integration
+    mcp_enabled: bool = Field(
+        default=True,
+        description="Enable MCP integration globally"
+    )
+    
+    # Load MCP configuration
+    @property
+    def mcp_config(self) -> MCPConfig:
+        """Lazy load MCP configuration."""
+        if not hasattr(self, '_mcp_config'):
+            self._mcp_config = load_mcp_config()
+        return self._mcp_config
+    
+    # Convenience accessors
+    @property
+    def mcp_router_enabled(self) -> bool:
+        return self.mcp_enabled and self.mcp_config.router_enabled
+    
+    @property
+    def mcp_planner_enabled(self) -> bool:
+        return self.mcp_enabled and self.mcp_config.planner_enabled
+    
+    @property
+    def mcp_worker_enabled(self) -> bool:
+        return self.mcp_enabled and self.mcp_config.worker_enabled
 
     model_config = ConfigDict(
         env_file=[".env", ".env.local"],  # Load both files, .env.local overrides .env

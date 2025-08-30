@@ -1,0 +1,59 @@
+# MCP Server Configuration
+# Copy this file to mcp_config.yaml and customise as needed
+
+servers:
+  - name: github
+    server_type: stdio
+    command: npx
+    args:
+      - "@modelcontextprotocol/server-github"
+    env:
+      GITHUB_TOKEN: ${GITHUB_TOKEN}  # Will be replaced from environment
+    description: GitHub API integration
+    enabled: true
+
+  - name: filesystem
+    server_type: stdio
+    command: npx
+    args:
+      - "@modelcontextprotocol/server-filesystem"
+      - "/workspace"  # Or your preferred root
+    description: Local filesystem access
+    enabled: true
+
+  - name: postgres
+    server_type: stdio
+    command: npx
+    args:
+      - "@modelcontextprotocol/server-postgres"
+    env:
+      DATABASE_URL: ${DATABASE_URL}
+    description: PostgreSQL database access
+    enabled: false  # Enable when needed
+
+  - name: web_search
+    server_type: http
+    url: "http://web-search-mcp:8080"
+    description: Web search capabilities
+    enabled: false  # Enable when server is available
+
+# Tool discovery settings
+auto_discover: true
+refresh_interval: 300  # seconds
+max_tool_rounds: 10
+
+# Per-agent configuration
+router_enabled: true
+router_servers:
+  - github
+  - filesystem
+  - web_search
+
+planner_enabled: true
+planner_servers:
+  - filesystem
+  - github
+
+worker_enabled: false  # Not yet implemented
+worker_servers:
+  - filesystem

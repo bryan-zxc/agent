@@ -38,6 +38,15 @@ RUN if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
         && rm /tmp/chromedriver.zip; \
     fi
 
+# Install Node.js 20 LTS for MCP servers
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
+    && npm install -g npm@latest \
+    && rm -rf /var/lib/apt/lists/*
+
+# Verify Node.js installations
+RUN node --version && npm --version && npx --version
+
 # Install uv for fast Python package management
 RUN pip install uv
 
@@ -50,6 +59,15 @@ COPY README.md ./
 
 # Install Python dependencies (including local package)
 RUN uv sync --frozen
+
+# Copy package.json first for better caching
+COPY package.json* ./
+
+# Install MCP servers globally during build
+# Direct global installation ensures they're available in the container
+RUN if [ -f package.json ]; then \
+    npm install -g @modelcontextprotocol/server-github @modelcontextprotocol/server-filesystem; \
+    fi
 
 # Copy remaining application files
 COPY . .

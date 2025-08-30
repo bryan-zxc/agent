@@ -1,0 +1,14 @@
+{
+  "name": "agent-backend-mcp",
+  "version": "1.0.0",
+  "description": "MCP servers for Agent backend",
+  "private": true,
+  "dependencies": {
+    "@modelcontextprotocol/server-github": "latest",
+    "@modelcontextprotocol/server-filesystem": "latest"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "postinstall": "echo 'MCP servers installed successfully'"
+  }
+}

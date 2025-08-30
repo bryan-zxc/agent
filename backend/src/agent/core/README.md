@@ -20,6 +20,31 @@ Base agent class that provides common functionality for all agents in the system
 - **LLM Integration**: Unified interface for language model interactions
 - **Logging Integration**: Built-in logging with configurable verbosity
 
+### `mcp_client.py`
+Model Context Protocol (MCP) client manager for external tool integration.
+
+#### Classes
+
+**`MCPClientManager`**
+- Manages connections to external MCP servers (GitHub, databases, file systems, etc.)
+- Handles tool discovery, formatting for LLMs, and execution
+- Provides singleton pattern for global access across the application
+
+**Key Methods:**
+- `connect(name, server_url)`: Connect to an MCP server
+- `disconnect(name)`: Disconnect from a specific MCP server
+- `get_tools_for_llm()`: Get all available tools formatted for LLM function calling
+- `execute_llm_tool_call(tool_call)`: Execute a tool call from LLM response
+- `get_filtered_tools(filter_fn)`: Get tools with custom filtering
+- `list_connected_servers()`: Get list of connected server names
+
+**Features:**
+- **Tool Discovery**: Automatically discovers tools from connected MCP servers
+- **LLM Integration**: Formats tools in OpenAI/Anthropic function schema format
+- **Name Conflict Resolution**: Prefixes tool names with server name to avoid conflicts
+- **Error Handling**: Comprehensive error handling for tool execution
+- **Singleton Access**: Global instance accessible via `get_mcp_manager()`
+
 ### `router_operations.py`
 Function-based router operations for real-time chat and file processing orchestration.
 
@@ -144,6 +169,44 @@ await message_manager.add_message(role="assistant", content="Hi there!")
 messages = await message_manager.get_messages()
 ```
 
+### MCP Client Integration
+
+**Prerequisites:**
+- Node.js 20 LTS installed in container (included in Dockerfile)
+- MCP servers installed via npm (e.g., `@modelcontextprotocol/server-github`)
+- Environment variables configured for MCP servers (e.g., `GITHUB_TOKEN`)
+
+```python
+from agent.core.mcp_client import get_mcp_manager
+
+# Get the global MCP manager instance
+# This automatically connects to configured servers from settings
+mcp_manager = await get_mcp_manager()
+
+# MCP servers can be stdio (Node.js), HTTP, or WebSocket based
+# Stdio servers spawn Node.js processes with command lists:
+# ["npx", "@modelcontextprotocol/server-github"]
+
+# Get tools for LLM
+tools = await mcp_manager.get_tools_for_llm()
+# Tools are formatted for OpenAI/Anthropic function calling
+
+# Execute a tool call from LLM response
+result = await mcp_manager.execute_llm_tool_call(tool_call)
+
+# Filter tools by custom criteria
+def filter_fn(server_name, tool):
+    return server_name == "github"  # Only GitHub tools
+
+github_tools = await mcp_manager.get_filtered_tools(filter_fn)
+
+# List connected servers
+servers = await mcp_manager.list_connected_servers()
+# Returns: ["github", "filesystem"]
+```
+
+**Configuration:** MCP servers are configured in environment variables and loaded via `MCPConfiguration` in the settings module. See `backend/src/agent/config/mcp_config.py` for server definitions.
+
 ## File Type Processing
 
 ### Data Files (CSV)
@@ -177,6 +240,7 @@ messages = await message_manager.get_messages()
 - **PlannerAgent**: Router delegates complex tasks to planner
 - **File Services**: Leverages document and image processing services
 - **Models**: Uses Pydantic models for structured data handling
+- **MCP Client Manager**: Connects to external MCP servers for tool integration
 
 ## Error Handling
 

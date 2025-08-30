@@ -71,6 +71,7 @@ Application settings management using Pydantic BaseSettings.
 **`AgentSettings(BaseSettings)`**
 - Configuration class that manages all application settings
 - Supports environment variable loading and validation
+- Integrates with MCP configuration system
 
 **Configuration Sections:**
 
@@ -86,9 +87,66 @@ Application settings management using Pydantic BaseSettings.
 **Processing Configuration**
 - `min_image_tokens`: Minimum tokens for image processing (64)
 
+**Model Configuration**
+- `router_model`: Model used by RouterAgent (gpt-4.1-nano)
+- `planner_model`: Model used by PlannerAgent (gemini-2.5-pro)
+- `worker_model`: Model used by WorkerAgent (sonnet-4)
+
+**Database Configuration**
+- `database_path`: Path to SQLite database file
+- `database_auto_migrate`: Enable automatic migrations
+- `database_schema_version`: Current schema version
+
+**MCP Integration**
+- `mcp_enabled`: Enable MCP integration globally
+- `mcp_config`: Lazy-loaded MCP configuration (property)
+- `mcp_router_enabled`: Enable MCP for router (property)
+- `mcp_planner_enabled`: Enable MCP for planner (property)
+- `mcp_worker_enabled`: Enable MCP for workers (property)
+
 **Environment**
 - `environment`: Current environment ("development")
 - `debug_mode`: Enable debug mode (False)
+
+### `mcp_config.py`
+Model Context Protocol (MCP) server configuration management.
+
+#### Classes
+
+**`MCPServerDefinition(BaseModel)`**
+- Definition for individual MCP servers
+- Supports stdio, HTTP, and WebSocket server types
+- **Fields:**
+  - `name`: Unique server identifier
+  - `server_type`: Type of server (stdio/http/websocket)
+  - `command`: Command for stdio servers
+  - `url`: URL for HTTP/WebSocket servers
+  - `args`: Command arguments list
+  - `env`: Environment variables dict
+  - `enabled`: Whether to connect to this server
+  - `description`: Optional server description
+  - `auto_reconnect`: Auto-reconnect on disconnect
+
+**`MCPConfig(BaseModel)`**
+- Complete MCP configuration for the agent system
+- **Fields:**
+  - `servers`: List of MCPServerDefinition
+  - `auto_discover`: Auto-discover local MCP servers
+  - `refresh_interval`: Tool refresh interval in seconds
+  - `max_tool_rounds`: Maximum rounds of tool calling
+  - Per-agent server whitelists (router/planner/worker)
+
+**Key Methods:**
+- `from_yaml(path)`: Load configuration from YAML file
+- `from_env()`: Create configuration from environment variables
+- `merge_with_env()`: Merge YAML with environment (env takes precedence)
+
+#### Functions
+
+**`load_mcp_config(config_path)`**
+- Load MCP configuration from file and environment
+- Falls back to defaults if no configuration found
+- Returns merged MCPConfig instance
 
 #### Global Instance
 
@@ -112,6 +170,34 @@ task_limit = settings.failed_task_limit
 
 # Get processing configuration
 min_tokens = settings.min_image_tokens
+
+# Get MCP configuration
+if settings.mcp_enabled:
+    config = settings.mcp_config
+    for server in config.servers:
+        print(f"MCP Server: {server.name} ({server.server_type})")
+```
+
+### Using MCP Configuration
+```python
+from agent.config.mcp_config import load_mcp_config, MCPServerDefinition
+
+# Load configuration from file and environment
+config = load_mcp_config()
+
+# Create custom server definition
+custom_server = MCPServerDefinition(
+    name="custom",
+    server_type="http",
+    url="http://localhost:8000",
+    enabled=True
+)
+
+# Check per-agent enablement
+from agent.config.settings import settings
+if settings.mcp_router_enabled:
+    # Router can use MCP tools
+    pass
 ```
 
 ### Using Constants
@@ -129,11 +215,38 @@ timeout = MAX_CODE_EXECUTION_TIME
 ### Environment Variables
 Configure settings via environment variables:
 ```bash
+# API Keys (in .env.local)
 export OPENAI_API_KEY="your-openai-api-key"
 export GEMINI_API_KEY="your-gemini-api-key"
 export ANTHROPIC_API_KEY="your-anthropic-api-key"
+
+# MCP Configuration
+export MCP_ENABLED=true
+export MCP_ROUTER_ENABLED=true
+export GITHUB_TOKEN="ghp_your_token"
+export MCP_FILESYSTEM_ROOT="/workspace"
+
+# Environment settings
 export DEBUG_MODE=true
 export ENVIRONMENT="production"
+```
+
+### YAML Configuration
+Create `config/mcp_config.yaml`:
+```yaml
+servers:
+  - name: github
+    server_type: stdio
+    command: npx
+    args: ["@modelcontextprotocol/server-github"]
+    env:
+      GITHUB_TOKEN: ${GITHUB_TOKEN}  # From environment
+    enabled: true
+
+router_enabled: true
+router_servers:
+  - github
+  - filesystem
 ```
 
 ## Best Practices

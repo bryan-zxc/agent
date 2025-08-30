@@ -17,6 +17,51 @@
 - **Work Focus**: Only ONE issue should be marked as "in progress" at any time
 - **Multiple Issues**: When loading multiple issues into todo list, only mark the current working issue as "in progress", others stay "ready"
 
+**UPDATING PROJECT BOARD STATUS** (When picking up tickets):
+When updating issue status on the project board, use this GraphQL approach:
+1. First get the project item ID for the issue
+2. Then update the status using GraphQL mutation
+```bash
+# Get project item ID
+gh api graphql -f query='
+query {
+  user(login: "bryan-zxc") {
+    projectV2(number: 1) {
+      items(first: 100) {
+        nodes {
+          id
+          content {
+            ... on Issue {
+              number
+            }
+          }
+        }
+      }
+    }
+  }
+}' | jq '.data.user.projectV2.items.nodes[] | select(.content.number == ISSUE_NUMBER) | .id'
+
+# Update status to "In progress" (ID: 47fc9ee4)
+gh api graphql -f query='
+mutation {
+  updateProjectV2ItemFieldValue(
+    input: {
+      projectId: "PVT_kwHOCz6Fr84A-4Cm"
+      itemId: "ITEM_ID_HERE"
+      fieldId: "PVTSSF_lAHOCz6Fr84A-4CmzgyJdHo"
+      value: {
+        singleSelectOptionId: "47fc9ee4"
+      }
+    }
+  ) {
+    projectV2Item {
+      id
+    }
+  }
+}'
+```
+Status option IDs: "e18bf179" (Ready), "47fc9ee4" (In progress), "aba860b9" (In review), "98236657" (Done)
+
 ## Code Workflow
 
 **ALWAYS read README files first** before examining code:

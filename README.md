@@ -72,6 +72,13 @@ agent/
 - Context switching between chat and analysis modes
 - Session state management
 
+### External Tool Integration (MCP)
+- Model Context Protocol (MCP) client support for external tools
+- Stdio-based MCP servers (Node.js packages like GitHub, filesystem)
+- HTTP/WebSocket MCP server connections
+- Automatic tool discovery and LLM function calling integration
+- Configurable via environment variables
+
 ## Prerequisites
 
 Before running the project, ensure you have the following installed:
@@ -219,6 +226,8 @@ The system automatically switches between simple chat and complex analysis modes
 - **WebSockets** - Real-time bidirectional communication
 - **SQLite** - Lightweight database (can migrate to PostgreSQL)
 - **Pydantic** - Data validation and serialization
+- **MCP (Model Context Protocol)** - External tool integration via stdio/HTTP/WebSocket
+- **Node.js 20 LTS** - Runtime for MCP stdio servers (included in Docker container)
 
 ### Frontend
 - **Next.js 14+** - React framework with TypeScript
