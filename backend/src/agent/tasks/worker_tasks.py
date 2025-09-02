@@ -53,6 +53,14 @@ async def validate_worker_result(
     message_manager: MessageManager,
 ) -> bool:
     """Validate if worker task is completed based on acceptance criteria"""
+    # Fetch system instruction from satellite table
+    system_instruction = await db.get_worker_system_instruction(
+        worker_id=worker_id,
+        instruction_type="default"
+    )
+    if not system_instruction:
+        raise ValueError(f"System instruction not found for worker {worker_id}. This should not happen.")
+    
     # Add validation message and get updated messages in one operation
     validation_messages = await message_manager.add_message(
         role="developer",
@@ -65,6 +73,7 @@ async def validate_worker_result(
         model=settings.worker_model,
         temperature=0,
         response_format=TaskValidation,
+        system_instruction=system_instruction,
     )
 
     logger.info(f"Validation result: {validation.model_dump_json(indent=2)}")
@@ -306,13 +315,15 @@ async def worker_initialisation(task_data: dict):
         # Create message manager for this worker (now that worker exists)
         message_manager = MessageManager(db, "worker", worker_id)
 
-        # Set up initial messages for worker (following worker.py pattern lines 68-80)
-        # Add system message with task goal
-        await message_manager.add_message(
-            role="system",
-            content=f"Your goal is to perform the following task:\n{task.task_description}",
+        # Store system instruction in satellite table instead of message chain
+        system_instruction = f"Your goal is to perform the following task:\n{task.task_description}"
+        await db.set_worker_system_instruction(
+            worker_id=worker_id,
+            system_instruction=system_instruction,
+            instruction_type="default"
         )
 
+        # Set up initial messages for worker (following worker.py pattern lines 68-80)
         # Add developer message with broader context (following worker.py pattern)
         wip_template = load_wip_answer_template(planner_id) or ""
         await message_manager.add_message(
@@ -439,6 +450,14 @@ async def execute_standard_worker(task_data: dict):
     # Always get planner_id from worker database record for consistency
     planner_id = worker_data["planner_id"]
 
+    # Fetch system instruction from satellite table
+    system_instruction = await db.get_worker_system_instruction(
+        worker_id=worker_id,
+        instruction_type="default"
+    )
+    if not system_instruction:
+        raise ValueError(f"System instruction not found for worker {worker_id}. This should not happen.")
+
     # Create message manager for this worker
     message_manager = MessageManager(db, "worker", worker_id)
 
@@ -467,6 +486,7 @@ async def execute_standard_worker(task_data: dict):
             model=settings.worker_model,
             temperature=0,
             response_format=TaskArtefact,
+            system_instruction=system_instruction,
         )
 
         # Defensive check: Handle case where LLM service returns None
@@ -648,6 +668,7 @@ async def execute_standard_worker(task_data: dict):
                     ],
                     model=settings.worker_model,
                     response_format=ToolMissing,
+                    system_instruction=system_instruction,
                 )
 
                 if tool_check.tool_not_available:
@@ -690,6 +711,7 @@ async def execute_standard_worker(task_data: dict):
                     model=settings.worker_model,
                     temperature=0,
                     response_format=RepeatFail,
+                    system_instruction=system_instruction,
                 )
 
                 if repeated_fail.repeated_failure:
@@ -781,6 +803,14 @@ async def execute_sql_worker(task_data: dict):
     # Always get planner_id from worker database record for consistency
     planner_id = worker_data["planner_id"]
 
+    # Fetch system instruction from satellite table
+    system_instruction = await db.get_worker_system_instruction(
+        worker_id=worker_id,
+        instruction_type="default"
+    )
+    if not system_instruction:
+        raise ValueError(f"System instruction not found for worker {worker_id}. This should not happen.")
+
     # Create message manager for this worker
     message_manager = MessageManager(db, "worker", worker_id)
 
@@ -812,6 +842,7 @@ async def execute_sql_worker(task_data: dict):
             model=settings.worker_model,
             temperature=0,
             response_format=TaskArtefactSQL,
+            system_instruction=system_instruction,
         )
 
         logger.info(f"SQL artefact: {sql_artefact.model_dump_json(indent=2)}")
