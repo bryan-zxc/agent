@@ -350,17 +350,22 @@ async def execute_initial_planning(task_data: dict):
         planner_dir.mkdir(parents=True, exist_ok=True)
         db_path = planner_dir / "database.db"
 
-        # Add system message for new planners only (exact copy from PlannerAgent)
-        messages = await message_manager.add_message(
-            role="system",
-            content="You are an expert planner. "
+        # Store system instruction in satellite table instead of message chain
+        system_instruction = (
+            "You are an expert planner. "
             "Your objective is to break down the user's instruction into a list of tasks that can be individually executed."
             "Keep in mind that quite often the first step(s) are to extra facts which commonly comes in the form of question and answer pairs. "
             "Even if there are no further unanswered questions, it only means you have all the facts required to answer the user's question, it doesn't always mean the process is complete. "
             "If there still are analysis especially calculations that is required to be applied to the facts, then you need to create further tasks to complete. "
             "Typically facts are pre-extracted and likely to be in the form of question and answer pairs, "
-            "if the questions don't seem to be fully aligned to what is required for analysis, you can activate relevant tools to re-extract facts. ",
+            "if the questions don't seem to be fully aligned to what is required for analysis, you can activate relevant tools to re-extract facts. "
         )
+        await db.set_planner_system_instruction(
+            planner_id=planner_id,
+            system_instruction=system_instruction,
+            instruction_type="default"
+        )
+        logger.info(f"Stored system instruction for planner {planner_id}")
 
         # Add user question to planner message history so it has user context for answer template creation
         messages = await message_manager.add_message(
@@ -515,6 +520,7 @@ async def execute_initial_planning(task_data: dict):
             model=model,
             temperature=temperature,
             response_format=InitialExecutionPlan,
+            system_instruction=system_instruction,  # Use system instruction from satellite table
         )
 
         # Convert to full ExecutionPlanModel
@@ -553,6 +559,7 @@ async def execute_initial_planning(task_data: dict):
             messages=answer_template_messages,
             model=model,
             temperature=temperature,
+            system_instruction=system_instruction,  # Use system instruction from satellite table
         )
 
         initial_answer_template = answer_template_response.content.strip()
@@ -598,6 +605,16 @@ async def execute_task_creation(task_data: dict):
 
     # Create message manager for this planner
     message_manager = MessageManager(db, "planner", planner_id)
+
+    # Fetch system instruction from satellite table
+    system_instruction = await db.get_planner_system_instruction(
+        planner_id=planner_id,
+        instruction_type="default"
+    )
+    if not system_instruction:
+        logger.error(f"No system instruction found for planner {planner_id} - this should not happen")
+        await db.update_planner(planner_id, status="failed")
+        raise ValueError(f"System instruction not found for planner {planner_id}")
 
     try:
         # Load execution plan model from dedicated file
@@ -693,6 +710,7 @@ async def execute_task_creation(task_data: dict):
             model=planner_data["model"],
             temperature=planner_data["temperature"],
             response_format=Task,
+            system_instruction=system_instruction,  # Use system instruction from satellite table
         )
 
         logger.info(f"Task: {task.model_dump_json(indent=2)}")
@@ -737,6 +755,15 @@ async def _complete_planner_execution(
         planner_data: Planner data from database
         db: Database connection
     """
+    # Fetch system instruction from satellite table
+    system_instruction = await db.get_planner_system_instruction(
+        planner_id=planner_id,
+        instruction_type="default"
+    )
+    if not system_instruction:
+        logger.error(f"No system instruction found for planner {planner_id} - this should not happen")
+        raise ValueError(f"System instruction not found for planner {planner_id}")
+
     # Generate final user response (exactly copying planner.py lines 619-637)
     final_wip_template = load_wip_answer_template(planner_id) or ""
     planner_messages = await db.get_messages(agent_type="planner", agent_id=planner_id)
@@ -763,6 +790,7 @@ async def _complete_planner_execution(
         messages=user_response_messages,
         model=planner_data["model"],
         temperature=planner_data["temperature"],
+        system_instruction=system_instruction,  # Use system instruction from satellite table
     )
     user_response = response.content.strip()
     logger.info(f"User response generated in planner: {user_response}")
@@ -830,6 +858,16 @@ async def execute_synthesis(task_data: dict):
 
     # Create message manager for this planner
     message_manager = MessageManager(db, "planner", planner_id)
+
+    # Fetch system instruction from satellite table
+    system_instruction = await db.get_planner_system_instruction(
+        planner_id=planner_id,
+        instruction_type="default"
+    )
+    if not system_instruction:
+        logger.error(f"No system instruction found for planner {planner_id} - this should not happen")
+        await db.update_planner(planner_id, status="failed")
+        raise ValueError(f"System instruction not found for planner {planner_id}")
 
     try:
         # Get all workers for this planner
@@ -918,6 +956,7 @@ async def execute_synthesis(task_data: dict):
                         model=planner_data["model"],
                         temperature=planner_data["temperature"],
                         response_format=AnswerTemplate,
+                        system_instruction=system_instruction,  # Use system instruction from satellite table
                     )
 
                     # Save updated templates
@@ -1011,6 +1050,7 @@ async def execute_synthesis(task_data: dict):
                     model=planner_data["model"],
                     temperature=planner_data["temperature"],
                     response_format=ExecutionPlanModel,
+                    system_instruction=system_instruction,  # Use system instruction from satellite table
                 )
 
                 # Merge LLM output with completed/obsolete todos
