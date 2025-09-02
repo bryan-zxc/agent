@@ -171,6 +171,7 @@ class LLM:
         model: Literal["gpt-5-nano", "sonnet-4", "gemini-2.5-pro"],
         temperature: float = 0,
         response_format: Any = None,
+        system_instruction: Optional[str] = None,  # NEW: System instruction parameter
         use_tools: bool = False,          # NEW: Master switch for ALL tools (default: False)
         enable_web_search: bool = False,  # NEW: Enable provider-native web search
         # REMOVED: tools parameter - violates MCP-only principle
@@ -184,6 +185,7 @@ class LLM:
             model: Model to use
             temperature: Temperature for response generation
             response_format: Optional structured response format
+            system_instruction: Optional system instruction for the model
             use_tools: Master switch for ALL tools (MCP tools) - default False
             enable_web_search: Enable provider-native web search
             tool_filter: Optional filter for MCP tools
@@ -191,7 +193,7 @@ class LLM:
         """
         # Early exit if no tools
         if not use_tools:
-            return self.get_response(messages, model, temperature, response_format)
+            return self.get_response(messages, model, temperature, response_format, system_instruction)
         
         # Build tools list - MCP ONLY
         final_tools = []
@@ -210,13 +212,14 @@ class LLM:
         
         # Without tools and without web search, use sync get_response
         if not final_tools and not enable_web_search:
-            return self.get_response(messages, model, temperature, response_format)
+            return self.get_response(messages, model, temperature, response_format, system_instruction)
         
         # Tool-enabled flow - pass websocket and web search flag for status updates
         return await self._get_response_with_tools(
             messages=messages,
             model=model,
             temperature=temperature,
+            system_instruction=system_instruction,
             tools=final_tools,
             enable_web_search=enable_web_search,  # Pass to providers
             websocket=websocket,
@@ -227,7 +230,8 @@ class LLM:
         messages: List[Dict],
         model: str,
         temperature: float,
-        tools: List[Dict],
+        system_instruction: Optional[str] = None,
+        tools: List[Dict] = None,
         enable_web_search: bool = False,  # NEW
         websocket: Optional[Any] = None,
     ):
@@ -241,6 +245,7 @@ class LLM:
             messages: Conversation messages
             model: Model to use
             temperature: Temperature for response generation
+            system_instruction: Optional system instruction for the model
             tools: List of available tools (MCP tools only)
             enable_web_search: Enable provider-native web search
             websocket: Optional websocket for sending execution status updates
@@ -258,6 +263,7 @@ class LLM:
             temperature=temperature,
             tools=tools,
             enable_web_search=enable_web_search,  # Pass to provider
+            system_instruction=system_instruction,  # Pass system instruction
         )
         
         # If no tools requested, return the text content
