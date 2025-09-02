@@ -5,6 +5,7 @@ import re
 import base64
 import logging
 import requests
+from pathlib import Path
 from typing import List, Dict, Any, Optional, Union, Type
 from pydantic import BaseModel, ValidationError
 from openai import OpenAI
@@ -1267,3 +1268,91 @@ class GoogleProvider(BaseLLMProvider):
                 text = text[:end_index] + citation_str + text[end_index:]
 
         return text
+    
+    def search_web(self, query: str, temperature: float = 0) -> str:
+        """Web search using Google's grounding.
+        
+        Args:
+            query: Search query to execute
+            temperature: Temperature for response generation
+            
+        Returns:
+            Search results with citations
+        """
+        grounding_tool = types.Tool(google_search=types.GoogleSearch())
+        config = types.GenerateContentConfig(
+            tools=[grounding_tool],
+            temperature=temperature,
+        )
+        
+        model = "gemini-2.5-pro"
+        
+        try:
+            response = self.client.models.generate_content(
+                model=model,
+                contents=query,
+                config=config,
+            )
+            
+            return self._add_citations(response)
+            
+        except Exception as e:
+            logger.error(f"Web search error: {e}")
+            raise
+    
+    def process_pdf(
+        self,
+        pdf_source: Union[str, Path],
+        prompt: str,
+        temperature: float = 0,
+        response_format: Optional[Type[BaseModel]] = None,
+    ) -> Union[str, BaseModel]:
+        """Process PDF with Gemini and return response.
+        
+        Args:
+            pdf_source: Path or URL to PDF file
+            prompt: Prompt to process the PDF with
+            temperature: Temperature for response generation
+            response_format: Optional structured response format
+            
+        Returns:
+            Text response or structured response based on format
+        """
+        if not str(pdf_source).lower().endswith(".pdf"):
+            return "Not a pdf"
+        
+        model = "gemini-2.5-pro"
+        
+        # Get PDF data
+        if isinstance(pdf_source, str) and pdf_source.startswith("http"):
+            import httpx
+            pdf_data = httpx.get(pdf_source).content
+        else:
+            pdf_path = Path(pdf_source)
+            if not pdf_path.exists():
+                raise FileNotFoundError(f"PDF not found: {pdf_path}")
+            pdf_data = pdf_path.read_bytes()
+        
+        # Create request
+        pdf_part = types.Part.from_bytes(data=pdf_data, mime_type="application/pdf")
+        contents = [pdf_part, prompt]
+        
+        config = {"temperature": temperature}
+        if response_format:
+            config["response_mime_type"] = "application/json"
+            config["response_schema"] = response_format
+        
+        try:
+            response = self.client.models.generate_content(
+                model=model,
+                contents=contents,
+                config=config,
+            )
+            
+            if response_format:
+                return response.parsed
+            return response.text
+            
+        except Exception as e:
+            logger.error(f"PDF processing error: {e}")
+            raise
