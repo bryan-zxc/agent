@@ -610,7 +610,7 @@ def legacy_get_text_and_table_json_from_image(image: Union[Image.Image, str]) ->
                     ],
                 }
             ],
-            response_format={"type": "json_object"},
+            response_format="json",
         )
     # Calculate the number of slices needed to cover the entire image height
     num_slices = height // slice_height
@@ -710,7 +710,7 @@ def legacy_get_text_and_table_json_from_image(image: Union[Image.Image, str]) ->
                 "content": f"Convert the following markdown into a JSON object:\n\n{final_md}",
             }
         ],
-        response_format={"type": "json_object"},
+        response_format="json",
     )
     return final_json
 
@@ -763,7 +763,7 @@ def get_text_and_table_json_from_image(image: Union[Image.Image, str]) -> str:
                 ],
             }
         ],
-        response_format={"type": "json_object"},
+        response_format="json",
         model="gemini-2.5-pro",
     )
 

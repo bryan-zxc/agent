@@ -15,7 +15,6 @@ interface ChatStore {
   status: AgentStatus;
   isConnected: boolean;
   isConnecting: boolean;
-  currentModel: string;
   temperature: number;
   currentRouterId: string;
   currentMode: RouterMode;
@@ -27,7 +26,6 @@ interface ChatStore {
   updateStatus: (status: AgentStatus) => void;
   setConnected: (connected: boolean) => void;
   setConnecting: (connecting: boolean) => void;
-  setModel: (model: string) => void;
   setTemperature: (temperature: number) => void;
   setMode: (mode: RouterMode) => void;
   clearMessages: () => void;
@@ -46,7 +44,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   status: { status: 'idle' },
   isConnected: false,
   isConnecting: true, // Start as connecting to avoid showing offline immediately
-  currentModel: 'gpt-4',
   temperature: 0.7,
   currentRouterId: '', // Start with empty router_id - backend will provide one
   currentMode: 'auto', // Default to auto mode
@@ -66,9 +63,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     
   setConnecting: (connecting) =>
     set({ isConnecting: connecting }),
-    
-  setModel: (model) =>
-    set({ currentModel: model }),
     
   setTemperature: (temperature) =>
     set({ temperature }),

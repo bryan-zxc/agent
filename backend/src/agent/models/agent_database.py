@@ -203,6 +203,84 @@ class Worker(Base):
     )
 
 
+class RouterSystemInstructions(Base):
+    """System instructions for router agents"""
+
+    __tablename__ = "router_system_instructions"
+
+    instruction_id = Column(Integer, primary_key=True, autoincrement=True)
+    router_id = Column(
+        String(32), ForeignKey("routers.router_id"), nullable=False, index=True
+    )
+    system_instruction_type = Column(
+        String(50), nullable=False, default="default"
+    )  # default, custom, etc.
+    system_instruction = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("router_id", "system_instruction_type"),
+        Index("idx_router_instruction_type", "router_id", "system_instruction_type"),
+    )
+
+
+class PlannerSystemInstructions(Base):
+    """System instructions for planner agents"""
+
+    __tablename__ = "planner_system_instructions"
+
+    instruction_id = Column(Integer, primary_key=True, autoincrement=True)
+    planner_id = Column(
+        String(32), ForeignKey("planners.planner_id"), nullable=False, index=True
+    )
+    system_instruction_type = Column(
+        String(50), nullable=False, default="default"
+    )  # default, custom, etc.
+    system_instruction = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("planner_id", "system_instruction_type"),
+        Index("idx_planner_instruction_type", "planner_id", "system_instruction_type"),
+    )
+
+
+class WorkerSystemInstructions(Base):
+    """System instructions for worker agents"""
+
+    __tablename__ = "worker_system_instructions"
+
+    instruction_id = Column(Integer, primary_key=True, autoincrement=True)
+    worker_id = Column(
+        String(32), ForeignKey("workers.worker_id"), nullable=False, index=True
+    )
+    system_instruction_type = Column(
+        String(50), nullable=False, default="default"
+    )  # default, custom, etc.
+    system_instruction = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("worker_id", "system_instruction_type"),
+        Index("idx_worker_instruction_type", "worker_id", "system_instruction_type"),
+    )
+
+
 class RouterPlannerLink(Base):
     """Legacy table - kept for migration purposes, will be deprecated"""
 
@@ -289,6 +367,25 @@ class FileMetadata(Base):
     __table_args__ = (
         Index("idx_content_hash_user", "content_hash", "user_id"),
         Index("idx_filename_user", "original_filename", "user_id"),
+    )
+
+
+class LLMUsage(Base):
+    """Track LLM API usage and costs."""
+    __tablename__ = "llm_usage"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    timestamp = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
+    model = Column(String(100), nullable=False)
+    input_tokens = Column(Integer, nullable=False)
+    output_tokens = Column(Integer, nullable=False)
+    cost = Column(Float, nullable=False)
+    request_type = Column(String(20), nullable=False)  # text, tools, structured, json_object, pdf_processing, web_search
+    caller = Column(String(100), nullable=False, index=True)
+    
+    # Indexes for performance
+    __table_args__ = (
+        Index("idx_llm_usage_caller_timestamp", "caller", "timestamp"),
     )
 
 
@@ -1283,3 +1380,143 @@ class AgentDatabase:
 
             logger.info(f"Cleared {task_count} tasks from task queue on startup")
             return task_count
+
+    # System Instruction Management Methods
+
+    async def set_router_system_instruction(
+        self,
+        router_id: str,
+        system_instruction: str,
+        instruction_type: str = "default",
+    ) -> None:
+        """Set or update system instruction for a router"""
+        async with self.AsyncSessionLocal() as session:
+            # Check if instruction already exists
+            result = await session.execute(
+                select(RouterSystemInstructions).where(
+                    RouterSystemInstructions.router_id == router_id,
+                    RouterSystemInstructions.system_instruction_type == instruction_type,
+                )
+            )
+            existing = result.scalar_one_or_none()
+
+            if existing:
+                # Update existing instruction
+                existing.system_instruction = system_instruction
+                existing.updated_at = datetime.now(timezone.utc)
+            else:
+                # Create new instruction
+                instruction = RouterSystemInstructions(
+                    router_id=router_id,
+                    system_instruction_type=instruction_type,
+                    system_instruction=system_instruction,
+                )
+                session.add(instruction)
+
+            await session.commit()
+
+    async def get_router_system_instruction(
+        self, router_id: str, instruction_type: str = "default"
+    ) -> Optional[str]:
+        """Get system instruction for a router"""
+        async with self.AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(RouterSystemInstructions).where(
+                    RouterSystemInstructions.router_id == router_id,
+                    RouterSystemInstructions.system_instruction_type == instruction_type,
+                )
+            )
+            instruction = result.scalar_one_or_none()
+            return instruction.system_instruction if instruction else None
+
+    async def set_planner_system_instruction(
+        self,
+        planner_id: str,
+        system_instruction: str,
+        instruction_type: str = "default",
+    ) -> None:
+        """Set or update system instruction for a planner"""
+        async with self.AsyncSessionLocal() as session:
+            # Check if instruction already exists
+            result = await session.execute(
+                select(PlannerSystemInstructions).where(
+                    PlannerSystemInstructions.planner_id == planner_id,
+                    PlannerSystemInstructions.system_instruction_type == instruction_type,
+                )
+            )
+            existing = result.scalar_one_or_none()
+
+            if existing:
+                # Update existing instruction
+                existing.system_instruction = system_instruction
+                existing.updated_at = datetime.now(timezone.utc)
+            else:
+                # Create new instruction
+                instruction = PlannerSystemInstructions(
+                    planner_id=planner_id,
+                    system_instruction_type=instruction_type,
+                    system_instruction=system_instruction,
+                )
+                session.add(instruction)
+
+            await session.commit()
+
+    async def get_planner_system_instruction(
+        self, planner_id: str, instruction_type: str = "default"
+    ) -> Optional[str]:
+        """Get system instruction for a planner"""
+        async with self.AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(PlannerSystemInstructions).where(
+                    PlannerSystemInstructions.planner_id == planner_id,
+                    PlannerSystemInstructions.system_instruction_type == instruction_type,
+                )
+            )
+            instruction = result.scalar_one_or_none()
+            return instruction.system_instruction if instruction else None
+
+    async def set_worker_system_instruction(
+        self,
+        worker_id: str,
+        system_instruction: str,
+        instruction_type: str = "default",
+    ) -> None:
+        """Set or update system instruction for a worker"""
+        async with self.AsyncSessionLocal() as session:
+            # Check if instruction already exists
+            result = await session.execute(
+                select(WorkerSystemInstructions).where(
+                    WorkerSystemInstructions.worker_id == worker_id,
+                    WorkerSystemInstructions.system_instruction_type == instruction_type,
+                )
+            )
+            existing = result.scalar_one_or_none()
+
+            if existing:
+                # Update existing instruction
+                existing.system_instruction = system_instruction
+                existing.updated_at = datetime.now(timezone.utc)
+            else:
+                # Create new instruction
+                instruction = WorkerSystemInstructions(
+                    worker_id=worker_id,
+                    system_instruction_type=instruction_type,
+                    system_instruction=system_instruction,
+                )
+                session.add(instruction)
+
+            await session.commit()
+
+    async def get_worker_system_instruction(
+        self, worker_id: str, instruction_type: str = "default"
+    ) -> Optional[str]:
+        """Get system instruction for a worker"""
+        async with self.AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(WorkerSystemInstructions).where(
+                    WorkerSystemInstructions.worker_id == worker_id,
+                    WorkerSystemInstructions.system_instruction_type == instruction_type,
+                )
+            )
+            instruction = result.scalar_one_or_none()
+            return instruction.system_instruction if instruction else None

@@ -172,7 +172,6 @@ interface ChatStore {
   messages: ChatMessage[];
   status: AgentStatus;
   isConnected: boolean;
-  currentModel: string;
   temperature: number;
   
   // Actions

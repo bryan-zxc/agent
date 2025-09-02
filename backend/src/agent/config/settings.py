@@ -29,13 +29,13 @@ class AgentSettings(BaseSettings):
 
     # Model Configuration
     router_model: str = Field(
-        default="gpt-4.1-nano", description="Model used by RouterAgent"
+        description="Model used by RouterAgent"
     )
     planner_model: str = Field(
-        default="gemini-2.5-pro", description="Model used by PlannerAgent"
+        description="Model used by PlannerAgent"
     )
     worker_model: str = Field(
-        default="sonnet-4", description="Model used by WorkerAgent"
+        description="Model used by WorkerAgent"
     )
 
     # Database Configuration

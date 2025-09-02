@@ -27,14 +27,12 @@ interface ChatStore {
   messages: ChatMessage[];
   status: AgentStatus;
   isConnected: boolean;
-  currentModel: string;
   temperature: number;
   
   // Actions
   addMessage: (message: ChatMessage) => void;
   updateStatus: (status: AgentStatus) => void;
   setConnected: (connected: boolean) => void;
-  setModel: (model: string) => void;
   setTemperature: (temperature: number) => void;
   clearMessages: () => void;
 }
@@ -58,11 +56,6 @@ interface ChatStore {
 - Used to enable/disable UI elements
 - Shows connection indicator in header
 
-**currentModel: string**
-- Selected AI model (e.g., 'gpt-4', 'gpt-3.5-turbo')
-- Affects response quality and processing speed
-- Configurable by user
-
 **temperature: number**
 - Model temperature setting (0.0 - 1.0)
 - Controls response randomness/creativity
@@ -84,11 +77,6 @@ interface ChatStore {
 - Updates WebSocket connection status
 - Enables/disables message sending
 - Shows connection status in UI
-
-**setModel(model: string)**
-- Changes the AI model selection
-- Affects subsequent agent responses
-- Persisted in store for consistency
 
 **setTemperature(temperature: number)**
 - Updates model temperature setting

@@ -60,3 +60,11 @@ filterwarnings = [
     "ignore:.*swigvarlink.*:DeprecationWarning",
     "ignore:datetime.datetime.utcnow.*is deprecated:DeprecationWarning",
 ]
+# Custom markers for selective test execution
+markers = [
+    "llm_live: marks tests that make real LLM API calls (deselect with '-m \"not llm_live\"')",
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
+# Async test configuration
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

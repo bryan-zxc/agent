@@ -233,14 +233,13 @@ export const useWebSocket = (url?: string) => {
     console.log('sendMessage called, WebSocket readyState:', ws.current?.readyState, 'URL:', ws.current?.url);
     
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-      const { currentModel, temperature, currentRouterId, currentMode } = useChatStore.getState();
+      const { temperature, currentRouterId, currentMode } = useChatStore.getState();
       const targetRouterId = routerId || currentRouterId;
       
       const payload: any = {
         type: 'message',
         message,
         files,
-        model: currentModel,
         temperature,
         mode: currentMode, // Include current mode in message
       };
@@ -260,7 +259,6 @@ export const useWebSocket = (url?: string) => {
         sender: 'user',
         timestamp: new Date(),
         files,
-        model: currentModel,
         temperature,
       };
       

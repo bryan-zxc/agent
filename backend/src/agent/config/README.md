@@ -88,7 +88,7 @@ Application settings management using Pydantic BaseSettings.
 - `min_image_tokens`: Minimum tokens for image processing (64)
 
 **Model Configuration**
-- `router_model`: Model used by RouterAgent (gpt-4.1-nano)
+- `router_model`: Model used by RouterAgent (gpt-5-nano - the only accepted OpenAI model)
 - `planner_model`: Model used by PlannerAgent (gemini-2.5-pro)
 - `worker_model`: Model used by WorkerAgent (sonnet-4)
 
