@@ -98,6 +98,38 @@ docker-compose exec backend uv run python -m pytest tests/unit/
 git commit -m "Your changes"  # Automatic validation
 ```
 
+## ⚠️ IMPORTANT: MCP Integration Test Isolation
+
+**The LLM integration tests with MCP tools MUST be run individually**, not together.
+
+### Why Test Isolation is Required
+
+The MCP (Model Context Protocol) filesystem server uses stdio (stdin/stdout) communication via an npx subprocess. When pytest runs multiple tests sequentially:
+- The stdio subprocess connection is lost between tests
+- Subsequent tests fail with "Client is not connected" errors
+- This is a **test-specific issue** that does NOT affect production
+
+### Running MCP Integration Tests Correctly
+
+```bash
+# ✅ CORRECT: Run each test individually
+docker-compose exec backend uv run python -m pytest tests/integration/test_llm_service_integration.py::TestLLMServiceIntegration::test_anthropic_mixed_tools -xvs
+
+docker-compose exec backend uv run python -m pytest tests/integration/test_llm_service_integration.py::TestLLMServiceIntegration::test_google_mcp_tools_only -xvs
+
+docker-compose exec backend uv run python -m pytest tests/integration/test_llm_service_integration.py::TestLLMServiceIntegration::test_openai_mcp_tools_only -xvs
+
+# ❌ INCORRECT: Running all together will cause failures
+docker-compose exec backend uv run python -m pytest tests/integration/test_llm_service_integration.py -m llm_live
+```
+
+### Production Safety
+
+This isolation requirement does NOT affect production because:
+- The MCP manager is a singleton that persists between API requests
+- The stdio subprocess stays alive for the entire application lifetime
+- Concurrent production requests successfully share the same MCP connection
+
 ### Traditional Development Workflow
 
 ```bash

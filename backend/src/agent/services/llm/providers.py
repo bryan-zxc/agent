@@ -33,6 +33,9 @@ class OpenAIProvider(BaseLLMProvider):
     PRICING = {
         "gpt-5-nano-2025-08-07": {"input": 0.05, "output": 0.4},
     }
+    
+    # Track if we've shown the temperature deprecation warning
+    _temperature_warning_shown = False
 
     def _setup_client(self) -> None:
         """Set up OpenAI client."""
@@ -46,6 +49,15 @@ class OpenAIProvider(BaseLLMProvider):
     def get_actual_model_name(self, model: str) -> str:
         """Get actual OpenAI model name."""
         return self.MODELS.get(model, model)
+    
+    def _warn_temperature_deprecated(self, temperature: float) -> None:
+        """Warn once if temperature is being used with gpt-5 models."""
+        if not OpenAIProvider._temperature_warning_shown and temperature != 0:
+            logger.warning(
+                "Temperature parameter is deprecated for OpenAI gpt-5 models and will be ignored. "
+                "The model uses its own internal temperature settings."
+            )
+            OpenAIProvider._temperature_warning_shown = True
 
     def text_response(
         self,
@@ -57,12 +69,15 @@ class OpenAIProvider(BaseLLMProvider):
         """Get text response using new Responses API."""
         try:
             actual_model = self.get_actual_model_name(model)
+            
+            # Warn about temperature deprecation
+            self._warn_temperature_deprecated(temperature)
 
+            # Temperature is not supported in gpt-5 models, so we don't pass it
             response = self.client.responses.create(
                 model=actual_model,
                 instructions=system_instruction,
                 input=messages,  # Always pass messages directly
-                temperature=temperature,
             )
 
             # Track usage
@@ -86,18 +101,20 @@ class OpenAIProvider(BaseLLMProvider):
         """Get structured response using new Responses API."""
         try:
             actual_model = self.get_actual_model_name(model)
+            
+            # Warn about temperature deprecation
+            self._warn_temperature_deprecated(temperature)
 
             # Check if response_format is a Pydantic model or "json" string
             if isinstance(response_format, type) and issubclass(
                 response_format, BaseModel
             ):
-                # Use parse() for Pydantic models
+                # Use parse() for Pydantic models - temperature not supported
                 response = self.client.responses.parse(
                     model=actual_model,
                     instructions=system_instruction,
                     input=messages,  # Always pass messages directly
                     text_format=response_format,
-                    temperature=temperature,
                 )
 
                 # Track usage
@@ -113,12 +130,12 @@ class OpenAIProvider(BaseLLMProvider):
                 input_messages = messages.copy()  # Copy to avoid mutating original
 
                 for attempt in range(MAX_LLM_RETRIES):
+                    # Temperature not supported in gpt-5 models
                     response = self.client.responses.create(
                         model=actual_model,
                         instructions=system_instruction,
                         input=input_messages,
                         text={"format": {"type": "json_object"}},
-                        temperature=temperature,
                     )
                     
                     # Track usage immediately after API call (captures all retry attempts)
@@ -177,48 +194,92 @@ class OpenAIProvider(BaseLLMProvider):
         """Get tools response with native web search support."""
         try:
             actual_model = self.get_actual_model_name(model)
+            
+            # Warn about temperature deprecation
+            self._warn_temperature_deprecated(temperature)
 
-            # Build tools list
-            tools_list = tools.copy() if tools else []
+            # Build tools list with format transformation for OpenAI
+            tools_list = []
+            
+            # Transform MCP tools from nested to OpenAI's flat format
+            if tools:
+                for tool in tools:
+                    if tool.get("type") == "function" and "function" in tool:
+                        # Extract from MCP's nested structure
+                        func = tool["function"]
+                        # Create OpenAI's flat structure
+                        openai_tool = {
+                            "type": "function",
+                            "name": func.get("name"),
+                            "description": func.get("description", ""),
+                            "parameters": func.get("parameters", {})
+                        }
+                        tools_list.append(openai_tool)
 
             # Add native web search tool if enabled
             if enable_web_search:
                 tools_list.append({"type": "web_search"})
 
+            # Temperature not supported in gpt-5 models
             response = self.client.responses.create(
                 model=actual_model,
                 instructions=system_instruction,
                 input=messages,  # Always pass messages directly
                 tools=tools_list if tools_list else None,
-                temperature=temperature,
             )
 
             # Determine request type based on response content
             request_type = RequestType.TEXT  # Default
+            web_search_used = False  # Track if web search was used
 
             # Check for web search calls in output
             if hasattr(response, "output"):
                 for output in response.output:
                     if hasattr(output, "type") and output.type == "web_search_call":
                         request_type = RequestType.TOOLS
+                        web_search_used = True
                         break
 
-            # Check for tool calls (also determines request type and processes them)
-            if hasattr(response, "tool_calls") and response.tool_calls:
+            # Check for function calls in output (OpenAI's new format)
+            normalised_calls = []
+            if hasattr(response, "output") and response.output:
+                for output in response.output:
+                    if hasattr(output, "type") and output.type == "function_call":
+                        # Parse arguments from JSON string
+                        args = {}
+                        if hasattr(output, "arguments") and output.arguments:
+                            try:
+                                args = json.loads(output.arguments)
+                            except json.JSONDecodeError:
+                                logger.warning(f"Failed to parse arguments for {output.name}: {output.arguments}")
+                        
+                        normalised_calls.append({
+                            "name": output.name,
+                            "arguments": args
+                        })
+                        request_type = RequestType.TOOLS
+            
+            # If we have tool calls, return them
+            if normalised_calls:
                 # Track usage before returning
                 if hasattr(response, "usage"):
                     self.track_cost(actual_model, response.usage, RequestType.TOOLS)
                 return {
-                    "tool_calls": response.tool_calls,
-                    "content": response.output_text,
+                    "tool_calls": normalised_calls,
+                    "content": response.output_text if hasattr(response, "output_text") else None,
                     "role": "assistant",
                 }
+
+            # Format content with web search prefix if needed
+            content = response.output_text
+            if web_search_used and content:
+                content = f"Tool web_search was called and returned:\n{content}"
 
             # Track usage before returning (no tools case)
             if hasattr(response, "usage"):
                 self.track_cost(actual_model, response.usage, request_type)
             return {
-                "content": response.output_text,
+                "content": content,
                 "role": "assistant",
             }
 
@@ -508,15 +569,18 @@ class AnthropicProvider(BaseLLMProvider):
             # Convert MCP tools to Anthropic format
             if tools:
                 for tool in tools:
-                    anthropic_tools.append(
-                        {
-                            "name": tool["name"],
-                            "description": tool.get("description", ""),
-                            "input_schema": tool.get(
-                                "parameters", {"type": "object", "properties": {}}
-                            ),
-                        }
-                    )
+                    # Handle MCP's nested structure: {"type": "function", "function": {...}}
+                    if tool.get("type") == "function" and "function" in tool:
+                        func = tool["function"]
+                        anthropic_tools.append(
+                            {
+                                "name": func.get("name"),
+                                "description": func.get("description", ""),
+                                "input_schema": func.get(
+                                    "parameters", {"type": "object", "properties": {}}
+                                ),
+                            }
+                        )
 
             # Add native web search tool if enabled
             if enable_web_search:
@@ -576,7 +640,11 @@ class AnthropicProvider(BaseLLMProvider):
                         if hasattr(content_block, "text"):
                             content_text = content_block.text
                         elif hasattr(content_block, "type") and content_block.type == "tool_use":
-                            tool_calls.append(content_block)
+                            # Normalise to standard format
+                            tool_calls.append({
+                                "name": content_block.name,
+                                "arguments": content_block.input if hasattr(content_block, 'input') else {}
+                            })
                 
                 return {
                     "content": content_text or "",
@@ -633,7 +701,11 @@ class AnthropicProvider(BaseLLMProvider):
 
             # Check for MCP tool calls (can coexist with web search)
             elif hasattr(content_block, "type") and content_block.type == "tool_use":
-                tool_calls.append(content_block)
+                # Normalise to standard format
+                tool_calls.append({
+                    "name": content_block.name,
+                    "arguments": content_block.input if hasattr(content_block, 'input') else {}
+                })
             
             # Process text blocks
             elif hasattr(content_block, "type") and content_block.type == "text":
@@ -803,7 +875,7 @@ class GoogleProvider(BaseLLMProvider):
                     if block_type in ["text", "input_text"]:
                         text = block.get("text", "")
                         if text:
-                            parts.append(types.Part.from_text(text))
+                            parts.append(types.Part.from_text(text=text))
 
                     elif block_type in ["image", "input_image"]:
                         # Handle base64 images
@@ -823,12 +895,62 @@ class GoogleProvider(BaseLLMProvider):
             else:
                 # Simple text content
                 if content:
-                    parts.append(types.Part.from_text(str(content)))
+                    parts.append(types.Part.from_text(text=str(content)))
 
             if parts:
                 gemini_contents.append(types.Content(role=gemini_role, parts=parts))
 
         return gemini_contents
+
+    def _convert_mcp_to_google_schema(self, json_schema: Dict[str, Any]) -> "types.Schema":
+        """Convert MCP's JSON Schema format to Google's Schema format.
+        
+        MCP uses standard JSON Schema with metadata fields like $schema.
+        Google uses its own Schema format without metadata.
+        """
+        # Map JSON Schema types to Google Schema types
+        type_mapping = {
+            "string": "STRING",
+            "number": "NUMBER",
+            "integer": "INTEGER",
+            "boolean": "BOOLEAN",
+            "array": "ARRAY",
+            "object": "OBJECT",
+        }
+        
+        # Remove metadata fields that Google doesn't accept
+        schema_copy = {k: v for k, v in json_schema.items() 
+                      if not k.startswith('$') and k != 'additionalProperties'}
+        
+        # Convert type
+        json_type = schema_copy.get("type", "object")
+        google_type = type_mapping.get(json_type, json_type.upper())
+        
+        # Build Google Schema
+        google_schema = {"type": google_type}
+        
+        # Handle object properties
+        if "properties" in schema_copy:
+            google_properties = {}
+            for prop_name, prop_schema in schema_copy["properties"].items():
+                # Recursively convert nested schemas
+                google_properties[prop_name] = self._convert_mcp_to_google_schema(prop_schema)
+            google_schema["properties"] = google_properties
+        
+        # Handle required fields
+        if "required" in schema_copy:
+            google_schema["required"] = schema_copy["required"]
+        
+        # Handle array items
+        if "items" in schema_copy:
+            google_schema["items"] = self._convert_mcp_to_google_schema(schema_copy["items"])
+        
+        # Handle other fields like description, enum
+        for field in ["description", "enum", "default"]:
+            if field in schema_copy:
+                google_schema[field] = schema_copy[field]
+        
+        return types.Schema(**google_schema)
 
     def text_response(
         self,
@@ -842,10 +964,10 @@ class GoogleProvider(BaseLLMProvider):
             actual_model = self.get_actual_model_name(model)
             gemini_contents = self._convert_messages(messages)
 
-            config = types.GenerateContentConfig(temperature=temperature)
-
-            if system_instruction:
-                config.system_instruction = system_instruction
+            config = types.GenerateContentConfig(
+                temperature=temperature,
+                system_instruction=system_instruction if system_instruction else None,
+            )
 
             response = self.client.models.generate_content(
                 model=actual_model,
@@ -879,10 +1001,8 @@ class GoogleProvider(BaseLLMProvider):
             config = types.GenerateContentConfig(
                 temperature=temperature,
                 response_mime_type="application/json",
+                system_instruction=system_instruction if system_instruction else None,
             )
-
-            if system_instruction:
-                config.system_instruction = system_instruction
 
             # Handle response format
             is_pydantic = isinstance(response_format, type) and issubclass(
@@ -938,7 +1058,7 @@ class GoogleProvider(BaseLLMProvider):
                                 role="user",
                                 parts=[
                                     types.Part.from_text(
-                                        f"The JSON returned is:\n{json_content}\n\nIt cannot be converted by json.loads with the following error:\n{e}\n\nGenerate a new JSON without the error."
+                                        text=f"The JSON returned is:\n{json_content}\n\nIt cannot be converted by json.loads with the following error:\n{e}\n\nGenerate a new JSON without the error."
                                     )
                                 ],
                             )
@@ -951,6 +1071,99 @@ class GoogleProvider(BaseLLMProvider):
             logger.error(f"Gemini structured response error: {e}")
             return None
 
+    def _web_search_response(
+        self,
+        messages: List[Dict[str, Any]],
+        model: str,
+        temperature: float,
+        system_instruction: Optional[str] = None,
+    ) -> Optional[Dict]:
+        """Standalone web search method for future MCP tool conversion.
+        
+        This method handles Google's native grounding tools (search + URL context).
+        Kept separate for future packaging as an MCP tool.
+        """
+        try:
+            actual_model = self.get_actual_model_name(model)
+            gemini_contents = self._convert_messages(messages)
+
+            # Build grounding tools
+            grounding_tools = [
+                types.Tool(url_context=types.UrlContext()),
+                types.Tool(google_search=types.GoogleSearch())
+            ]
+            
+            logger.info("Enabled Gemini native grounding tools (search + URL context)")
+
+            # Create config with grounding tools
+            config = types.GenerateContentConfig(
+                temperature=temperature,
+                tools=grounding_tools,
+                system_instruction=system_instruction if system_instruction else None,
+            )
+
+            # Make request
+            response = self.client.models.generate_content(
+                model=actual_model,
+                contents=gemini_contents,
+                config=config,
+            )
+            
+            # Track usage
+            if hasattr(response, 'usage_metadata'):
+                self.track_cost(actual_model, response.usage_metadata, RequestType.TOOLS)
+
+            # Check if web search happened
+            web_search_happened = False
+            text_content = ""
+            
+            if response.candidates:
+                candidate = response.candidates[0]
+
+                # Check for any grounding data
+                if hasattr(candidate, "grounding_metadata") and hasattr(
+                    candidate.grounding_metadata, "grounding_supports"
+                ):
+                    web_search_happened = True
+                    # Enhance with citations
+                    text_content = self._add_citations(response)
+                    logger.info(
+                        f"Web search returned {len(candidate.grounding_metadata.grounding_supports)} results"
+                    )
+
+                if (
+                    hasattr(candidate, "url_context_metadata")
+                    and candidate.url_context_metadata
+                ):
+                    web_search_happened = True
+                    # Add URL metadata table
+                    url_metadata = candidate.url_context_metadata
+                    url_table = self._generate_url_metadata_table(url_metadata)
+                    text_content += (
+                        "\n\nThe following websites were retrieved:\n" + url_table
+                    )
+                    logger.info(
+                        f"URL context extracted from {len(url_metadata)} URLs"
+                    )
+
+            # Get default text if no web search happened
+            if not web_search_happened:
+                text_content = response.text if hasattr(response, "text") else ""
+            
+            # Format response consistently
+            if text_content:
+                text_content = f"Tool web_search was called and returned:\n{text_content}"
+            
+            return {
+                "content": text_content,
+                "tool_calls": None,
+                "role": "assistant",
+            }
+
+        except Exception as e:
+            logger.error(f"Gemini web search response error: {e}")
+            return None
+
     def tools_response(
         self,
         messages: List[Dict[str, Any]],
@@ -960,35 +1173,40 @@ class GoogleProvider(BaseLLMProvider):
         enable_web_search: bool = False,
         system_instruction: Optional[str] = None,
     ) -> Optional[Dict]:
-        """Get tools response from Gemini with native grounding support."""
+        """Get tools response from Gemini with MCP tools support only."""
         try:
+            # Web search is not supported in tools_response anymore
+            # It will be packaged as an MCP tool in the future
+            if enable_web_search:
+                logger.warning(
+                    "Web search in tools_response is not supported for Google provider. "
+                    "Use _web_search_response() or wait for MCP tool implementation."
+                )
+                # For now, just ignore web search flag and proceed with MCP tools only
+            
             actual_model = self.get_actual_model_name(model)
             gemini_contents = self._convert_messages(messages)
 
-            # Build tools list
+            # Build tools list - MCP tools only
             all_tools = []
-
-            # Add BOTH native grounding tools when web search is enabled
-            if enable_web_search:
-                # Add URL context tool for extracting content from URLs
-                all_tools.append({"url_context": {}})
-                # Add Google search tool for web search
-                all_tools.append({"google_search": {}})
-                logger.info(
-                    "Enabled Gemini native grounding tools (search + URL context)"
-                )
 
             # Add MCP tools as function declarations
             if tools:
                 gemini_functions = []
                 for tool in tools:
-                    if tool.get("type") == "function":
-                        func = tool.get("function", {})
+                    # Extract from MCP's nested structure (similar to OpenAI fix)
+                    if tool.get("type") == "function" and "function" in tool:
+                        func = tool["function"]
+                        
+                        # Convert MCP's JSON Schema parameters to Google's Schema format
+                        parameters = func.get("parameters", {})
+                        google_schema = self._convert_mcp_to_google_schema(parameters)
+                        
                         gemini_functions.append(
                             types.FunctionDeclaration(
                                 name=func.get("name"),
-                                description=func.get("description"),
-                                parameters=func.get("parameters", {}),
+                                description=func.get("description", ""),
+                                parameters=google_schema,
                             )
                         )
 
@@ -996,14 +1214,12 @@ class GoogleProvider(BaseLLMProvider):
                     # Add function declarations wrapped in Tool object
                     all_tools.append(types.Tool(function_declarations=gemini_functions))
 
-            # Create config with tools
+            # Create config with tools and system instruction
             config = types.GenerateContentConfig(
                 temperature=temperature,
                 tools=all_tools if all_tools else None,
+                system_instruction=system_instruction if system_instruction else None,
             )
-
-            if system_instruction:
-                config.system_instruction = system_instruction
 
             # Make request
             response = self.client.models.generate_content(
@@ -1022,16 +1238,6 @@ class GoogleProvider(BaseLLMProvider):
                         request_type = RequestType.TOOLS
                         break
             
-            # Check for web search/grounding
-            if enable_web_search and response.candidates:
-                candidate = response.candidates[0]
-                if (hasattr(candidate, "grounding_metadata") and 
-                    hasattr(candidate.grounding_metadata, "grounding_supports")):
-                    request_type = RequestType.TOOLS
-                elif (hasattr(candidate, "url_context_metadata") and 
-                      candidate.url_context_metadata):
-                    request_type = RequestType.TOOLS
-            
             # Track usage immediately after API call
             if hasattr(response, 'usage_metadata'):
                 self.track_cost(actual_model, response.usage_metadata, request_type)
@@ -1041,87 +1247,29 @@ class GoogleProvider(BaseLLMProvider):
 
             if response.candidates and response.candidates[0].content.parts:
                 for part in response.candidates[0].content.parts:
-                    if hasattr(part, "function_call"):
+                    if hasattr(part, "function_call") and part.function_call:
                         fc = part.function_call
-                        tool_calls.append(
-                            {
-                                "id": fc.name,  # Gemini doesn't provide IDs
-                                "type": "function",
-                                "function": {
-                                    "name": fc.name,
-                                    "arguments": (
-                                        json.dumps(fc.args) if fc.args else "{}"
-                                    ),
-                                },
-                            }
-                        )
+                        # Normalise to standard format
+                        tool_calls.append({
+                            "name": fc.name,
+                            "arguments": fc.args if fc.args else {}
+                        })
 
-            # Check if web search happened (grounding data present)
-            web_search_happened = False
-
-            if enable_web_search and response.candidates:
-                candidate = response.candidates[0]
-
-                # Check for any grounding data
-                if hasattr(candidate, "grounding_metadata") and hasattr(
-                    candidate.grounding_metadata, "grounding_supports"
-                ):
-                    web_search_happened = True
-
-                if (
-                    hasattr(candidate, "url_context_metadata")
-                    and candidate.url_context_metadata
-                ):
-                    web_search_happened = True
-
-            # Determine what to return based on web search
-            if web_search_happened:
-                # Web search happened - ALWAYS return text content
-                text_content = response.text if hasattr(response, "text") else ""
-
-                # Enhance with citations (this also uses response.text internally)
-                if hasattr(candidate, "grounding_metadata"):
-                    metadata = candidate.grounding_metadata
-                    if hasattr(metadata, "grounding_supports"):
-                        text_content = self._add_citations(response)
-                        logger.info(
-                            f"Web search returned {len(metadata.grounding_supports)} results"
-                        )
-
-                # Add URL metadata table
-                if hasattr(candidate, "url_context_metadata"):
-                    url_metadata = candidate.url_context_metadata
-                    if url_metadata:
-                        url_table = self._generate_url_metadata_table(url_metadata)
-                        text_content += (
-                            "\n\nThe following websites were retrieved:\n" + url_table
-                        )
-                        logger.info(
-                            f"URL context extracted from {len(url_metadata)} URLs"
-                        )
-
-                # Return text + any tool calls
+            # Return based on whether MCP tools were called
+            if tool_calls:
+                # MCP tools were called
                 return {
-                    "content": text_content,
-                    "tool_calls": tool_calls if tool_calls else None,
+                    "content": None,
+                    "tool_calls": tool_calls,
                     "role": "assistant",
                 }
             else:
-                # No web search - return based on whether MCP tools were called
-                if tool_calls:
-                    # Only MCP tools, no text
-                    return {
-                        "content": None,
-                        "tool_calls": tool_calls,
-                        "role": "assistant",
-                    }
-                else:
-                    # Simple text response - get text from response.text
-                    return {
-                        "content": response.text if hasattr(response, "text") else "",
-                        "tool_calls": None,
-                        "role": "assistant",
-                    }
+                # Simple text response
+                return {
+                    "content": response.text if hasattr(response, "text") else "",
+                    "tool_calls": None,
+                    "role": "assistant",
+                }
 
         except Exception as e:
             logger.error(f"Gemini tools response error: {e}")
@@ -1132,13 +1280,13 @@ class GoogleProvider(BaseLLMProvider):
         if not usage_metadata:
             return
         
-        # Aggregate Google's multiple input token types
+        # Aggregate Google's multiple input token types (handle None values)
         input_tokens = (
-            getattr(usage_metadata, 'prompt_token_count', 0) +
-            getattr(usage_metadata, 'thoughts_token_count', 0) +
-            getattr(usage_metadata, 'tool_use_prompt_token_count', 0)
+            (usage_metadata.prompt_token_count or 0) +
+            (usage_metadata.thoughts_token_count or 0) +
+            (usage_metadata.tool_use_prompt_token_count or 0)
         )
-        output_tokens = getattr(usage_metadata, 'candidates_token_count', 0)
+        output_tokens = usage_metadata.candidates_token_count or 0
         
         # Calculate cost with tiered pricing
         cost = 0.0

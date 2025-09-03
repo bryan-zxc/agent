@@ -273,16 +273,9 @@ class LLM:
         # Execute each tool and collect results
         tool_messages = []
         for tool_call in response["tool_calls"]:
-            # Extract tool info (handles both OpenAI and Anthropic formats)
-            if hasattr(tool_call, "function"):
-                tool_name = tool_call.function.name
-                try:
-                    tool_args = json.loads(tool_call.function.arguments)
-                except:
-                    tool_args = {}
-            else:
-                tool_name = getattr(tool_call, "name", str(tool_call))
-                tool_args = getattr(tool_call, "input", {})
+            # All providers now return normalised format
+            tool_name = tool_call["name"]
+            tool_args = tool_call["arguments"]
             
             # Send status update via websocket
             if websocket:
@@ -295,19 +288,15 @@ class LLM:
                 except Exception as e:
                     logger.warning(f"Failed to send websocket update: {e}")
             
-            # Execute tool - MCP only
+            # Execute MCP tool (all tools are MCP tools)
             try:
-                if "__" in tool_name:  # MCP tools have server prefix
-                    if self.mcp_manager:
-                        result = await self.mcp_manager.execute_llm_tool_call(tool_call)
-                    else:
-                        result = {"error": "MCP manager not available"}
+                if self.mcp_manager:
+                    result = await self.mcp_manager.execute_llm_tool_call(
+                        tool_name=tool_name,
+                        tool_args=tool_args
+                    )
                 else:
-                    # This should never happen with MCP-only architecture
-                    result = {
-                        "error": f"Non-MCP tool '{tool_name}' not allowed. "
-                                f"All tools must be served through MCP (Model Context Protocol)."
-                    }
+                    result = {"error": "MCP manager not available"}
                 
                 # Send completion status
                 if websocket:

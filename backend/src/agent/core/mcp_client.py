@@ -58,8 +58,11 @@ class MCPClientManager:
         """Ensure a client is connected."""
         if not self.connected.get(name):
             client = self.clients[name]
-            await client.__aenter__()
+            # Enter the context and keep the client connected
+            # The __aenter__ returns the client itself, which maintains the connection
+            connected_client = await client.__aenter__()
             self.connected[name] = True
+            # Note: We're not exiting the context here - it stays open for the lifetime of the manager
     
     async def _cache_tools_for_server(self, name: str):
         """Cache tools from a specific server."""
@@ -78,14 +81,16 @@ class MCPClientManager:
     async def disconnect(self, name: str):
         """Disconnect from a specific MCP server."""
         if name in self.clients:
-            # Close connection if open
+            # Properly exit the context if connected
             if self.connected.get(name):
                 try:
-                    await self.clients[name].__aexit__(None, None, None)
-                except:
-                    pass
+                    client = self.clients[name]
+                    await client.__aexit__(None, None, None)
+                    logger.debug(f"Closed connection to MCP server: {name}")
+                except Exception as e:
+                    logger.warning(f"Error closing connection to {name}: {e}")
             
-            # FastMCP client cleanup
+            # Clean up references
             del self.clients[name]
             if name in self.connected:
                 del self.connected[name]
@@ -145,18 +150,18 @@ class MCPClientManager:
         self.tools_cache = llm_tools
         return llm_tools
     
-    async def execute_llm_tool_call(self, tool_call) -> Any:
+    async def execute_llm_tool_call(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
         """
         Execute a tool call from LLM response.
         
         Args:
-            tool_call: Tool call object from LLM with .function.name and .function.arguments
+            tool_name: Name of the tool to execute (e.g., "filesystem__write_file")
+            tool_args: Arguments to pass to the tool
         
         Returns:
             Tool execution result
         """
-        tool_name = tool_call.function.name
-        arguments = json.loads(tool_call.function.arguments)
+        arguments = tool_args
         
         if tool_name not in self.tool_mapping:
             logger.error(f"Unknown tool requested: {tool_name}")
