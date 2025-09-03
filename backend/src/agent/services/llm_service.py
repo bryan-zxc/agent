@@ -9,9 +9,6 @@ import logging
 from typing import List, Dict, Any, Optional, Union, Type, Callable, Literal
 from pathlib import Path
 from pydantic import BaseModel
-import httpx
-from google import genai
-from google.genai import types
 
 from ..config.settings import settings
 from ..config.llm_config import (
@@ -78,10 +75,6 @@ class LLM:
         # Initialise providers
         self.providers: Dict[str, BaseLLMProvider] = {}
         self._initialise_providers()
-        
-        # Special clients for Google-specific features
-        if settings.gemini_api_key:
-            self.gemini_client = genai.Client(api_key=settings.gemini_api_key)
     
     def _initialise_providers(self) -> None:
         """Initialise available LLM providers."""
@@ -345,122 +338,27 @@ class LLM:
         temperature: float = 0,
         response_format: Optional[Type[BaseModel]] = None,
     ) -> Union[str, BaseModel]:
-        """Get response from Gemini with PDF support."""
-        if not str(pdf_source).lower().endswith(".pdf"):
-            return "Not a pdf"
+        """Get response from Gemini with PDF support.
         
-        if not hasattr(self, "gemini_client"):
-            raise ValueError("Gemini client not initialised")
+        .. deprecated::
+            This method is kept for backwards compatibility.
+            Implementation has been moved to GoogleProvider.process_pdf().
+        """
+        if "google" not in self.providers:
+            raise ValueError("Google provider not configured for PDF processing")
         
-        model = "gemini-2.5-pro"
-        
-        # Get PDF data
-        if isinstance(pdf_source, str) and pdf_source.startswith("http"):
-            pdf_data = httpx.get(pdf_source).content
-        else:
-            pdf_path = Path(pdf_source)
-            if not pdf_path.exists():
-                raise FileNotFoundError(f"PDF not found: {pdf_path}")
-            pdf_data = pdf_path.read_bytes()
-        
-        # Create request
-        pdf_part = types.Part.from_bytes(data=pdf_data, mime_type="application/pdf")
-        contents = [pdf_part, prompt]
-        
-        config = {"temperature": temperature}
-        if response_format:
-            config["response_mime_type"] = "application/json"
-            config["response_schema"] = response_format
-        
-        try:
-            response = self.gemini_client.models.generate_content(
-                model=model,
-                contents=contents,
-                config=config,
-            )
-            
-            if response_format:
-                return response.parsed
-            return response.text
-            
-        except Exception as e:
-            logger.error(f"PDF processing error: {e}")
-            raise
+        return self.providers["google"].process_pdf(
+            pdf_source, prompt, temperature, response_format
+        )
     
     def search_web(self, query: str, temperature: float = 0) -> str:
-        """Web search using Google's grounding."""
-        if not hasattr(self, "gemini_client"):
-            raise ValueError("Gemini client not initialised")
+        """Web search using Google's grounding.
         
-        grounding_tool = types.Tool(google_search=types.GoogleSearch())
-        config = types.GenerateContentConfig(
-            tools=[grounding_tool],
-            temperature=temperature,
-        )
+        .. deprecated::
+            This method is kept for backwards compatibility.
+            Implementation has been moved to GoogleProvider.search_web().
+        """
+        if "google" not in self.providers:
+            raise ValueError("Google provider not configured for web search")
         
-        model = "gemini-2.5-pro"
-        
-        try:
-            response = self.gemini_client.models.generate_content(
-                model=model,
-                contents=query,
-                config=config,
-            )
-            
-            return add_citations(response)
-            
-        except Exception as e:
-            logger.error(f"Web search error: {e}")
-            raise
-    
-
-
-# Standalone helper functions for backward compatibility
-def get_actual_url_from_redirect(redirect_url: str) -> str:
-    """Extract actual URL from Google redirect."""
-    try:
-        import requests
-        response = requests.get(redirect_url, allow_redirects=False, timeout=10)
-        if response.status_code in [301, 302]:
-            return response.headers.get("Location", redirect_url)
-        return redirect_url
-    except:
-        return redirect_url
-
-
-def add_citations(response) -> str:
-    """Add citations to response text."""
-    if not hasattr(response, "candidates") or not response.candidates:
-        return response.text
-    
-    candidate = response.candidates[0]
-    if not hasattr(candidate, "grounding_metadata"):
-        return response.text
-    
-    text = response.text
-    metadata = candidate.grounding_metadata
-    
-    if not hasattr(metadata, "grounding_supports") or not hasattr(metadata, "grounding_chunks"):
-        return text
-    
-    supports = metadata.grounding_supports
-    chunks = metadata.grounding_chunks
-    
-    # Sort by end_index descending to avoid position shifts
-    sorted_supports = sorted(supports, key=lambda s: s.segment.end_index, reverse=True)
-    
-    for support in sorted_supports:
-        end_index = support.segment.end_index
-        if support.grounding_chunk_indices:
-            citations = []
-            for i in support.grounding_chunk_indices:
-                if i < len(chunks):
-                    uri = chunks[i].web.uri
-                    if "vertexaisearch.cloud.google.com" in uri:
-                        uri = get_actual_url_from_redirect(uri)
-                    citations.append(f"[{i + 1}]({uri})")
-            
-            citation_str = ", ".join(citations)
-            text = text[:end_index] + citation_str + text[end_index:]
-    
-    return text
+        return self.providers["google"].search_web(query, temperature)

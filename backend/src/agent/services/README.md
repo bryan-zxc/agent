@@ -37,6 +37,14 @@ Unified interface for multiple large language model providers.
 - `_track_usage()`: Async usage logging to SQLite database
 - `_get_response_with_tools()`: Unified tool-calling loop for both MCP and regular tools
 
+**Deprecated Methods (Backwards Compatibility):**
+- `search_web(query, temperature)`: Web search using Google's grounding
+  - **Deprecated**: Implementation moved to `GoogleProvider.search_web()`
+  - Maintained as thin wrapper for backwards compatibility with existing tools
+- `get_response_pdf(pdf_source, prompt, temperature, response_format)`: PDF processing with Gemini
+  - **Deprecated**: Implementation moved to `GoogleProvider.process_pdf()`
+  - Maintained as thin wrapper for backwards compatibility with existing tools
+
 #### Database Models
 
 **`LLMUsage(Base)`**
