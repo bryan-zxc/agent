@@ -78,7 +78,20 @@ Database models and service for agent message persistence and state management.
   - `router_id`: Foreign key to Router table
   - `role`: Message role (user, assistant)
   - `content`: Text content of the message
-  - `created_at`: Message timestamp
+
+**`LLMUsage`** (Migrated from separate database)
+- Track LLM API usage and costs (previously in `/app/db/llm_usage.db`)
+- **Fields:**
+  - `id`: Auto-incrementing primary key
+  - `timestamp`: When the request was made (indexed)
+  - `model`: Model identifier used
+  - `input_tokens`: Number of input tokens
+  - `output_tokens`: Number of output tokens
+  - `cost`: Calculated cost in USD
+  - `request_type`: Type of request (text, tools, structured, json_object, pdf_processing, web_search)
+  - `caller`: Service or agent that made the request (indexed)
+- **Indexes:** Composite index on (caller, timestamp) for efficient cost queries
+- **Migration Note:** Consolidated from separate SQLite database for unified data management
 
 **`Router`**
 - State for router operations

@@ -7,35 +7,41 @@ External service integrations and specialized processing services.
 ### `llm_service.py`
 Unified interface for multiple large language model providers.
 
+#### Architecture
+
+**Modular Provider Design**
+- **Provider Abstraction**: All providers implement `BaseLLMProvider` interface (backend/src/agent/services/llm/base.py:37)
+- **Native SDK Integration**: Each provider uses its official SDK for optimal performance
+  - OpenAI: Official OpenAI Python SDK
+  - Anthropic: Official Anthropic Python SDK  
+  - Google: Google Generative AI SDK
+- **Unified Interface**: `LLM` class provides consistent API across all providers
+- **Provider Selection**: Automatic routing based on model name
+
 #### Classes
 
 **`LLM`**
-- Central service for all language model interactions
-- Supports multiple providers: OpenAI, Anthropic Claude, Google Gemini
-- **Async Architecture**: All database operations use async patterns with aiosqlite
-- **MCP Integration**: Optional support for Model Context Protocol tools
+- Central service orchestrating multiple LLM providers
+- **System Instructions**: Native system instruction support for all providers
+- **MCP Integration**: Full Model Context Protocol support for external tools
 - **Key Features:**
-  - Automatic provider selection based on model name
-  - Usage tracking and cost calculation with async database operations
-  - Retry logic with exponential backoff
-  - Structured output support with Pydantic models
-  - MCP tool integration with callback support
-  - Combines regular and MCP tools seamlessly
+  - Provider-based architecture with clean separation
+  - Normalised tool calling format across all providers
+  - Usage tracking consolidated in main agent database
+  - Fire-and-forget async cost tracking
+  - WebSocket support for real-time tool execution updates
 
 **Key Methods:**
-- `__init__(db_path, caller, mcp_manager)`: Initialize with usage tracking and optional MCP
-- `get_response(messages, model, temperature, response_format)`: Sync inference (text/structured only, no tools)
-- `a_get_response(messages, model, temperature, response_format, tools, tool_filter, max_tool_rounds, callbacks)`: Async with full tool support
+- `__init__(db_path, caller, mcp_manager)`: Initialise with usage tracking and optional MCP
+- `get_response(messages, model, temperature, response_format, system_instruction)`: Sync inference (text/structured only, no tools)
+- `a_get_response(messages, model, temperature, response_format, system_instruction, use_tools, enable_web_search, tool_filter, websocket)`: Async with full tool support
   - **Parameters:**
-    - `tools`: Optional list of regular OpenAI/Anthropic format tools
+    - `system_instruction`: Optional system instruction for the model
+    - `use_tools`: Master switch for MCP tools (default: False)
+    - `enable_web_search`: Enable provider-native web search
     - `tool_filter`: Optional function to filter MCP tools by server/name
-    - `max_tool_rounds`: Maximum number of tool-calling rounds (default: 10)
-    - `on_tool_start`: Callback when a tool execution starts
-    - `on_tool_complete`: Callback when a tool execution completes
-    - `on_tool_error`: Callback when a tool execution fails
-- `_calculate_cost(model, input_tokens, output_tokens)`: Cost calculation
-- `_track_usage()`: Async usage logging to SQLite database
-- `_get_response_with_tools()`: Unified tool-calling loop for both MCP and regular tools
+    - `websocket`: Optional WebSocket for real-time status updates
+- `_get_response_with_tools()`: Execute tools and return formatted response
 
 **Deprecated Methods (Backwards Compatibility):**
 - `search_web(query, temperature)`: Web search using Google's grounding
@@ -48,7 +54,7 @@ Unified interface for multiple large language model providers.
 #### Database Models
 
 **`LLMUsage(Base)`**
-- SQLAlchemy model for usage tracking
+- SQLAlchemy model for usage tracking (migrated to backend/src/agent/models/agent_database.py:373)
 - **Fields:**
   - `timestamp`: When the request was made
   - `model`: Model identifier used
@@ -57,16 +63,39 @@ Unified interface for multiple large language model providers.
   - `request_type`: Type of request (text, tools, structured)
   - `purpose`: Purpose category (general, agent)
 
+#### Provider Implementations
+
+**`OpenAIProvider`** (backend/src/agent/services/llm/providers.py:152)
+- Native OpenAI SDK integration
+- Supports GPT models with function calling
+- Structured output via response_format parameter
+- Tool calls normalised to standard format
+
+**`AnthropicProvider`** (backend/src/agent/services/llm/providers.py:406)
+- Native Anthropic SDK integration  
+- Supports Claude models with tool use
+- System instructions via native system parameter
+- Web search through native integration
+- Tool calls normalised to standard format
+
+**`GoogleProvider`** (backend/src/agent/services/llm/providers.py:847)
+- Native Google Generative AI SDK integration
+- Supports Gemini models with function calling
+- System instructions via systemInstruction parameter
+- Native grounding for web search (cannot mix with tools)
+- PDF processing support
+- Tool calls normalised to standard format
+
 #### Configuration
 
-**`MODEL_MAPPING`**
+**`MODEL_MAPPING`** (backend/src/agent/config/llm_config.py)
 - Maps friendly names to actual model identifiers
 - Supported models:
   - `sonnet-4`: Claude Sonnet 4
-  - `gpt-4.1-nano`: GPT-4.1 Nano
+  - `gpt-5-nano`: GPT-5 Nano
   - `gemini-2.5-pro`: Gemini 2.5 Pro
 
-**`PRICING`**
+**`PRICING`** (backend/src/agent/config/llm_config.py)
 - Per-1000-token pricing for input and output
 - Used for cost calculation and budget tracking
 
@@ -147,38 +176,39 @@ Image file validation and processing.
 ## MCP (Model Context Protocol) Integration
 
 ### Overview
-The LLM service now supports MCP tools, allowing agents to use external tools like GitHub API, filesystem operations, and more through a unified interface.
+The LLM service integrates with Model Context Protocol (MCP) to enable agents to use external tools from any MCP-compatible server. This allows seamless integration with third-party services and custom tool servers.
+
+### Architecture
+- **MCP Client Manager**: Singleton manager (backend/src/agent/core/mcp_client.py:20) handles all MCP connections
+- **Tool Discovery**: Automatic discovery of available tools from connected MCP servers
+- **Tool Execution**: Unified execution interface regardless of server type (stdio, HTTP, WebSocket)
+- **Provider Integration**: All LLM providers support MCP tools through normalised interface
 
 ### Key Features
-- **Automatic Tool Discovery**: MCP tools are automatically discovered from connected servers
-- **Tool Combination**: Regular OpenAI/Anthropic tools can be combined with MCP tools
+- **External Tool Servers**: Connect to any MCP-compatible server (GitHub, filesystem, custom)
+- **Transport Support**: Multiple transport types - stdio (Node.js), HTTP, WebSocket
 - **Tool Filtering**: Filter MCP tools by server or custom criteria
-- **Execution Callbacks**: Monitor tool execution with start/complete/error callbacks
-- **Round Limiting**: Prevent infinite tool loops with `max_tool_rounds`
+- **WebSocket Updates**: Real-time tool execution status via WebSocket
+- **Unified Format**: MCP tools presented in standard OpenAI function calling format
 
 ### MCP Tool Usage
 ```python
 from agent.services.llm_service import LLM
 from agent.core.mcp_client import get_mcp_manager
 
-# Initialize with MCP support
+# Initialise with MCP support
 mcp_manager = await get_mcp_manager()
 llm = LLM(caller="my_agent", mcp_manager=mcp_manager)
 
-# Use with tool callbacks
-async def on_tool_start(name, args):
-    print(f"Starting tool: {name}")
-
-async def on_tool_complete(name, result):
-    print(f"Tool completed: {name}")
-
+# Enable MCP tools and optionally web search
 response = await llm.a_get_response(
     messages=[{"role": "user", "content": "Get issue #40 from bryan-zxc/agent"}],
-    model="gpt-4.1-nano",
+    model="gpt-5-nano",
     temperature=0,
-    on_tool_start=on_tool_start,
-    on_tool_complete=on_tool_complete,
-    max_tool_rounds=5
+    system_instruction="You are a helpful assistant",
+    use_tools=True,  # Enable MCP tools
+    enable_web_search=False,  # Provider-native web search
+    websocket=websocket  # Optional: real-time updates
 )
 ```
 

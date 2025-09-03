@@ -43,13 +43,15 @@ agent/
 - Agent status updates ("Analyzing image...", "Processing table 1 of 3...")
 - **Real-time expandable execution plans** - Live updates of planner thinking and task progress
 - **Message-specific execution plan history** - Each planner activation creates an expandable "Agents assemble!" message
+- **Tool Execution Updates** - Real-time WebSocket updates for MCP tool execution
 
 ### Multi-Modal Processing
 - Image analysis and chart reading
-- PDF document processing
+- PDF document processing with native SDK support
 - Text document processing with multi-encoding support
 - CSV data analysis with SQL queries
 - Table extraction and data visualisation
+- **System Instructions**: Native system instruction support across all LLM providers
 
 ### File Management
 - Intelligent duplicate detection using SHA-256 content hashing
@@ -72,12 +74,15 @@ agent/
 - Context switching between chat and analysis modes
 - Session state management
 
-### External Tool Integration (MCP)
-- Model Context Protocol (MCP) client support for external tools
-- Stdio-based MCP servers (Node.js packages like GitHub, filesystem)
-- HTTP/WebSocket MCP server connections
-- Automatic tool discovery and LLM function calling integration
-- Configurable via environment variables
+### Model Context Protocol (MCP) Integration
+- **External Tool Ecosystem**: Connect to any MCP-compatible tool server
+- **GitHub Integration**: Full GitHub API access for issues, PRs, repositories
+- **Filesystem Operations**: Secure file read/write within configured directories  
+- **Custom Tool Servers**: Support for third-party and custom MCP servers
+- **Multiple Transports**: Stdio (Node.js), HTTP, and WebSocket connections
+- **Automatic Tool Discovery**: Tools are discovered and integrated automatically
+- **Provider Agnostic**: Works with all LLM providers (OpenAI, Anthropic, Google)
+- **Per-Agent Configuration**: Enable/disable MCP for router, planner, workers separately
 
 ## Prerequisites
 

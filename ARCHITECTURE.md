@@ -363,6 +363,81 @@ graph TD
 - Recovery mechanisms for failed tasks
 - Cross-session state persistence and restoration
 
+## Model Context Protocol (MCP) Architecture
+
+### Overview
+MCP provides a standardised protocol for the agent system to connect to and use external tools from any compatible server. This enables extensibility without modifying core agent code.
+
+### Architecture Components
+
+```mermaid
+graph LR
+    A[LLM Service] --> B[MCP Client Manager]
+    B --> C[GitHub Server<br/>stdio/npx]
+    B --> D[Filesystem Server<br/>stdio/npx]  
+    B --> E[Custom Server<br/>HTTP/WebSocket]
+    
+    C --> F[GitHub API Tools]
+    D --> G[File Operations]
+    E --> H[Custom Tools]
+    
+    style B fill:#e1f5fe
+    style C fill:#f3e5f5
+    style D fill:#f3e5f5
+    style E fill:#f3e5f5
+```
+
+### MCP Integration Flow
+
+1. **Server Connection**: MCP servers are configured via environment variables or YAML
+2. **Tool Discovery**: On connection, the MCP manager discovers all available tools
+3. **LLM Integration**: Tools are formatted as OpenAI function calling schema
+4. **Tool Execution**: When LLM requests a tool, MCP manager executes it on the appropriate server
+5. **Result Handling**: Tool results are returned to LLM for processing
+
+### Transport Layers
+
+**Stdio Transport** (Node.js packages):
+- Spawns Node.js subprocess with npx command
+- Communicates via stdin/stdout
+- Examples: `@modelcontextprotocol/server-github`, `@modelcontextprotocol/server-filesystem`
+- Persistent connection maintained throughout application lifecycle
+
+**HTTP Transport**:
+- RESTful API endpoints for tool discovery and execution
+- Stateless request/response model
+- Suitable for cloud-hosted tool servers
+
+**WebSocket Transport**:
+- Bidirectional communication for real-time tools
+- Persistent connection with automatic reconnection
+- Ideal for streaming data or long-running operations
+
+### Security & Configuration
+
+**Security Boundaries**:
+- Filesystem server restricted to specific directories (`/app/files/uploads`)
+- GitHub server requires personal access token with appropriate scopes
+- Per-agent MCP enablement (router, planner, workers can be configured separately)
+
+**Configuration System** (backend/src/agent/config/mcp_config.py):
+- Environment-first configuration approach
+- Optional YAML configuration for complex setups
+- Automatic environment variable substitution in YAML
+- Server-specific environment variables (e.g., `GITHUB_PERSONAL_ACCESS_TOKEN`)
+
+### External Tool Ecosystem
+
+**Available Tool Servers**:
+- **GitHub**: Issues, PRs, repositories, gists, workflow management
+- **Filesystem**: Secure read/write operations within allowed directories
+- **Custom Servers**: Any MCP-compatible server via published npm packages or HTTP endpoints
+
+**Tool Naming Convention**:
+- Tools prefixed with server name to avoid conflicts
+- Format: `{server}__{tool}` (e.g., `github__create_issue`)
+- Automatic prefixing handled by MCP manager
+
 ## Development Structure (Monorepo)
 
 ```

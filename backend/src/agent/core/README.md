@@ -29,20 +29,24 @@ Model Context Protocol (MCP) client manager for external tool integration.
 - Manages connections to external MCP servers (GitHub, databases, file systems, etc.)
 - Handles tool discovery, formatting for LLMs, and execution
 - Provides singleton pattern for global access across the application
+- Maintains persistent connections for stdio-based servers
 
 **Key Methods:**
-- `connect(name, server_url)`: Connect to an MCP server
+- `connect(name, server_config)`: Connect to an MCP server (stdio, HTTP, or WebSocket)
 - `disconnect(name)`: Disconnect from a specific MCP server
 - `get_tools_for_llm()`: Get all available tools formatted for LLM function calling
-- `execute_llm_tool_call(tool_call)`: Execute a tool call from LLM response
+- `execute_llm_tool_call(tool_name, tool_args)`: Execute a tool call from LLM response
 - `get_filtered_tools(filter_fn)`: Get tools with custom filtering
 - `list_connected_servers()`: Get list of connected server names
+- `_ensure_connected(name)`: Ensure a client maintains its connection
 
 **Features:**
+- **Multiple Transport Types**: Support for stdio (Node.js), HTTP, and WebSocket servers
 - **Tool Discovery**: Automatically discovers tools from connected MCP servers
-- **LLM Integration**: Formats tools in OpenAI/Anthropic function schema format
-- **Name Conflict Resolution**: Prefixes tool names with server name to avoid conflicts
-- **Error Handling**: Comprehensive error handling for tool execution
+- **LLM Integration**: Formats tools in OpenAI function schema format
+- **Name Conflict Resolution**: Prefixes tool names with server name (e.g., `github__create_issue`)
+- **Connection Management**: Persistent connection handling for stdio subprocess lifecycle
+- **Tool Caching**: Caches discovered tools to reduce server queries
 - **Singleton Access**: Global instance accessible via `get_mcp_manager()`
 
 ### `router_operations.py`
@@ -171,10 +175,12 @@ messages = await message_manager.get_messages()
 
 ### MCP Client Integration
 
+**Model Context Protocol (MCP)** enables the agent system to integrate with external tool servers, extending capabilities beyond built-in functions. MCP provides a standardised protocol for tool discovery and execution across different transport layers.
+
 **Prerequisites:**
 - Node.js 20 LTS installed in container (included in Dockerfile)
 - MCP servers installed via npm (e.g., `@modelcontextprotocol/server-github`)
-- Environment variables configured for MCP servers (e.g., `GITHUB_TOKEN`)
+- Environment variables configured for MCP servers (e.g., `GITHUB_PERSONAL_ACCESS_TOKEN`)
 
 ```python
 from agent.core.mcp_client import get_mcp_manager
@@ -192,7 +198,10 @@ tools = await mcp_manager.get_tools_for_llm()
 # Tools are formatted for OpenAI/Anthropic function calling
 
 # Execute a tool call from LLM response
-result = await mcp_manager.execute_llm_tool_call(tool_call)
+result = await mcp_manager.execute_llm_tool_call(
+    tool_name="github__create_issue",
+    tool_args={"owner": "bryan-zxc", "repo": "agent", "title": "Test"}
+)
 
 # Filter tools by custom criteria
 def filter_fn(server_name, tool):
@@ -205,7 +214,34 @@ servers = await mcp_manager.list_connected_servers()
 # Returns: ["github", "filesystem"]
 ```
 
-**Configuration:** MCP servers are configured in environment variables and loaded via `MCPConfiguration` in the settings module. See `backend/src/agent/config/mcp_config.py` for server definitions.
+### MCP Configuration
+
+**Configuration System** (backend/src/agent/config/mcp_config.py):
+- **Environment-based**: Primary configuration via environment variables
+- **YAML Support**: Optional `config/mcp_config.yaml` for complex setups
+- **Server Types**: stdio (Node.js packages), HTTP endpoints, WebSocket connections
+- **Per-Agent Control**: Enable/disable MCP for router, planner, workers separately
+
+**Environment Variables:**
+```bash
+# GitHub MCP Server
+GITHUB_PERSONAL_ACCESS_TOKEN=your_token
+MCP_GITHUB_ENABLED=true
+
+# Filesystem MCP Server
+MCP_FILESYSTEM_ENABLED=true
+MCP_FILESYSTEM_ROOT=/app/files/uploads
+
+# Control which agents can use MCP
+MCP_ROUTER_ENABLED=true
+MCP_PLANNER_ENABLED=true
+MCP_WORKER_ENABLED=false
+```
+
+**Server Definitions** (backend/src/agent/config/mcp_config.py:19):
+- `MCPServerDefinition`: Pydantic model defining server connection parameters
+- `MCPConfig`: Overall MCP configuration with server list and agent settings
+- Automatic environment variable substitution in YAML configs
 
 ## File Type Processing
 
@@ -236,11 +272,12 @@ servers = await mcp_manager.list_connected_servers()
 
 - **WebSocket Communication**: Real-time bidirectional messaging with frontend
 - **Database Persistence**: SQLite integration for router history
-- **LLM Service**: All agents use unified LLM interface
+- **LLM Service**: All agents use unified LLM interface with MCP tool support
 - **PlannerAgent**: Router delegates complex tasks to planner
 - **File Services**: Leverages document and image processing services
 - **Models**: Uses Pydantic models for structured data handling
-- **MCP Client Manager**: Connects to external MCP servers for tool integration
+- **MCP Client Manager**: Singleton manager connecting to external MCP servers
+- **External Tools**: GitHub API, filesystem operations, and custom tool servers via MCP
 
 ## Error Handling
 
