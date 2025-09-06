@@ -57,6 +57,7 @@ Function-based router operations for real-time chat and file processing orchestr
 - **State passing pattern**: Router state is passed as dictionary between functions
 - **WebSocket-only communication**: All user interactions happen via WebSocket `/chat` endpoint
 - **No HTTP activation**: Router activation happens through WebSocket, not HTTP endpoints
+- **System Instructions**: Fetched from satellite tables (backend/src/agent/models/agent_database.py:1386-1522) when agents are created
 
 #### Core Functions
 

@@ -246,6 +246,22 @@ class LLM:
         Returns:
             String for single tool execution, or list of content blocks for multiple tools
         """
+        # Google Web Search Architecture:
+        # ================================
+        # Unlike OpenAI and Anthropic which support native web search in tools_response,
+        # Google's grounding tools (GoogleSearch/UrlContext) conflict with function
+        # calling in Gemini's tools_response method.
+        #
+        # Solution: Google uses the google_search MCP tool (from agent_tools server)
+        # which internally calls GoogleProvider.search_web() method. This provides
+        # web search capability through the standard tools interface.
+        #
+        # The agent_tools MCP server is enabled by default and includes:
+        # - google_search: Web search functionality for Google provider
+        # - get_facts_from_pdf: PDF document analysis
+        #
+        # No special handling needed here - tools are loaded from MCP servers.
+        
         # Make single API call to get tool calls
         provider = self._get_provider_for_model(model)
         actual_model = get_actual_model_name(model)
@@ -351,7 +367,7 @@ class LLM:
             pdf_source, prompt, temperature, response_format
         )
     
-    def search_web(self, query: str, temperature: float = 0) -> str:
+    def search_web(self, query: str) -> str:
         """Web search using Google's grounding.
         
         .. deprecated::
@@ -361,4 +377,4 @@ class LLM:
         if "google" not in self.providers:
             raise ValueError("Google provider not configured for web search")
         
-        return self.providers["google"].search_web(query, temperature)
+        return self.providers["google"].search_web(query)

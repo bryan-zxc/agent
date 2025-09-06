@@ -13,6 +13,9 @@ class AgentSettings(BaseSettings):
     anthropic_api_key: Optional[str] = Field(
         default=None, description="Anthropic API key"
     )
+    github_personal_access_token: Optional[str] = Field(
+        default=None, description="GitHub Personal Access Token for MCP"
+    )
 
     # Task Configuration
     max_retry_tasks: int = Field(
@@ -85,6 +88,42 @@ class AgentSettings(BaseSettings):
         description="Enable MCP integration globally"
     )
     
+    # MCP Server Configuration
+    mcp_github_enabled: bool = Field(
+        default=False,
+        description="Enable GitHub MCP server"
+    )
+    mcp_filesystem_enabled: bool = Field(
+        default=True,
+        description="Enable filesystem MCP server"
+    )
+    mcp_filesystem_root: str = Field(
+        default="/app",
+        description="Root directory for filesystem MCP server"
+    )
+    mcp_agent_tools_enabled: bool = Field(
+        default=True,
+        description="Enable agent native tools MCP server"
+    )
+    mcp_custom_servers: Optional[str] = Field(
+        default=None,
+        description="JSON string of custom MCP server configurations"
+    )
+    
+    # MCP Agent Configuration
+    mcp_router_enabled: bool = Field(
+        default=True,
+        description="Enable MCP for router agent"
+    )
+    mcp_planner_enabled: bool = Field(
+        default=True,
+        description="Enable MCP for planner agent"
+    )
+    mcp_worker_enabled: bool = Field(
+        default=False,
+        description="Enable MCP for worker agent"
+    )
+    
     # Load MCP configuration
     @property
     def mcp_config(self) -> MCPConfig:
@@ -92,19 +131,6 @@ class AgentSettings(BaseSettings):
         if not hasattr(self, '_mcp_config'):
             self._mcp_config = load_mcp_config()
         return self._mcp_config
-    
-    # Convenience accessors
-    @property
-    def mcp_router_enabled(self) -> bool:
-        return self.mcp_enabled and self.mcp_config.router_enabled
-    
-    @property
-    def mcp_planner_enabled(self) -> bool:
-        return self.mcp_enabled and self.mcp_config.planner_enabled
-    
-    @property
-    def mcp_worker_enabled(self) -> bool:
-        return self.mcp_enabled and self.mcp_config.worker_enabled
 
     model_config = ConfigDict(
         env_file=[".env", ".env.local"],  # Load both files, .env.local overrides .env

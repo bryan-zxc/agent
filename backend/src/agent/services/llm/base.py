@@ -133,7 +133,6 @@ class BaseLLMProvider(ABC):
         model: str,
         temperature: float,
         tools: List[Dict],
-        enable_web_search: bool = False,
         system_instruction: Optional[str] = None,
     ) -> Optional[Dict]:
         """
@@ -144,7 +143,6 @@ class BaseLLMProvider(ABC):
             model: Model to use
             temperature: Temperature for response generation
             tools: List of available tools (MCP tools only)
-            enable_web_search: Enable provider-native web search
             system_instruction: Optional system instruction
 
         Returns:

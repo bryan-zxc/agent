@@ -36,20 +36,15 @@ class MCPConfig(BaseModel):
     refresh_interval: int = Field(300, description="Tool refresh interval in seconds")
     max_tool_rounds: int = Field(10, description="Max rounds of tool calling")
     
-    # Per-agent configuration
-    router_enabled: bool = True
+    # Per-agent configuration - these values are set from settings in merge_with_env()
     router_servers: List[str] = Field(
-        default_factory=lambda: ["github", "filesystem", "web_search"],
+        default_factory=lambda: ["github", "filesystem", "web_search", "agent_tools"],
         description="Servers available to router"
     )
-    
-    planner_enabled: bool = True
     planner_servers: List[str] = Field(
         default_factory=lambda: ["filesystem", "github"],
         description="Servers available to planner"
     )
-    
-    worker_enabled: bool = False
     worker_servers: List[str] = Field(
         default_factory=lambda: ["filesystem"],
         description="Servers available to workers"
@@ -91,24 +86,26 @@ class MCPConfig(BaseModel):
     @classmethod
     def from_env(cls) -> "MCPConfig":
         """Create configuration from environment variables."""
+        # Import settings here to avoid circular import
+        from .settings import settings
+        
         servers = []
         
         # GitHub MCP server
-        github_token = os.getenv("GITHUB_PERSONAL_ACCESS_TOKEN")
-        if github_token and os.getenv("MCP_GITHUB_ENABLED", "true").lower() == "true":
+        if settings.github_personal_access_token and settings.mcp_github_enabled:
             servers.append(MCPServerDefinition(
                 name="github",
                 server_type="stdio",
                 command="npx",
                 args=["@modelcontextprotocol/server-github"],
-                env={"GITHUB_PERSONAL_ACCESS_TOKEN": github_token},
+                env={"GITHUB_PERSONAL_ACCESS_TOKEN": settings.github_personal_access_token},
                 description="GitHub API integration"
             ))
         
         # Filesystem MCP server
-        if os.getenv("MCP_FILESYSTEM_ENABLED", "true").lower() == "true":
+        if settings.mcp_filesystem_enabled:
             # Use /app as default root since that's the working directory in container
-            filesystem_root = os.getenv("MCP_FILESYSTEM_ROOT", "/app")
+            filesystem_root = settings.mcp_filesystem_root
             servers.append(MCPServerDefinition(
                 name="filesystem",
                 server_type="stdio",
@@ -120,8 +117,24 @@ class MCPConfig(BaseModel):
                 description=f"Local filesystem access (root: {filesystem_root})"
             ))
         
+        # Agent native tools MCP server
+        if settings.mcp_agent_tools_enabled:
+            servers.append(MCPServerDefinition(
+                name="agent_tools",
+                server_type="stdio",
+                command="uv",
+                args=["run", "python", "-m", "src.agent.utils.tools"],
+                env={
+                    "ROUTER_MODEL": settings.router_model,
+                    "PLANNER_MODEL": settings.planner_model,
+                    "WORKER_MODEL": settings.worker_model,
+                },
+                description="Native agent tools for web search and PDF processing",
+                enabled=True
+            ))
+        
         # Custom MCP servers from env
-        custom_servers_json = os.getenv("MCP_CUSTOM_SERVERS")
+        custom_servers_json = settings.mcp_custom_servers
         if custom_servers_json:
             try:
                 custom_servers = json.loads(custom_servers_json)
@@ -130,15 +143,14 @@ class MCPConfig(BaseModel):
             except (json.JSONDecodeError, TypeError) as e:
                 logger.warning(f"Failed to parse MCP_CUSTOM_SERVERS: {e}")
         
-        return cls(
-            servers=servers,
-            router_enabled=os.getenv("MCP_ROUTER_ENABLED", "true").lower() == "true",
-            planner_enabled=os.getenv("MCP_PLANNER_ENABLED", "true").lower() == "true",
-            worker_enabled=os.getenv("MCP_WORKER_ENABLED", "false").lower() == "true",
-        )
+        # Create config with servers only
+        return cls(servers=servers)
     
     def merge_with_env(self) -> "MCPConfig":
         """Merge YAML config with environment variables (env takes precedence)."""
+        # Import settings here to avoid circular import
+        from .settings import settings
+        
         env_config = MCPConfig.from_env()
         
         # Merge servers (env servers override yaml servers with same name)
@@ -147,14 +159,6 @@ class MCPConfig(BaseModel):
             server_map[env_server.name] = env_server
         
         self.servers = list(server_map.values())
-        
-        # Override flags from environment if set
-        if os.getenv("MCP_ROUTER_ENABLED"):
-            self.router_enabled = env_config.router_enabled
-        if os.getenv("MCP_PLANNER_ENABLED"):
-            self.planner_enabled = env_config.planner_enabled
-        if os.getenv("MCP_WORKER_ENABLED"):
-            self.worker_enabled = env_config.worker_enabled
         
         return self
 

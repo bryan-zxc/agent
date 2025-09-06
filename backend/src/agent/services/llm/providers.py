@@ -1072,98 +1072,6 @@ class GoogleProvider(BaseLLMProvider):
             logger.error(f"Gemini structured response error: {e}")
             return None
 
-    def _web_search_response(
-        self,
-        messages: List[Dict[str, Any]],
-        model: str,
-        temperature: float,
-        system_instruction: Optional[str] = None,
-    ) -> Optional[Dict]:
-        """Standalone web search method for future MCP tool conversion.
-        
-        This method handles Google's native grounding tools (search + URL context).
-        Kept separate for future packaging as an MCP tool.
-        """
-        try:
-            actual_model = self.get_actual_model_name(model)
-            gemini_contents = self._convert_messages(messages)
-
-            # Build grounding tools
-            grounding_tools = [
-                types.Tool(url_context=types.UrlContext()),
-                types.Tool(google_search=types.GoogleSearch())
-            ]
-            
-            logger.info("Enabled Gemini native grounding tools (search + URL context)")
-
-            # Create config with grounding tools
-            config = types.GenerateContentConfig(
-                temperature=temperature,
-                tools=grounding_tools,
-                system_instruction=system_instruction if system_instruction else None,
-            )
-
-            # Make request
-            response = self.client.models.generate_content(
-                model=actual_model,
-                contents=gemini_contents,
-                config=config,
-            )
-            
-            # Track usage
-            if hasattr(response, 'usage_metadata'):
-                self.track_cost(actual_model, response.usage_metadata, RequestType.TOOLS)
-
-            # Check if web search happened
-            web_search_happened = False
-            text_content = ""
-            
-            if response.candidates:
-                candidate = response.candidates[0]
-
-                # Check for any grounding data
-                if hasattr(candidate, "grounding_metadata") and hasattr(
-                    candidate.grounding_metadata, "grounding_supports"
-                ):
-                    web_search_happened = True
-                    # Enhance with citations
-                    text_content = self._add_citations(response)
-                    logger.info(
-                        f"Web search returned {len(candidate.grounding_metadata.grounding_supports)} results"
-                    )
-
-                if (
-                    hasattr(candidate, "url_context_metadata")
-                    and candidate.url_context_metadata
-                ):
-                    web_search_happened = True
-                    # Add URL metadata table
-                    url_metadata = candidate.url_context_metadata
-                    url_table = self._generate_url_metadata_table(url_metadata)
-                    text_content += (
-                        "\n\nThe following websites were retrieved:\n" + url_table
-                    )
-                    logger.info(
-                        f"URL context extracted from {len(url_metadata)} URLs"
-                    )
-
-            # Get default text if no web search happened
-            if not web_search_happened:
-                text_content = response.text if hasattr(response, "text") else ""
-            
-            # Format response consistently
-            if text_content:
-                text_content = f"Tool web_search was called and returned:\n{text_content}"
-            
-            return {
-                "content": text_content,
-                "tool_calls": None,
-                "role": "assistant",
-            }
-
-        except Exception as e:
-            logger.error(f"Gemini web search response error: {e}")
-            return None
 
     def tools_response(
         self,
@@ -1171,19 +1079,10 @@ class GoogleProvider(BaseLLMProvider):
         model: str,
         temperature: float,
         tools: List[Dict],
-        enable_web_search: bool = False,
         system_instruction: Optional[str] = None,
     ) -> Optional[Dict]:
-        """Get tools response from Gemini with MCP tools support only."""
+        """Get tools response from Gemini with MCP tools support."""
         try:
-            # Web search is not supported in tools_response anymore
-            # It will be packaged as an MCP tool in the future
-            if enable_web_search:
-                logger.warning(
-                    "Web search in tools_response is not supported for Google provider. "
-                    "Use _web_search_response() or wait for MCP tool implementation."
-                )
-                # For now, just ignore web search flag and proceed with MCP tools only
             
             actual_model = self.get_actual_model_name(model)
             gemini_contents = self._convert_messages(messages)
@@ -1417,32 +1316,79 @@ class GoogleProvider(BaseLLMProvider):
 
         return text
     
-    def search_web(self, query: str, temperature: float = 0) -> str:
-        """Web search using Google's grounding.
+    def search_web(self, query: str) -> str:
+        """Web search using Google's grounding with full formatting.
         
         Args:
             query: Search query to execute
-            temperature: Temperature for response generation
             
         Returns:
-            Search results with citations
+            Search results with citations and URL metadata, or error message
         """
-        grounding_tool = types.Tool(google_search=types.GoogleSearch())
-        config = types.GenerateContentConfig(
-            tools=[grounding_tool],
-            temperature=temperature,
-        )
-        
-        model = "gemini-2.5-pro"
-        
         try:
+            model = "gemini-2.5-pro"
+            
+            # Build grounding tools (search + URL context)
+            grounding_tools = [
+                types.Tool(url_context=types.UrlContext()),
+                types.Tool(google_search=types.GoogleSearch())
+            ]
+            
+            logger.info("Enabled Gemini native grounding tools (search + URL context)")
+            
+            # Use temperature 0 for factual search results
+            config = types.GenerateContentConfig(
+                tools=grounding_tools,
+                temperature=0,
+            )
+            
             response = self.client.models.generate_content(
                 model=model,
                 contents=query,
                 config=config,
             )
             
-            return self._add_citations(response)
+            # Track usage
+            if hasattr(response, 'usage_metadata'):
+                self.track_cost(model, response.usage_metadata, RequestType.TOOLS)
+            
+            # Check if web search actually happened
+            web_search_happened = False
+            text_content = ""
+            
+            if response.candidates:
+                candidate = response.candidates[0]
+                
+                # Check for grounding data (search results)
+                if hasattr(candidate, "grounding_metadata") and hasattr(
+                    candidate.grounding_metadata, "grounding_supports"
+                ):
+                    web_search_happened = True
+                    text_content = self._add_citations(response)
+                    logger.info(
+                        f"Web search returned {len(candidate.grounding_metadata.grounding_supports)} results"
+                    )
+                
+                # Check for URL context metadata
+                if hasattr(candidate, "url_context_metadata") and candidate.url_context_metadata:
+                    web_search_happened = True
+                    url_metadata = candidate.url_context_metadata
+                    url_table = self._generate_url_metadata_table(url_metadata)
+                    
+                    # Append URL table to existing content
+                    if text_content:
+                        text_content += "\n\nThe following websites were retrieved:\n" + url_table
+                    else:
+                        text_content = "The following websites were retrieved:\n" + url_table
+                        
+                    logger.info(f"URL context extracted from {len(url_metadata)} URLs")
+            
+            # IMPORTANT: Only return content if web search actually happened
+            if web_search_happened and text_content:
+                return text_content
+            else:
+                logger.warning("Web search was called but no grounding occurred")
+                return "No search results found. The search may have failed or returned no relevant results."
             
         except Exception as e:
             logger.error(f"Web search error: {e}")

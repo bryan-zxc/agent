@@ -23,6 +23,9 @@ Unified interface for multiple large language model providers.
 **`LLM`**
 - Central service orchestrating multiple LLM providers
 - **System Instructions**: Native system instruction support for all providers
+  - Instructions are stored in satellite tables (RouterSystemInstructions, PlannerSystemInstructions, WorkerSystemInstructions)
+  - Retrieved from database and passed via `system_instruction` parameter
+  - No longer embedded in message chains for better separation of concerns
 - **MCP Integration**: Full Model Context Protocol support for external tools
 - **Key Features:**
   - Provider-based architecture with clean separation

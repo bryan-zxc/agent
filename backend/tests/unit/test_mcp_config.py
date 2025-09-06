@@ -139,7 +139,8 @@ servers:
     def test_from_env(self):
         """Test creating configuration from environment variables."""
         with patch.dict(os.environ, {
-            "GITHUB_TOKEN": "test_token",
+            "GITHUB_PERSONAL_ACCESS_TOKEN": "test_token",
+            "MCP_GITHUB_ENABLED": "true",
             "MCP_FILESYSTEM_ENABLED": "true",
             "MCP_FILESYSTEM_ROOT": "/test/path",
             "MCP_ROUTER_ENABLED": "false"
@@ -213,7 +214,8 @@ planner_enabled: false
         config = MCPConfig.from_yaml(self.config_file)
         
         with patch.dict(os.environ, {
-            "GITHUB_TOKEN": "new_token",
+            "GITHUB_PERSONAL_ACCESS_TOKEN": "new_token",
+            "MCP_GITHUB_ENABLED": "true",
             "MCP_ROUTER_ENABLED": "false",
             "MCP_PLANNER_ENABLED": "true"
         }):
@@ -221,7 +223,7 @@ planner_enabled: false
             
             # GitHub server should be replaced with env version
             github_server = next(s for s in config.servers if s.name == "github")
-            self.assertEqual(github_server.env.get("GITHUB_TOKEN"), "new_token")
+            self.assertEqual(github_server.env.get("GITHUB_PERSONAL_ACCESS_TOKEN"), "new_token")
             
             # Flags should be overridden
             self.assertFalse(config.router_enabled)
@@ -260,7 +262,8 @@ servers:
     def test_load_mcp_config_env_only(self):
         """Test load_mcp_config with only environment variables."""
         with patch.dict(os.environ, {
-            "GITHUB_TOKEN": "test_token"
+            "GITHUB_PERSONAL_ACCESS_TOKEN": "test_token",
+            "MCP_GITHUB_ENABLED": "true"
         }):
             config = load_mcp_config(Path("nonexistent.yaml"))
             

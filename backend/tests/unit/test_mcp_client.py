@@ -79,13 +79,11 @@ class TestMCPClientManager(unittest.IsolatedAsyncioTestCase):
             "tool": "test_tool"
         }
         
-        # Create mock tool call
-        mock_tool_call = Mock()
-        mock_tool_call.function.name = "test_server__test_tool"
-        mock_tool_call.function.arguments = '{"param": "value"}'
-        
-        # Execute
-        result = await manager.execute_llm_tool_call(mock_tool_call)
+        # Execute with correct parameters
+        result = await manager.execute_llm_tool_call(
+            tool_name="test_server__test_tool",
+            tool_args={"param": "value"}
+        )
         
         self.assertEqual(result, {"result": "success"})
         mock_client.call_tool.assert_called_once_with("test_tool", {"param": "value"})
@@ -95,11 +93,11 @@ class TestMCPClientManager(unittest.IsolatedAsyncioTestCase):
         """Test executing an unknown tool returns error."""
         manager = MCPClientManager()
         
-        mock_tool_call = Mock()
-        mock_tool_call.function.name = "unknown_tool"
-        mock_tool_call.function.arguments = '{}'
-        
-        result = await manager.execute_llm_tool_call(mock_tool_call)
+        # Execute with unknown tool name
+        result = await manager.execute_llm_tool_call(
+            tool_name="unknown_tool",
+            tool_args={}
+        )
         
         self.assertIn("error", result)
         self.assertIn("Unknown tool", result["error"])

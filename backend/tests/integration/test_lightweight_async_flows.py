@@ -265,6 +265,13 @@ class TestTaskPipelineAsyncExecution(LightweightAsyncFlowsTestCase):
 
     async def _execute_task_pipeline(self):
         """Execute the complete task creation and queueing pipeline."""
+        # Set up system instruction for planner (required after migration)
+        await self.db.set_planner_system_instruction(
+            planner_id=self.planner_id,
+            system_instruction="Test planner system instruction for pipeline test",
+            instruction_type="default"
+        )
+        
         # Step 1: Execute task creation
         task_creation_data = {
             "entity_id": self.planner_id,

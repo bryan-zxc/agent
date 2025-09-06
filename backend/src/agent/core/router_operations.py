@@ -212,7 +212,7 @@ async def activate_conversation(
     await agent_db.set_router_system_instruction(
         router_id=router_id,
         system_instruction=system_instruction,
-        instruction_type="default"
+        instruction_type="default",
     )
 
     # Process the initial message
@@ -249,14 +249,12 @@ INSTRUCTION_LIBRARY = {
         "pdf": "You must first use the provided tool get_facts_from_pdf to extract relevant facts in the form of question answer pairs from each document until there are no longer any unanswered questions (ie missing facts to answer the user's original question). "
         "Extracting from each file must be a standalone task.\n"
         "When compiling the final response, you must aggressively use in-line citations, and your answer should be in markdown format."
-        "If the document(s) do not contain all necessary information, in other words there are still unanswered questions, you can use the search_web_general tool to search the web for information that can answer the user's question.",
+        "If the document(s) do not contain all necessary information, in other words there are still unanswered questions, you can search the web for information that can answer the user's question.",
         "text": "(No specific instructions)",
     },
     "non_file": {
-        # "chilli_request": "You must first use search_web_pdf tool to find annual report and sustainability report and extract the facts as question and answer pairs, as most questions can be answered by these documents. "
-        # "Use only the latest version of these documents, for example if today is 2025 then the latest annual report is likely 2024 (as the new year's report may not yet available) or 2025. "
-        # "Questions that are still open can be searched on the web using the search_web_general tool.",
-        "web_search": "You must use the search_web_general tool or the search_web_pdf tool to search the web for information that can answer the user's question. ",
+        # Note: Web search is now handled through MCP tools (google_search) when enabled
+        "web_search": "You should search the web for information that can answer the user's question. ",
     },
 }
 
@@ -410,13 +408,12 @@ async def handle_simple_chat(router_state: Dict[str, Any]) -> str:
     message_manager = router_state["message_manager"]
     router_mode = router_state.get("mode", "auto")
     messages = await message_manager.get_messages()
-    
+
     # Fetch system instruction from database
     agent_db = router_state["agent_db"]
     router_id = router_state["id"]
     system_instruction = await agent_db.get_router_system_instruction(
-        router_id=router_id,
-        instruction_type="default"
+        router_id=router_id, instruction_type="default"
     )
 
     response = await router_state["llm"].a_get_response(
@@ -446,13 +443,12 @@ async def assess_agent_requirements(router_state: Dict[str, Any]) -> RequireAgen
     """
     message_manager = router_state["message_manager"]
     messages = await message_manager.get_messages()
-    
+
     # Fetch system instruction from database
     agent_db = router_state["agent_db"]
     router_id = router_state["id"]
     system_instruction = await agent_db.get_router_system_instruction(
-        router_id=router_id,
-        instruction_type="default"
+        router_id=router_id, instruction_type="default"
     )
 
     assessment_messages = messages + [
@@ -682,14 +678,14 @@ async def handle_complex_request(
         # Create a fresh message context for summarisation
         messages = await message_manager.get_messages()
         user_messages = [msg for msg in messages if msg.get("role") != "system"]
-        
+
         # Use specialised system instruction for summarisation
         summarisation_instruction = (
             "Your sole job is to summarise the conversation into a context-rich request for the downstream agent. "
             "Use the latest message from the user as the basis and enrich the context directly associated with the question using the conversation history. "
             "Return only the context-rich request for the agent, do not include any other information such as prefixes or suffixes, do not ask for more information from the user."
         )
-        
+
         response = await router_state["llm"].a_get_response(
             messages=user_messages,
             model=router_state["model"],
@@ -933,10 +929,9 @@ async def determine_file_groups(
         agent_db = router_state["agent_db"]
         router_id = router_state["id"]
         base_system_instruction = await agent_db.get_router_system_instruction(
-            router_id=router_id,
-            instruction_type="default"
+            router_id=router_id, instruction_type="default"
         )
-        
+
         file_grouping_response = await router_state["llm"].a_get_response(
             messages=[
                 {
@@ -1121,10 +1116,9 @@ async def generate_and_update_title(router_state: Dict[str, Any]):
 
         # Fetch router's system instruction
         system_instruction = await agent_db.get_router_system_instruction(
-            router_id=router_id,
-            instruction_type="default"
+            router_id=router_id, instruction_type="default"
         )
-        
+
         response = await router_state["llm"].a_get_response(
             messages=title_messages,
             model=router_state["model"],

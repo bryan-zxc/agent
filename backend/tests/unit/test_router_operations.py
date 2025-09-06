@@ -175,8 +175,6 @@ class TestRouterOperations(unittest.IsolatedAsyncioTestCase):
             MockMessageManager.assert_called_once_with(
                 db=mock_router_state["agent_db"], agent_type="router", agent_id=self.router_id
             )
-            # Verify system message was added
-            mock_message_manager.add_message.assert_called_once()
             # Verify message handling with fully qualified parameters
             mock_handle_message.assert_called_once_with(
                 router_state=mock_router_state,
@@ -630,12 +628,17 @@ class TestRouterOperations(unittest.IsolatedAsyncioTestCase):
         )
         mock_llm.a_get_response.return_value = mock_grouping
 
+        # Create mock agent_db
+        mock_agent_db = AsyncMock()
+        mock_agent_db.get_router_system_instruction.return_value = "Default router instruction"
+        
         # Create router state
         router_state = {
             "id": self.router_id,
             "llm": mock_llm,
             "model": settings.router_model,
             "temperature": 0.0,
+            "agent_db": mock_agent_db,
         }
 
         # Test multiple file grouping

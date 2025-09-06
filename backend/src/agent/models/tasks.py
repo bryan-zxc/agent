@@ -4,8 +4,6 @@ from ..utils.tools import (
     get_text_and_table_json_from_image,
     get_chart_readings_from_image,
     get_facts_from_pdf,
-    search_web_general,
-    search_web_pdf,
 )
 from ..security.guardrails import guardrail_prompt
 from .schemas import TableMeta, Variable
@@ -14,7 +12,6 @@ TOOLS = {
     "get_chart_readings_from_image": get_chart_readings_from_image,
     "get_text_and_table_json_from_image": get_text_and_table_json_from_image,
     "get_facts_from_pdf": get_facts_from_pdf,
-    "search_web_general": search_web_general,
 }
 tools_type = Literal[tuple(TOOLS)]
 

@@ -193,6 +193,10 @@ class TestRouterOperationsSimple(unittest.IsolatedAsyncioTestCase):
             mock_response.content = "Hello! How can I help?"
             mock_llm.a_get_response.return_value = mock_response
 
+            # Create mock agent_db
+            mock_agent_db = AsyncMock()
+            mock_agent_db.get_router_system_instruction.return_value = "Default router instruction"
+            
             # Create router state
             router_state = {
                 "id": "test_router",
@@ -200,6 +204,7 @@ class TestRouterOperationsSimple(unittest.IsolatedAsyncioTestCase):
                 "model": settings.router_model,
                 "temperature": 0.0,
                 "message_manager": mock_mm,
+                "agent_db": mock_agent_db,
             }
 
             # Test simple chat

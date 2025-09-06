@@ -54,6 +54,8 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
+# Default test options - excludes expensive LLM API tests and MCP tool tests
+addopts = "-m 'not llm_live and not mcp_tools'"
 filterwarnings = [
     "ignore:builtin type.*has no __module__ attribute:DeprecationWarning",
     "ignore:.*SwigPy.*:DeprecationWarning",
@@ -63,6 +65,7 @@ filterwarnings = [
 # Custom markers for selective test execution
 markers = [
     "llm_live: marks tests that make real LLM API calls (deselect with '-m \"not llm_live\"')",
+    "mcp_tools: marks tests that execute MCP tools with real operations like PDF processing and web search (deselect with '-m \"not mcp_tools\"')",
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
 ]
 # Async test configuration
