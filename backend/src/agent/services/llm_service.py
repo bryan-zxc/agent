@@ -20,6 +20,7 @@ from ..config.llm_config import (
 from .llm.base import BaseLLMProvider, RequestType, delay_exp
 from .llm.providers import OpenAIProvider, AnthropicProvider, GoogleProvider
 from .llm.usage_tracker import UsageTracker
+from .llm.tool_hooks import tool_hooks
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +171,7 @@ class LLM:
         # REMOVED: tools parameter - violates MCP-only principle
         tool_filter: Optional[Callable] = None,  # Existing: MCP tool filter
         websocket: Optional[Any] = None,  # Existing: WebSocket for status updates
+        payload: Optional[Dict[str, Any]] = None,  # NEW: Context payload for tool hooks
     ):
         """Async LLM response with optional tool support.
         
@@ -183,6 +185,7 @@ class LLM:
             enable_web_search: Enable provider-native web search
             tool_filter: Optional filter for MCP tools
             websocket: Optional websocket for sending status updates
+            payload: Optional context data for tool hooks (e.g., router_id)
         """
         # Early exit if no tools
         if not use_tools:
@@ -216,6 +219,7 @@ class LLM:
             tools=final_tools,
             enable_web_search=enable_web_search,  # Pass to providers
             websocket=websocket,
+            payload=payload,  # Pass context for hooks
         )
     
     async def _get_response_with_tools(
@@ -227,6 +231,7 @@ class LLM:
         tools: List[Dict] = None,
         enable_web_search: bool = False,  # NEW
         websocket: Optional[Any] = None,
+        payload: Optional[Dict[str, Any]] = None,  # NEW: Context for hooks
     ):
         """
         Execute tools and return formatted text response.
@@ -242,6 +247,7 @@ class LLM:
             tools: List of available tools (MCP tools only)
             enable_web_search: Enable provider-native web search
             websocket: Optional websocket for sending execution status updates
+            payload: Optional context data for tool hooks (e.g., router_id)
         
         Returns:
             String for single tool execution, or list of content blocks for multiple tools
@@ -297,6 +303,11 @@ class LLM:
                 except Exception as e:
                     logger.warning(f"Failed to send websocket update: {e}")
             
+            # Apply pre-processing hook to potentially modify arguments
+            tool_args = await tool_hooks.apply_pre_hook(
+                tool_name, tool_args, payload, websocket
+            )
+            
             # Execute MCP tool (all tools are MCP tools)
             try:
                 if self.mcp_manager:
@@ -306,6 +317,11 @@ class LLM:
                     )
                 else:
                     result = {"error": "MCP manager not available"}
+                
+                # Apply post-processing hook to potentially modify result
+                result = await tool_hooks.apply_post_hook(
+                    tool_name, result, payload, websocket
+                )
                 
                 # Send completion status
                 if websocket:
