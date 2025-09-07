@@ -47,7 +47,7 @@ from .services.document_service import (
     extract_document_content,
     create_document_meta_summary,
 )
-from .services.image_service import is_image, process_image_file
+from .utils.image_utils import is_image, get_img_breakdown, encode_image
 
 __version__ = "0.1.0"
 __author__ = "Agent Library Team"
@@ -77,16 +77,16 @@ __all__ = [
     "AgentSettings",
     
     # Utilities
+    "is_image",
     "encode_image",
     "decode_image",
+    "get_img_breakdown",
     "get_text_and_table_json_from_image",
     "get_chart_readings_from_image",
     
     # Services
     "extract_document_content",
-    "create_document_meta_summary", 
-    "is_image",
-    "process_image_file",
+    "create_document_meta_summary",
     
     # Metadata
     "__version__",

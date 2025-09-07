@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from fastmcp import FastMCP
 from ..services.llm_service import LLM
-from .image_utils import encode_image, decode_image
+from .image_utils import encode_image, decode_image, get_img_breakdown, is_image
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +57,7 @@ async def google_search(query: str) -> str:
         logger.error(f"Google search error: {e}")
         return f"Error performing search: {str(e)}"
 
+
 # Set the docstring for the function (for documentation/IDE support)
 google_search.__doc__ = GOOGLE_SEARCH_DOC
 
@@ -77,21 +78,22 @@ def is_serialisable(obj) -> tuple[bool, bool]:
 
 def get_text_and_table_json_from_image(image: Union[Image.Image, str]) -> str:
     """
-    Extract text and table content from an image as JSON using LLM.
+    Extract text, form, and table content from an image as JSON using LLM.
 
-    This function takes an image containing text and/or tables and asks the LLM
+    This function takes an image containing text, forms, and/or tables and asks the LLM
     to directly extract the content and structure it as JSON.
 
     Parameters:
     ----------
     image : Union[Image.Image, str]
-        The input image containing text/tables, either as a PIL Image object
+        The input image containing text/forms/tables, either as a PIL Image object
         or a base64 encoded string representation of the image.
 
     Returns:
     -------
     str
-        A JSON string representing the structured data extracted from the image.
+        A JSON string representing the structured data extracted from the image,
+        including form fields with their labels and values.
     """
     # Convert input to base64 string for LLM processing
     if isinstance(image, str):
@@ -114,7 +116,7 @@ def get_text_and_table_json_from_image(image: Union[Image.Image, str]) -> str:
                 "content": [
                     {
                         "type": "text",
-                        "text": "Extract all text and table content from this image and return it as structured JSON. ",
+                        "text": "Extract all text, form and table content from this image and return it as structured JSON. Ignore any charts, graphs, or diagrams - focus only on text blocks, form data, and tabular data.",
                     },
                     {
                         "type": "image_url",
@@ -460,19 +462,135 @@ async def get_facts_from_pdf(question: str, pdf_source: Union[str, Path]) -> str
     # Return only question_answer and unanswered_questions fields
     return response.model_dump_json(exclude=["thought", "answer_template"], indent=2)
 
+
 # Set the docstring for the function (for documentation/IDE support)
 get_facts_from_pdf.__doc__ = GET_FACTS_FROM_PDF_DOC
+
+
+# Define docstring once for read_image
+READ_IMAGE_DOC = """Read and analyse an image file to extract all structured information.
+
+Automatically detects all content types in the image (charts, tables, text, diagrams)
+and applies appropriate extraction methods for each type found.
+
+Parameters:
+----------
+image_path : str
+    Path to the image file to analyse
+
+Returns:
+-------
+str
+    Combined extracted information from all content types in the image:
+    - Charts: Question-answer pairs of all data points
+    - Tables/Forms/Text: JSON representation of text, form fields, and tabular content
+    - Diagrams: Mermaid code representation
+    - Other: General description of non-standard content
+    
+    Each section is separated by dividers. Returns an error message if 
+    the image cannot be read or analysed.
+"""
+
+
+@mcp.tool(description=READ_IMAGE_DOC)
+async def read_image(image_path: str) -> str:
+    # Initialise LLM at the top
+    llm = LLM(caller="tools")
+    
+    # 1. Validate image exists and is readable
+    is_valid, error = is_image(image_path)
+    if not is_valid:
+        return f"Error reading image: {error}"
+    
+    # 2. Encode image for processing
+    base64_image = encode_image(image_path)
+    
+    # 3. Get image breakdown to determine types
+    image_breakdown = get_img_breakdown(base64_image)
+    
+    if image_breakdown.unreadable:
+        return f"Image cannot be analysed: {image_breakdown.image_quality}"
+    
+    # 4. Get distinct element types present in the image
+    element_types = list(set([element.element_type for element in image_breakdown.elements]))
+    
+    if not element_types:
+        return "No recognisable content found in image"
+    
+    # 5. Collect results from each type of extraction
+    results = []
+    
+    # Process charts if present
+    if "chart" in element_types:
+        chart_data = get_chart_readings_from_image(base64_image)
+        results.append(f"Chart Data:\n{chart_data}")
+    
+    # Process tables, forms, and text together if any are present
+    if "table" in element_types or "form" in element_types or "text" in element_types:
+        # Note: The prompt in get_text_and_table_json_from_image was already updated
+        # to include forms and exclude charts and diagrams
+        text_form_table_response = get_text_and_table_json_from_image(base64_image)
+        results.append(f"Text, Form, and Table Data:\n{text_form_table_response}")
+    
+    # Process diagrams if present
+    if "diagram" in element_types:
+        diagram_response = llm.get_response(
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Convert all diagrams in this image to mermaid code. Return only the mermaid code."
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{base64_image}"}
+                    }
+                ]
+            }],
+            model="gemini-2.5-pro",
+            temperature=0
+        )
+        results.append(f"Diagram (Mermaid):\n{diagram_response}")
+    
+    # Process other content types if present
+    if "other" in element_types:
+        other_response = llm.get_response(
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Describe any non-text, non-table, non-chart, non-diagram content in this image (such as photographs, illustrations, etc.)."
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{base64_image}"}
+                    }
+                ]
+            }],
+            model="gemini-2.5-pro",
+            temperature=0
+        )
+        results.append(f"Other Content:\n{other_response}")
+    
+    # 6. Combine all results
+    return "\n\n---\n\n".join(results)
+
+
+# Set the docstring for the function (for documentation/IDE support)
+read_image.__doc__ = READ_IMAGE_DOC
 
 
 # Run as MCP server when called directly
 if __name__ == "__main__":
     import logging
-    
+
     # Set up logging using repository standards
     logging.basicConfig(
         level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
-    
+
     logger.info("Starting MCP tools server...")
     mcp.run()

@@ -45,7 +45,7 @@ Database models and service for agent message persistence and state management.
 - Represents a chat router with a user
 - **Fields:**
   - `router_id`: Unique router identifier (UUID hex string)
-  - `status`: Router status (active, processing, completed, failed, archived)
+  - `status`: Router status (active, plamarinating, plamarinating_awaiting_user, awaiting_approval, executing, processing, completed, failed, archived)
   - `model`: LLM model used
   - `temperature`: LLM temperature setting
   - `title`: Router title for UI display
@@ -97,7 +97,7 @@ Database models and service for agent message persistence and state management.
 - State for router operations
 - **Fields:**
   - `router_id`: UUID hex string (primary key)
-  - `status`: Router status (active, processing, completed, failed, archived)
+  - `status`: Router status (active, plamarinating, plamarinating_awaiting_user, awaiting_approval, executing, processing, completed, failed, archived)
   - `model`: LLM model used
   - `temperature`: LLM temperature setting
   - `agent_metadata`: JSON metadata for future extensibility

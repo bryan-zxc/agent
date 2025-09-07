@@ -1,8 +1,31 @@
 import io
 import base64
 from pathlib import Path
-from typing import Union
+from typing import Union, Tuple
 from PIL import Image
+
+
+def is_image(file_path: str) -> Tuple[bool, str]:
+    """
+    Validate if a file is a valid image.
+    
+    Parameters:
+    ----------
+    file_path : str
+        Path to the file to validate
+        
+    Returns:
+    -------
+    Tuple[bool, str]
+        (is_valid, error_message) - True and None if valid, False and error string if invalid
+    """
+    try:
+        with open(file_path, "rb") as file:
+            img = Image.open(file)
+            img.verify()  # Verify that it is an image
+        return True, None
+    except Exception as e:
+        return False, str(e)
 
 
 def encode_image(image: Union[str, Path, Image.Image]):

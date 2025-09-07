@@ -4,10 +4,16 @@ Utility functions and tools for image processing, code execution, and data manip
 
 ## Modules
 
-### `tools.py`
-Comprehensive toolkit for image processing, chart reading, and document analysis.
+### `image_utils.py`
+Core image processing utilities for validation, encoding, and analysis.
 
-#### Core Utility Functions
+#### Image Validation and Encoding
+
+**`is_image(file_path)`**
+- Validate if a file is a valid image
+- **Parameters:** File path string
+- **Returns:** Tuple of (is_valid, error_message) - True and None if valid
+- **Usage:** Pre-validation before image processing
 
 **`encode_image(image)`**
 - Convert images to base64 encoded strings
@@ -21,9 +27,23 @@ Comprehensive toolkit for image processing, chart reading, and document analysis
 - **Returns:** PIL Image object
 - **Usage:** Processing images received from APIs
 
+**`get_img_breakdown(base64_image)`**
+- Analyse image content and categorise elements using LLM
+- **Parameters:** Base64 encoded image string
+- **Returns:** ImageBreakdown object with element analysis
+- **Features:**
+  - Detects charts, tables, diagrams, text, and other content
+  - Identifies if image is unreadable
+  - Provides quality assessment for unreadable images
+
+### `tools.py`
+Advanced toolkit for structured data extraction from images and documents.
+
+#### Core Utility Functions
+
 **`is_serialisable(obj)`**
-- Check if an object can be JSON serialized
-- **Returns:** Tuple of (serializable, stringable) booleans
+- Check if an object can be JSON serialised
+- **Returns:** Tuple of (serialisable, stringable) booleans
 - **Usage:** Validating data before storage or transmission
 
 #### Image Processing Functions
@@ -95,10 +115,6 @@ Comprehensive toolkit for image processing, chart reading, and document analysis
 **`get_images_from_doc(doc)`**
 - Extract all images from document pages
 - **Returns:** List of (page_number, image_data) tuples
-
-**`get_img_breakdown(base64_image)`**
-- Analyze image content and categorize elements
-- **Returns:** ImageBreakdown object with element analysis
 
 **`search_doc(question, criteria, doc)`**
 - Intelligent document search with image analysis

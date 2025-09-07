@@ -17,11 +17,12 @@ class ImageElement(BaseModel):
     element_location: str = Field(
         description="The location of the image element within the image, e.g. 'top right corner'"
     )
-    element_type: Literal["chart", "table", "diagram", "text", "other"] = Field(
+    element_type: Literal["chart", "table", "form", "diagram", "text", "other"] = Field(
         description="If the image element is any form of chart or graph, use 'chart'. "
         "If it is tabular information, use 'table'. "
+        "If it is a form with fields to fill in (e.g., application forms, questionnaires), use 'form'. "
         "If it is a flow chart, network relationship, or similar diagram containing linked shapes (e.g. boxes) with text annotations, use 'diagram'. "
-        "If it contains a body of text, use 'text'. Note, light text as part of charts/tables/diagrams/illustrations, including annotations, is not considered a body of text."
+        "If it contains a body of text, use 'text'. Note, light text as part of charts/tables/forms/diagrams/illustrations, including annotations, is not considered a body of text."
         "Other types of images, such as photographs, illustrations, etc should be classified as 'other'."
     )
     required: bool = Field(

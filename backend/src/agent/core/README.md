@@ -92,8 +92,20 @@ Function-based router operations for real-time chat and file processing orchestr
 
 **Message Flow:**
 1. **Simple Chat**: User message → LLM → Response (stored in database)
-2. **Complex Analysis**: User message + files → PlannerAgent → WorkerAgents → Response
-3. **File Processing**: Automatic categorization and preprocessing for analysis
+2. **Plamarination Phase**: User message + files → Research/Context Building → Plan Approval → Execution
+3. **Complex Analysis**: User message + files → PlannerAgent → WorkerAgents → Response
+4. **File Processing**: Automatic categorization and preprocessing for analysis
+
+**Router Status States:**
+- `active`: Normal conversation mode
+- `plamarinating`: Actively researching and gathering context
+- `plamarinating_awaiting_user`: Paused plamarination, waiting for user clarification
+- `awaiting_approval`: Plan ready, waiting for user approval or revision
+- `executing`: Running planner and worker agents
+- `processing`: Processing complex request (legacy state)
+- `completed`: Conversation ended
+- `failed`: Error occurred
+- `archived`: Conversation archived
 
 #### Constants
 

@@ -92,6 +92,7 @@ Status option IDs: "e18bf179" (Ready), "47fc9ee4" (In progress), "aba860b9" (In 
 - **Unified LLM**: Single interface for OpenAI/Anthropic/Google
 - **Safe Execution**: Sandboxed Python with security guardrails
 - **Type Safety**: Pydantic models throughout
+- **Plamarination Phase**: Research/context-gathering phase before execution (when files are attached)
 
 ## Testing Environment
 

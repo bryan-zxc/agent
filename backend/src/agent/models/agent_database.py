@@ -102,7 +102,9 @@ class Router(Base):
     router_id = Column(
         String(32), primary_key=True
     )  # UUID hex string (same as router_id)
-    status = Column(String(50), nullable=False)  # active, completed, failed, archived
+    status = Column(
+        String(50), nullable=False
+    )  # active, plamarinating, plamarinating_awaiting_user, awaiting_approval, executing, processing, completed, failed, archived
     model = Column(String(100))  # LLM model used
     temperature = Column(Float)  # LLM temperature setting
     mode = Column(String(10), nullable=False, default="auto")  # auto, rapid, agent

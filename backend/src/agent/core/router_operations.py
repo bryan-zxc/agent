@@ -13,11 +13,10 @@ from ..models.responses import RequireAgent
 from ..models.schemas import FileGrouping, RouterMode
 from ..models.agent_database import AgentDatabase, AgentType, Router
 from sqlalchemy import select, update
-from ..services.image_service import process_image_file, is_image
+from ..utils.image_utils import is_image, get_img_breakdown, encode_image
 from ..services.llm_service import LLM
 from ..tasks.task_utils import update_planner_next_task_and_queue
 from ..tasks.message_manager import MessageManager
-from ..utils.tools import encode_image, decode_image
 
 logger = logging.getLogger(__name__)
 
@@ -133,8 +132,6 @@ def encode_image_content(
     Returns:
         Content with encoded image data
     """
-    from ..utils.tools import encode_image
-
     image_data = {
         "type": "image_url",
         "image_url": {"url": f"data:image/png;base64,{encode_image(image)}"},
@@ -240,6 +237,8 @@ INSTRUCTION_LIBRARY = {
         "chart": "You must use the provided tool get_chart_readings_from_image to extract the chart readings as text first before performing further actions. "
         "This must be a standalone task.",
         "table": "You must use the provided tool get_text_and_table_json_from_image, read the table contents as a JSON string first before performing further actions. "
+        "This must be a standalone task.",
+        "form": "You must use the provided tool get_text_and_table_json_from_image to extract form fields and their values as a JSON string first before performing further actions. "
         "This must be a standalone task.",
         "diagram": "You must convert the diagram into mermaid code first before performing further actions.",
         "text": "You must use the provided tool get_text_and_table_json_from_image, read the text content as a JSON string first before performing further actions. "
@@ -467,6 +466,31 @@ async def assess_agent_requirements(router_state: Dict[str, Any]) -> RequireAgen
     )
 
     return response
+
+
+async def planning_mode_response(router_state: Dict[str, Any], websocket: WebSocket):
+    message_manager = router_state["message_manager"]
+    messages = await message_manager.get_messages()
+    llm = router_state["llm"]
+    response = await llm.a_get_response(
+        messages=messages,
+        model=settings.planner_model,
+        temperature=router_state["temperature"],
+        system_instruction="You are operating in planning mode with the user to agree on an execution plan as well as answer template to subsequently ask the planner agent to execute. "
+        "You should be doing the majority of the actions, but when necessary you can ask the user for clarifications or more information. "
+        "You must be responsive to the user's instructions and they may fall behind your progress, if you notice user responses in history that you haven't reacted to, you must immediately acknowledge it. "
+        "You are allowed to finish what you are currently doing first before actioning the user's instruction (as long as it isn't directly impacting what you are doing), but you must act as quickly as possible, and you must eagerly acknowledge as early as possible and explain you will come back to it after finishing task at hand. "
+        "Your primary job is context building, this means using the filesystem and agent tool MCP server to understand the files the user has uploaded. "
+        "The files that the user attached the current conversation are crucial to your understanding. "
+        "You can extend yourself to other files available using the filesystem MCP only if required. "
+        "For text based files like .txt, .md, .json, etc, use the read tool in the filesystem MCP. "
+        "For large text files especially csv files only read 10 rows first before deciding if more is needed. "
+        "For image files, use the read_image tool in the agent tool MCP. "
+        "For PDF files, use the get_facts_from_pdf tool from the agent tool MCP. "
+        "If required you can search the web using the google_search tool in the agent tool MCP. "
+        "When you have enough information to build/update the execution plan and the accompanying answer template, you must use the set_plan_and_answer tool in the agent tool MCP to commit it. "
+        "The output of the tool will present the plan and answer template to the user for approval and mark the end of planning mode.",
+    )
 
 
 # ========== WEBSOCKET COMMUNICATION FUNCTIONS ==========
@@ -844,20 +868,22 @@ async def process_files(
         # Check if it's an image file
         if is_image(file_path)[0]:
             # Process image
-            breakdown, error = process_image_file(file_path)
-            if not error:
+            image_breakdown = get_img_breakdown(encode_image(file_path))
+            if not image_breakdown.unreadable:
                 processed_files.append(
                     File(
                         filepath=file_path,
                         file_type="image",
-                        image_context=breakdown.elements,
+                        image_context=image_breakdown.elements,
                     )
                 )
                 image_types.extend(
-                    [element.element_type for element in breakdown.elements]
+                    [element.element_type for element in image_breakdown.elements]
                 )
             else:
-                errors.append(f"Error processing image '{file_obj.name}': {error}")
+                errors.append(
+                    f"Error processing image '{file_obj.name}': The image cannot be read. {image_breakdown.image_quality}"
+                )
             continue
 
         # Unsupported file type

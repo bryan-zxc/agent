@@ -158,23 +158,6 @@ PDF document processing and content extraction.
 4. **Encoding**: Convert to base64 for storage and transmission
 5. **Metadata**: Capture dimensions and naming information
 
-### `image_service.py`
-Image file validation and processing.
-
-#### Functions
-
-**`is_image(file_path)`**
-- Validate if a file is a readable image
-- **Returns:** Tuple of (is_valid, error_message)
-- **Uses:** PIL Image verification
-
-**`process_image_file(filepath)`**
-- Complete image file processing pipeline
-- **Returns:** Tuple of (image_breakdown, error_message)
-- **Features:**
-  - Image validation and error handling
-  - Content analysis using LLM services
-  - Element categorization (charts, tables, diagrams, text)
 
 ## MCP (Model Context Protocol) Integration
 
@@ -273,12 +256,14 @@ for page in content.pages:
 
 ### Image Processing
 ```python
-from agent.services.image_service import process_image_file
+from agent.utils.image_utils import is_image, get_img_breakdown, encode_image
 
-breakdown, error = process_image_file("chart.png")
-if breakdown:
-    for element in breakdown.elements:
-        print(f"Found {element.element_type}: {element.element_desc}")
+# Validate and process image
+if is_image("chart.png")[0]:
+    breakdown = get_img_breakdown(encode_image("chart.png"))
+    if not breakdown.unreadable:
+        for element in breakdown.elements:
+            print(f"Found {element.element_type}: {element.element_desc}")
 ```
 
 ## Integration Points
