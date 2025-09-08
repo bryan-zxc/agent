@@ -287,10 +287,13 @@ class LLM:
         
         # Execute each tool and collect results
         tool_messages = []
+        tool_names = []  # Track tool names for structured response
+        
         for tool_call in response["tool_calls"]:
             # All providers now return normalised format
             tool_name = tool_call["name"]
             tool_args = tool_call["arguments"]
+            tool_names.append(tool_name)  # Collect tool name
             
             # Send status update via websocket
             if websocket:
@@ -356,12 +359,18 @@ class LLM:
                 f"Tool {tool_name} was called and returned:\n{result_text}"
             )
         
-        # Return formatted response
+        # Format content based on number of tools
         if len(tool_messages) == 1:
-            return tool_messages[0]  # Single tool - return string
+            content = tool_messages[0]  # Single tool - simple string
         else:
             # Multiple tools - return list format compatible with content parameter
-            return [{"type": "text", "text": msg} for msg in tool_messages]
+            content = [{"type": "text", "text": msg} for msg in tool_messages]
+        
+        # Return structured response with tool call information
+        return {
+            "content": content,
+            "tool_calls": tool_names  # List of tool names that were called
+        }
     
     def get_response_pdf(
         self,

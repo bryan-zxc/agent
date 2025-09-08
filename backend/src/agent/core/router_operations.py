@@ -7,6 +7,7 @@ import asyncio
 import logging
 import uuid
 import duckdb
+from pydantic import BaseModel, Field
 from ..config.settings import settings
 from ..models import File, DocumentContext
 from ..models.responses import RequireAgent
@@ -19,6 +20,66 @@ from ..tasks.task_utils import update_planner_next_task_and_queue
 from ..tasks.message_manager import MessageManager
 
 logger = logging.getLogger(__name__)
+
+# ========== PLAMARINATION CONFIGURATION ==========
+
+def plamarination_tool_filter(server_name, tool):
+    """Filter tools for plamarination phase."""
+    if server_name == "filesystem":
+        # Block only media reading - use our read_image instead
+        return tool.name != "read_media_file"
+    
+    if server_name == "agent_tools":
+        # Only research/analysis tools
+        allowed = [
+            "google_search",
+            "get_facts_from_pdf",
+            "read_image",
+            "set_plan_and_answer",
+        ]
+        return tool.name in allowed
+    
+    # Block other servers during plamarination
+    return False
+
+
+PLAMARINATION_INSTRUCTION = """You are in Plamarination Phase, thoughtfully gathering context and marinating on the user's request to build a comprehensive execution plan.
+
+Your role is to:
+1. Thoroughly understand all uploaded files using the filesystem and agent_tools MCP servers
+2. Build comprehensive context about the user's request  
+3. Let ideas marinate - take time to understand connections between files
+4. Generate a structured plan and answer template when ready
+
+File handling approach:
+- Text files (.txt, .md, .json, .csv, etc): Use filesystem tools (read_file, read_text_file)
+- CSV files: Read 10 rows first to understand structure, then decide if more needed
+- Images: Use read_image tool from agent_tools (provides intelligent analysis)
+- PDFs: Use get_facts_from_pdf tool from agent_tools
+
+Research guidelines:
+- Start with files explicitly mentioned or attached to the conversation
+- Use filesystem tools to explore project structure as needed
+- Use google_search tool only when files don't contain needed information
+- Be responsive to user messages that appear during your research
+
+When ready to finalise:
+- Use set_plan_and_answer tool to commit your plan and answer template
+- This will present the plan to the user for approval
+- Include clear structure and reasoning in your plan
+
+Important:
+- Acknowledge user messages immediately if they appear during your work
+- You can finish your current task but must respond to user quickly and let them know when you will address their request
+- You should be doing most of the work yourself, but you can ask the user for clarification. When you need user response, you must explicitly ask the question at the end of your message."""
+
+
+class PlamarinationContinuation(BaseModel):
+    """Determine if plamarination should continue researching."""
+    continue_research: bool = Field(
+        description="True if mid-research/analysis/exploring files. False if assistant asked a question at the end or needs user clarification"
+    )
+
 
 # ========== STANDALONE FUNCTIONS (REFACTORED FROM RouterAgent) ==========
 
@@ -469,31 +530,79 @@ async def assess_agent_requirements(router_state: Dict[str, Any]) -> RequireAgen
 
 
 async def planning_mode_response(router_state: Dict[str, Any], websocket: WebSocket):
+    """
+    Execute one iteration of plamarination (research/context gathering).
+    Non-blocking - returns after single iteration, frontend orchestrates continuation.
+    """
+    router_id = router_state["id"]
     message_manager = router_state["message_manager"]
-    messages = await message_manager.get_messages()
+    agent_db = router_state["agent_db"]
     llm = router_state["llm"]
-    response = await llm.a_get_response(
-        messages=messages,
-        model=settings.planner_model,
-        temperature=router_state["temperature"],
-        use_tools=True,  # Enable MCP tools
-        websocket=websocket,  # For status updates
-        payload={"router_id": router_state["id"]},  # Context for hooks
-        system_instruction="You are operating in planning mode with the user to agree on an execution plan as well as answer template to subsequently ask the planner agent to execute. "
-        "You should be doing the majority of the actions, but when necessary you can ask the user for clarifications or more information. "
-        "You must be responsive to the user's instructions and they may fall behind your progress, if you notice user responses in history that you haven't reacted to, you must immediately acknowledge it. "
-        "You are allowed to finish what you are currently doing first before actioning the user's instruction (as long as it isn't directly impacting what you are doing), but you must act as quickly as possible, and you must eagerly acknowledge as early as possible and explain you will come back to it after finishing task at hand. "
-        "Your primary job is context building, this means using the filesystem and agent tool MCP server to understand the files the user has uploaded. "
-        "The files that the user attached the current conversation are crucial to your understanding. "
-        "You can extend yourself to other files available using the filesystem MCP only if required. "
-        "For text based files like .txt, .md, .json, etc, use the read tool in the filesystem MCP. "
-        "For large text files especially csv files only read 10 rows first before deciding if more is needed. "
-        "For image files, use the read_image tool in the agent tool MCP. "
-        "For PDF files, use the get_facts_from_pdf tool from the agent tool MCP. "
-        "If required you can search the web using the google_search tool in the agent tool MCP. "
-        "When you have enough information to build/update the execution plan and the accompanying answer template, you must use the set_plan_and_answer tool in the agent tool MCP to commit it. "
-        "The output of the tool will present the plan and answer template to the user for approval and mark the end of planning mode.",
-    )
+    
+    messages = await message_manager.get_messages()
+    
+    try:
+        # Get response (dict if tools called, string if not)
+        response = await llm.a_get_response(
+            messages=messages,
+            model=settings.planner_model,
+            temperature=0,  # Deterministic for plamarination
+            use_tools=True,
+            tool_filter=plamarination_tool_filter,
+            system_instruction=PLAMARINATION_INSTRUCTION,
+            websocket=websocket,
+            payload={"router_id": router_id},  # For hook context
+        )
+        
+        # Extract content and store message (unified handling)
+        content = response["content"] if isinstance(response, dict) else response
+        messages = await message_manager.add_message(role="assistant", content=content)
+        
+        # Determine continuation based on response type
+        if isinstance(response, dict):
+            # Tools were called
+            tool_calls = response["tool_calls"]
+            
+            # Check for set_plan_and_answer
+            if "agent_tools__set_plan_and_answer" in tool_calls:
+                # Hook handles approval flow and status update
+                return
+            
+            # Other tools - must continue to process results
+            continue_plamarination = True
+            status = "plamarinating"
+            
+        else:
+            # No tools - need LLM decision
+            continuation = llm.get_response(
+                messages=messages,  # Use returned messages with latest context
+                model=settings.router_model,  # GPT-5-nano for fast decision
+                temperature=0,
+                response_format=PlamarinationContinuation,
+            )
+            
+            continue_plamarination = continuation.continue_research
+            status = "plamarinating" if continue_plamarination else "plamarinating_awaiting_user"
+        
+        # Update status and send response
+        await agent_db.update_router(router_id=router_id, status=status)
+        
+        await websocket.send_json({
+            "type": "assistant_message",
+            "content": content,
+            "continue_plamarination": continue_plamarination,
+            "router_id": router_id,
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in plamarination: {e}")
+        await send_error(
+            error=f"Error during plamarination: {str(e)}",
+            router_id=router_id,
+            websocket=websocket,
+        )
+        # Reset to active status on error
+        await agent_db.update_router(router_id=router_id, status="active")
 
 
 # ========== WEBSOCKET COMMUNICATION FUNCTIONS ==========
