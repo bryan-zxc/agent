@@ -40,14 +40,8 @@ class PlannerMessage(Base):
     role = Column(
         String(20), nullable=False
     )  # 'user', 'assistant', 'system', 'developer'
-    content = Column(
-        JSON, nullable=False
-    )  # Store as JSON to handle both string and list content
+    # content column REMOVED - now stored in PlannerMessageContent
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-
-    def to_message_dict(self) -> Dict[str, Any]:
-        """Convert database record back to message format"""
-        return {"role": self.role, "content": self.content}
 
 
 class WorkerMessage(Base):
@@ -60,14 +54,8 @@ class WorkerMessage(Base):
     role = Column(
         String(20), nullable=False
     )  # 'user', 'assistant', 'system', 'developer'
-    content = Column(
-        JSON, nullable=False
-    )  # Store as JSON to handle both string and list content
+    # content column REMOVED - now stored in WorkerMessageContent
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-
-    def to_message_dict(self) -> Dict[str, Any]:
-        """Convert database record back to message format"""
-        return {"role": self.role, "content": self.content}
 
 
 class RouterMessage(Base):
@@ -78,19 +66,50 @@ class RouterMessage(Base):
         String(32), ForeignKey("routers.router_id"), nullable=False, index=True
     )
     role = Column(String(20), nullable=False)  # 'user', 'assistant'
-    content = Column(Text, nullable=False)
+    # content column REMOVED - now stored in RouterMessageContent
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     # Add composite index for message history queries
     __table_args__ = (Index("idx_router_created", "router_id", "created_at"),)
 
-    def to_message_dict(self) -> Dict[str, Any]:
-        """Convert database record back to message format"""
-        return {
-            "role": self.role,
-            "content": self.content,
-            "message_id": self.id,  # Include database message ID for frontend
-        }
+
+# Satellite Tables for Message Content
+
+
+class PlannerMessageContent(Base):
+    __tablename__ = "planner_message_content"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    message_id = Column(Integer, ForeignKey("planner_messages.id"), nullable=False)
+    content = Column(JSON, nullable=False)  # Single dictionary expected
+    display_text = Column(Text, nullable=False)  # For frontend rendering
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (Index("idx_planner_content_lookup", "message_id"),)
+
+
+class WorkerMessageContent(Base):
+    __tablename__ = "worker_message_content"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    message_id = Column(Integer, ForeignKey("worker_messages.id"), nullable=False)
+    content = Column(JSON, nullable=False)  # Single dictionary expected
+    display_text = Column(Text, nullable=False)  # For frontend rendering
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (Index("idx_worker_content_lookup", "message_id"),)
+
+
+class RouterMessageContent(Base):
+    __tablename__ = "router_message_content"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    message_id = Column(Integer, ForeignKey("router_messages.id"), nullable=False)
+    content = Column(JSON, nullable=False)  # Single dictionary expected
+    display_text = Column(Text, nullable=False)  # For frontend rendering
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (Index("idx_router_content_lookup", "message_id"),)
 
 
 # Agent State Tables
@@ -526,23 +545,61 @@ class AgentDatabase:
     async def add_message(
         self, agent_type: AgentType, agent_id: str, role: str, content: Any
     ) -> Optional[int]:
-        """Add a message to the appropriate agent messages table"""
+        """Add a message and its content to appropriate satellite table
+        
+        Args:
+            agent_type: Type of agent ('planner', 'worker', 'router')
+            agent_id: Agent identifier (router_id for router type)
+            role: Message role ('user', 'assistant', 'system', 'developer')
+            content: Either a string or list of dictionaries
+        
+        Raises:
+            ValueError: If content is not string or list of dictionaries
+        """
         async with self.AsyncSessionLocal() as session:
+            # Create message record (no content column anymore)
             if agent_type == "planner":
-                message = PlannerMessage(agent_id=agent_id, role=role, content=content)
+                message = PlannerMessage(agent_id=agent_id, role=role)
+                ContentClass = PlannerMessageContent
             elif agent_type == "worker":
-                message = WorkerMessage(agent_id=agent_id, role=role, content=content)
+                message = WorkerMessage(agent_id=agent_id, role=role)
+                ContentClass = WorkerMessageContent
             else:  # router
                 # For router, agent_id is the router_id
-                # Router should already exist (created via activate_conversation)
-
-                message = RouterMessage(router_id=agent_id, role=role, content=content)
+                message = RouterMessage(router_id=agent_id, role=role)
+                ContentClass = RouterMessageContent
 
             session.add(message)
-            await session.flush()  # Flush to get the ID before commit
-            message_id = message.id
+            await session.flush()  # Flush to get the message ID
+
+            # Process and store content in satellite table
+            if isinstance(content, str):
+                # Single text content
+                content_entry = ContentClass(
+                    message_id=message.id,
+                    content={"type": "text", "text": content},
+                    display_text=content
+                )
+                session.add(content_entry)
+            
+            elif isinstance(content, list):
+                # Multiple content parts - must be list of dictionaries
+                for part in content:
+                    if not isinstance(part, dict):
+                        raise ValueError(f"List content must contain dictionaries, got {type(part)}")
+                    
+                    content_entry = ContentClass(
+                        message_id=message.id,
+                        content=part,
+                        display_text=part.get("text", "")
+                    )
+                    session.add(content_entry)
+            
+            else:
+                raise ValueError(f"Content must be string or list of dictionaries, got {type(content)}")
+
             await session.commit()
-            return message_id
+            return message.id
 
 
     async def update_router(self, router_id: str, **kwargs) -> bool:
@@ -564,49 +621,121 @@ class AgentDatabase:
     async def get_messages(
         self, agent_type: AgentType, agent_id: str
     ) -> List[Dict[str, Any]]:
-        """Retrieve all messages for an agent"""
+        """Retrieve messages with content from appropriate satellite table"""
         async with self.AsyncSessionLocal() as session:
+            # Select appropriate tables based on agent type
             if agent_type == "planner":
-                result = await session.execute(
-                    select(PlannerMessage)
-                    .where(PlannerMessage.agent_id == agent_id)
-                    .order_by(PlannerMessage.created_at)
-                )
-                messages = result.scalars().all()
+                MessageClass = PlannerMessage
+                ContentClass = PlannerMessageContent
+                query = select(MessageClass).where(MessageClass.agent_id == agent_id)
             elif agent_type == "worker":
-                result = await session.execute(
-                    select(WorkerMessage)
-                    .where(WorkerMessage.agent_id == agent_id)
-                    .order_by(WorkerMessage.created_at)
-                )
-                messages = result.scalars().all()
+                MessageClass = WorkerMessage
+                ContentClass = WorkerMessageContent
+                query = select(MessageClass).where(MessageClass.agent_id == agent_id)
             else:  # router
-                result = await session.execute(
-                    select(RouterMessage)
-                    .where(RouterMessage.router_id == agent_id)
-                    .order_by(RouterMessage.created_at)
+                MessageClass = RouterMessage
+                ContentClass = RouterMessageContent
+                query = select(MessageClass).where(MessageClass.router_id == agent_id)
+            
+            # Get messages ordered by creation time
+            result = await session.execute(query.order_by(MessageClass.created_at))
+            messages = result.scalars().all()
+            
+            # Build message list with content from satellite table
+            message_list = []
+            for msg in messages:
+                # Get content parts from satellite table
+                content_result = await session.execute(
+                    select(ContentClass)
+                    .where(ContentClass.message_id == msg.id)
+                    .order_by(ContentClass.id)  # Order by ID to maintain insertion order
                 )
-                messages = result.scalars().all()
-
-            return [msg.to_message_dict() for msg in messages]
+                content_parts = content_result.scalars().all()
+                
+                # Reconstruct content
+                if len(content_parts) == 0:
+                    raise ValueError(f"Message {msg.id} has no content in satellite table")
+                
+                # Always return as list of content dictionaries
+                content = [part.content for part in content_parts]
+                
+                message_list.append({
+                    "role": msg.role,
+                    "content": content
+                })
+            
+            return message_list
 
     async def clear_messages(self, agent_type: AgentType, agent_id: str) -> None:
-        """Clear all messages for an agent"""
+        """Clear all messages and their content for an agent"""
         async with self.AsyncSessionLocal() as session:
             if agent_type == "planner":
+                # Delete content first (foreign key constraint)
+                subquery = select(PlannerMessage.id).where(PlannerMessage.agent_id == agent_id)
+                await session.execute(
+                    delete(PlannerMessageContent).where(PlannerMessageContent.message_id.in_(subquery))
+                )
+                # Then delete messages
                 await session.execute(
                     delete(PlannerMessage).where(PlannerMessage.agent_id == agent_id)
                 )
             elif agent_type == "worker":
+                # Delete content first
+                subquery = select(WorkerMessage.id).where(WorkerMessage.agent_id == agent_id)
+                await session.execute(
+                    delete(WorkerMessageContent).where(WorkerMessageContent.message_id.in_(subquery))
+                )
+                # Then delete messages
                 await session.execute(
                     delete(WorkerMessage).where(WorkerMessage.agent_id == agent_id)
                 )
             else:  # router
+                # Delete content first
+                subquery = select(RouterMessage.id).where(RouterMessage.router_id == agent_id)
+                await session.execute(
+                    delete(RouterMessageContent).where(RouterMessageContent.message_id.in_(subquery))
+                )
+                # Then delete messages
                 await session.execute(
                     delete(RouterMessage).where(RouterMessage.router_id == agent_id)
                 )
 
             await session.commit()
+
+    async def get_message_display_text(self, agent_type: AgentType, message_id: int) -> str:
+        """Get concatenated display text for a message
+        
+        Args:
+            agent_type: Type of agent ('planner', 'worker', 'router')
+            message_id: ID of the message
+            
+        Returns:
+            Concatenated display text, multiple parts joined with markdown separator
+        """
+        async with self.AsyncSessionLocal() as session:
+            # Select appropriate content table
+            if agent_type == "planner":
+                ContentClass = PlannerMessageContent
+            elif agent_type == "worker":
+                ContentClass = WorkerMessageContent
+            else:  # router
+                ContentClass = RouterMessageContent
+            
+            # Get all content parts ordered by ID
+            result = await session.execute(
+                select(ContentClass.display_text)
+                .where(ContentClass.message_id == message_id)
+                .order_by(ContentClass.id)
+            )
+            display_texts = [row[0] for row in result]
+            
+            if len(display_texts) == 0:
+                raise ValueError(f"No content found for message {message_id}")
+            elif len(display_texts) == 1:
+                return display_texts[0]
+            else:
+                # Multiple parts - join with markdown separator
+                return "\n\n---\n\n".join(display_texts)
 
     # Agent State Operations
 
