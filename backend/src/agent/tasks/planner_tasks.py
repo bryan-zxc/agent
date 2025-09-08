@@ -497,76 +497,140 @@ async def execute_initial_planning(task_data: dict):
         if metadata:
             await db.update_planner(planner_id, agent_metadata=metadata)
 
-        # Create tools text (exact copy from PlannerAgent)
-        tools_text = "\n\n---\n\n".join(
-            [f"# {name}\n{tool.__doc__}" for name, tool in TOOLS.items()]
-        )
+        # Check for stored plamarination plan from router
+        stored_plan = None
+        stored_answer_template = None
+        if router_id:
+            router = await db.get_router(router_id)
+            if router and router.get("agent_metadata"):
+                router_metadata = router["agent_metadata"]
+                
+                # Check if there's a stored execution plan from plamarination
+                if "execution_plan_model" in router_metadata:
+                    logger.info(f"Found stored plamarination plan for router {router_id}")
+                    stored_plan = router_metadata["execution_plan_model"]
+                    stored_answer_template = router_metadata.get("answer_template", "")
+                    
+                    # Clear metadata after consumption
+                    await db.update_router(router_id, agent_metadata={})
+                    logger.info(f"Cleared plamarination metadata from router {router_id}")
 
-        # Generate execution plan using structured format
-        plan_prompt = (
-            f"**Available tools for execution:**\n{tools_text}\n\n"
-            f"**Instructions:**\n{instruction}\n\n"
-            "Please create a detailed execution plan with an overall objective and a list of specific tasks. "
-            "The objective should describe what the tasks are aiming to achieve. "
-            "Each task should be specific enough to be executed independently. "
-        )
+        # Use stored plan or generate new one
+        if stored_plan:
+            # Use the stored plan from plamarination
+            execution_plan_model = ExecutionPlanModel(**stored_plan)
+            logger.info(f"Using stored execution plan with {len(execution_plan_model.todos)} todos")
+            
+            # Check if there are any tasks to execute
+            if not execution_plan_model.todos:
+                logger.info("No todos in execution plan - answer is already complete")
+                # The answer template is the final answer
+                # Store it and mark planner as completed
+                save_answer_template(planner_id, stored_answer_template)
+                save_wip_answer_template(planner_id, stored_answer_template)
+                
+                await db.update_planner(
+                    planner_id,
+                    execution_plan="# No execution needed - answer complete",
+                    status="completed",
+                    next_task="completed",
+                    user_response=stored_answer_template,
+                )
+                
+                # Add the answer to router messages
+                if router_id:
+                    await db.add_message("router", router_id, "assistant", stored_answer_template)
+                
+                logger.info(f"Planner {planner_id} completed with no execution needed")
+                return  # Exit early - no tasks to execute
+            
+            # Generate markdown version
+            execution_plan_markdown = execution_plan_model_to_markdown(execution_plan_model)
+            
+            # Update planner with execution plan
+            await db.update_planner(
+                planner_id, execution_plan=execution_plan_markdown, status="executing"
+            )
+            
+            # Save execution plan model to dedicated file
+            save_execution_plan_model(planner_id, execution_plan_model)
+            
+            # Use the stored answer template
+            save_answer_template(planner_id, stored_answer_template)
+            save_wip_answer_template(planner_id, stored_answer_template)
+            
+        else:
+            # No stored plan - generate new one
+            # Create tools text (exact copy from PlannerAgent)
+            tools_text = "\n\n---\n\n".join(
+                [f"# {name}\n{tool.__doc__}" for name, tool in TOOLS.items()]
+            )
 
-        # Get messages for LLM call
-        messages = await message_manager.get_messages()
+            # Generate execution plan using structured format
+            plan_prompt = (
+                f"**Available tools for execution:**\n{tools_text}\n\n"
+                f"**Instructions:**\n{instruction}\n\n"
+                "Please create a detailed execution plan with an overall objective and a list of specific tasks. "
+                "The objective should describe what the tasks are aiming to achieve. "
+                "Each task should be specific enough to be executed independently. "
+            )
 
-        # Get initial execution plan from LLM
-        initial_plan = await llm.a_get_response(
-            messages=messages + [{"role": "developer", "content": plan_prompt}],
-            model=model,
-            temperature=temperature,
-            response_format=InitialExecutionPlan,
-            system_instruction=system_instruction,  # Use system instruction from satellite table
-        )
+            # Get messages for LLM call
+            messages = await message_manager.get_messages()
 
-        # Convert to full ExecutionPlanModel
-        execution_plan_model = initial_plan_to_execution_plan_model(initial_plan)
+            # Get initial execution plan from LLM
+            initial_plan = await llm.a_get_response(
+                messages=messages + [{"role": "developer", "content": plan_prompt}],
+                model=model,
+                temperature=temperature,
+                response_format=InitialExecutionPlan,
+                system_instruction=system_instruction,  # Use system instruction from satellite table
+            )
 
-        # Generate markdown version
-        execution_plan_markdown = execution_plan_model_to_markdown(execution_plan_model)
+            # Convert to full ExecutionPlanModel
+            execution_plan_model = initial_plan_to_execution_plan_model(initial_plan)
 
-        # Update planner with execution plan
-        await db.update_planner(
-            planner_id, execution_plan=execution_plan_markdown, status="executing"
-        )
+            # Generate markdown version
+            execution_plan_markdown = execution_plan_model_to_markdown(execution_plan_model)
 
-        # Save execution plan model to dedicated file
-        save_execution_plan_model(planner_id, execution_plan_model)
+            # Update planner with execution plan
+            await db.update_planner(
+                planner_id, execution_plan=execution_plan_markdown, status="executing"
+            )
 
-        # Create initial answer template
-        messages = await message_manager.get_messages()
-        logger.info(
-            f"DEBUG: Retrieved {len(messages)} messages for planner {planner_id}"
-        )
+            # Save execution plan model to dedicated file
+            save_execution_plan_model(planner_id, execution_plan_model)
 
-        answer_template_prompt = (
-            "Based on the information so far, produce a first cut template in Markdown format to provide the final answer to the user's question. "
-            "This should include placeholders for facts, analysis outcomes, and any other relevant information. "
-            "Don't fill any answers into this template even if you have the information, just leave placeholders. "
-            "Do not return anything other than the template itself, don't use ```markdown ... ``` block either. "
-            "Keep the template as succinct and concise as possible."
-        )
+            # Create initial answer template
+            messages = await message_manager.get_messages()
+            logger.info(
+                f"DEBUG: Retrieved {len(messages)} messages for planner {planner_id}"
+            )
 
-        answer_template_messages = messages + [
-            {"role": "developer", "content": answer_template_prompt}
-        ]
+            answer_template_prompt = (
+                "Based on the information so far, produce a first cut template in Markdown format to provide the final answer to the user's question. "
+                "This should include placeholders for facts, analysis outcomes, and any other relevant information. "
+                "Don't fill any answers into this template even if you have the information, just leave placeholders. "
+                "Do not return anything other than the template itself, don't use ```markdown ... ``` block either. "
+                "Keep the template as succinct and concise as possible."
+            )
 
-        answer_template_response = await llm.a_get_response(
-            messages=answer_template_messages,
-            model=model,
-            temperature=temperature,
-            system_instruction=system_instruction,  # Use system instruction from satellite table
-        )
+            answer_template_messages = messages + [
+                {"role": "developer", "content": answer_template_prompt}
+            ]
 
-        initial_answer_template = answer_template_response.content.strip()
+            answer_template_response = await llm.a_get_response(
+                messages=answer_template_messages,
+                model=model,
+                temperature=temperature,
+                system_instruction=system_instruction,  # Use system instruction from satellite table
+            )
 
-        # Save both answer template and WIP template (initially the same)
-        save_answer_template(planner_id, initial_answer_template)
-        save_wip_answer_template(planner_id, initial_answer_template)
+            initial_answer_template = answer_template_response.content.strip()
+
+            # Save both answer template and WIP template (initially the same)
+            save_answer_template(planner_id, initial_answer_template)
+            save_wip_answer_template(planner_id, initial_answer_template)
 
         logger.info(
             f"Created and saved initial answer template for planner {planner_id}"

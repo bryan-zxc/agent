@@ -6,6 +6,7 @@
 - Plan the task first (identify steps)
 - Create GitHub issue with full scope:
   - Implementation tasks
+  - Descriptions in tickets must always contain full context with the expectation that the ticket will be called in a brand new conversation with no historical context
   - Testing requirements
   - Documentation updates
 - **Always assign to bryan-zxc**: Use `assignees: ["bryan-zxc"]`

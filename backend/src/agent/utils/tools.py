@@ -6,17 +6,48 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Union, Literal
+from typing import Union, Literal, List, Optional
 from pydantic import BaseModel, Field
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from fastmcp import FastMCP
 from ..services.llm_service import LLM
 from .image_utils import encode_image, decode_image, get_img_breakdown, is_image
+from ..models.agent_database import AgentDatabase
 
 logger = logging.getLogger(__name__)
 
 # Initialise MCP server for native tools
 mcp = FastMCP("agent-tools")
+
+
+# Define docstring for set_plan_and_answer
+SET_PLAN_AND_ANSWER_DOC = """Store execution plan and answer template from plamarination phase.
+
+This tool completes the plamarination phase by storing the execution plan
+and answer template in router metadata for the planner to consume.
+
+Parameters:
+----------
+plan_description : str
+    A detailed description of the plan containing:
+    - statement and assessment of the user's objective and considerations
+    - solution to implement/action
+    (if the problem/request is simple, this can be brief, no need for words)
+    This should be in markdown format and will be wrapped under a "## Plan" heading so do not generate a heading here.
+    If you use markdown headers in the plan, use at least h3 (###) or smaller.
+objective : str
+    The overall objective/goal to be achieved
+answer_template : str
+    Markdown template of the final answer with placeholders that needs to be filled in through the todo list
+todos : List[str]
+    List of tasks to be executed in order (if the answer_template is already complete with no placeholders, the todo list can be left empty)
+router_id : Optional[str]
+    Router ID (injected automatically by hook system - DO NOT PROVIDE)
+
+Returns:
+-------
+str
+    Formatted confirmation message showing the stored plan"""
 
 
 # Define docstring once for google_search
@@ -496,90 +527,177 @@ str
 async def read_image(image_path: str) -> str:
     # Initialise LLM at the top
     llm = LLM(caller="tools")
-    
+
     # 1. Validate image exists and is readable
     is_valid, error = is_image(image_path)
     if not is_valid:
         return f"Error reading image: {error}"
-    
+
     # 2. Encode image for processing
     base64_image = encode_image(image_path)
-    
+
     # 3. Get image breakdown to determine types
     image_breakdown = get_img_breakdown(base64_image)
-    
+
     if image_breakdown.unreadable:
         return f"Image cannot be analysed: {image_breakdown.image_quality}"
-    
+
     # 4. Get distinct element types present in the image
-    element_types = list(set([element.element_type for element in image_breakdown.elements]))
-    
+    element_types = list(
+        set([element.element_type for element in image_breakdown.elements])
+    )
+
     if not element_types:
         return "No recognisable content found in image"
-    
+
     # 5. Collect results from each type of extraction
     results = []
-    
+
     # Process charts if present
     if "chart" in element_types:
         chart_data = get_chart_readings_from_image(base64_image)
         results.append(f"Chart Data:\n{chart_data}")
-    
+
     # Process tables, forms, and text together if any are present
     if "table" in element_types or "form" in element_types or "text" in element_types:
         # Note: The prompt in get_text_and_table_json_from_image was already updated
         # to include forms and exclude charts and diagrams
         text_form_table_response = get_text_and_table_json_from_image(base64_image)
         results.append(f"Text, Form, and Table Data:\n{text_form_table_response}")
-    
+
     # Process diagrams if present
     if "diagram" in element_types:
         diagram_response = llm.get_response(
-            messages=[{
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "Convert all diagrams in this image to mermaid code. Return only the mermaid code."
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{base64_image}"}
-                    }
-                ]
-            }],
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Convert all diagrams in this image to mermaid code. Return only the mermaid code.",
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/png;base64,{base64_image}"
+                            },
+                        },
+                    ],
+                }
+            ],
             model="gemini-2.5-pro",
-            temperature=0
+            temperature=0,
         )
         results.append(f"Diagram (Mermaid):\n{diagram_response}")
-    
+
     # Process other content types if present
     if "other" in element_types:
         other_response = llm.get_response(
-            messages=[{
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "Describe any non-text, non-table, non-chart, non-diagram content in this image (such as photographs, illustrations, etc.)."
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{base64_image}"}
-                    }
-                ]
-            }],
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Describe any non-text, non-table, non-chart, non-diagram content in this image (such as photographs, illustrations, etc.).",
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/png;base64,{base64_image}"
+                            },
+                        },
+                    ],
+                }
+            ],
             model="gemini-2.5-pro",
-            temperature=0
+            temperature=0,
         )
         results.append(f"Other Content:\n{other_response}")
-    
+
     # 6. Combine all results
     return "\n\n---\n\n".join(results)
 
 
 # Set the docstring for the function (for documentation/IDE support)
 read_image.__doc__ = READ_IMAGE_DOC
+
+
+@mcp.tool(description=SET_PLAN_AND_ANSWER_DOC)
+async def set_plan_and_answer(
+    plan_description: str,
+    objective: str,
+    answer_template: str,
+    todos: List[str] = None,
+    router_id: Optional[str] = None,
+) -> str:
+    # Import models locally to avoid circular import
+    from ..models.tasks import InitialExecutionPlan, ExecutionPlanModel
+    from ..utils.execution_plan_converter import initial_plan_to_execution_plan_model
+    
+    # Validate router_id was injected by hook
+    if not router_id:
+        return "Error: router_id not provided. This tool requires proper context."
+
+    # Handle None todos by converting to empty list
+    todos = todos or []
+
+    try:
+        # Create database connection
+        db = await AgentDatabase.create()
+
+        # Convert to ExecutionPlanModel with TodoItems
+        execution_plan_model = initial_plan_to_execution_plan_model(
+            InitialExecutionPlan(objective=objective, todos=todos)
+        )
+
+        # Get current router metadata
+        router = await db.get_router(router_id)
+        if not router:
+            return f"Error: Router {router_id} not found"
+
+        # Prepare metadata with plamarination plan
+        # Store directly at root level as per design decision
+        metadata = {
+            "execution_plan_model": execution_plan_model.model_dump(),
+            "answer_template": answer_template,
+            "plan_description": plan_description  # Store for reference
+        }
+
+        # Update router with new metadata
+        success = await db.update_router(router_id, agent_metadata=metadata)
+
+        if not success:
+            return f"Error: Failed to update router {router_id}"
+
+        # Different output based on whether todos exist
+        if not todos:
+            # No tasks to execute - answer is complete
+            return f"""# Answer
+
+{answer_template}"""
+        else:
+            # Format todos with checkbox style
+            todos_formatted = "\n".join([f"- [ ] {todo}" for todo in todos])
+            
+            return f"""# Execution Plan
+
+## Plan
+{plan_description}
+
+## Tasks to Execute
+{todos_formatted}
+
+## Answer Template
+{answer_template}"""
+
+    except Exception as e:
+        logger.error(f"Failed to store plan: {e}")
+        return f"Error storing plan: {str(e)}"
+
+
+# Set the docstring for the function (for documentation/IDE support)
+set_plan_and_answer.__doc__ = SET_PLAN_AND_ANSWER_DOC
 
 
 # Run as MCP server when called directly

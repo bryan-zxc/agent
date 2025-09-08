@@ -87,7 +87,17 @@ async def test_plan_completion_post_hook():
     hooks = ToolHooks()
     websocket = AsyncMock()
     payload = {"router_id": "test_router_123"}
-    result = "# Execution Plan\n\nPlan stored and ready for approval."
+    result = """# Execution Plan
+
+## Plan
+Test plan description
+
+## Tasks to Execute
+- [ ] Task 1
+- [ ] Task 2
+
+## Answer Template
+Template with placeholders"""
     
     processed_result = await hooks.apply_post_hook(
         "agent_tools__set_plan_and_answer",
@@ -105,6 +115,35 @@ async def test_plan_completion_post_hook():
     assert call_args["type"] == "status"
     assert call_args["router_id"] == "test_router_123"
     assert call_args["status"] == "plamarinating_awaiting_user"
+
+
+@pytest.mark.asyncio
+async def test_plan_completion_post_hook_no_todos():
+    """Test the plan completion post-hook when answer is complete (no todos)."""
+    hooks = ToolHooks()
+    websocket = AsyncMock()
+    payload = {"router_id": "test_router_456"}
+    result = """# Answer
+
+This is the complete answer with all information already filled in.
+No execution needed."""
+    
+    processed_result = await hooks.apply_post_hook(
+        "agent_tools__set_plan_and_answer",
+        result,
+        payload,
+        websocket
+    )
+    
+    # Result should pass through unchanged
+    assert processed_result == result
+    
+    # WebSocket should have been called with 'active' status
+    websocket.send_json.assert_called_once()
+    call_args = websocket.send_json.call_args[0][0]
+    assert call_args["type"] == "status"
+    assert call_args["router_id"] == "test_router_456"
+    assert call_args["status"] == "active"  # Back to conversation mode
 
 
 @pytest.mark.asyncio

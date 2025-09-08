@@ -143,22 +143,33 @@ class ToolHooks:
         """
         Post-hook: Handle plan storage completion and update status.
         
-        When set_plan_and_answer successfully stores a plan, this hook
-        updates the router status via WebSocket.
+        When set_plan_and_answer completes, this hook updates the router
+        status based on whether execution is needed or the answer is complete.
         """
-        # Check if this is a successful plan storage
-        if isinstance(result, str) and "Plan stored and ready for approval" in result:
-            router_id = payload.get("router_id") if payload else None
+        router_id = payload.get("router_id") if payload else None
+        
+        if isinstance(result, str):
+            status = None
             
-            if websocket and router_id:
+            # Detect based on content structure, not status text
+            if result.startswith("# Execution Plan"):
+                # Has todos - needs approval for execution
+                status = "plamarinating_awaiting_user"
+                logger.info(f"Execution plan stored for router {router_id}, awaiting approval")
+            elif result.startswith("# Answer"):
+                # No todos - answer is complete, back to conversation
+                status = "active"
+                logger.info(f"Answer complete for router {router_id}, no execution needed")
+            
+            # Send status update if determined
+            if status and websocket and router_id:
                 try:
-                    # Update status to awaiting approval
                     await websocket.send_json({
                         "type": "status",
                         "router_id": router_id,
-                        "status": "plamarinating_awaiting_user"
+                        "status": status
                     })
-                    logger.info(f"Sent status update for router {router_id}")
+                    logger.info(f"Sent status update '{status}' for router {router_id}")
                 except Exception as e:
                     logger.error(f"Failed to send status update: {e}")
         

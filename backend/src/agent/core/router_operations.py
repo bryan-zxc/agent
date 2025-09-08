@@ -476,6 +476,9 @@ async def planning_mode_response(router_state: Dict[str, Any], websocket: WebSoc
         messages=messages,
         model=settings.planner_model,
         temperature=router_state["temperature"],
+        use_tools=True,  # Enable MCP tools
+        websocket=websocket,  # For status updates
+        payload={"router_id": router_state["id"]},  # Context for hooks
         system_instruction="You are operating in planning mode with the user to agree on an execution plan as well as answer template to subsequently ask the planner agent to execute. "
         "You should be doing the majority of the actions, but when necessary you can ask the user for clarifications or more information. "
         "You must be responsive to the user's instructions and they may fall behind your progress, if you notice user responses in history that you haven't reacted to, you must immediately acknowledge it. "
