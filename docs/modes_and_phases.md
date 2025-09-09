@@ -225,16 +225,57 @@ The Router table includes:
 }
 ```
 
-### Approval Flow
+### Approval Flow Details
+
+#### 1. Backend Completes Planning
+When the `set_plan_and_answer` tool completes:
+- Tool generates execution plan with todos
+- Post-tool hook (`tool_hooks.py`) detects "# Execution Plan" format
+- Updates router status to `"plamarinating_awaiting_user"`
+- Sends WebSocket status update to trigger frontend approval UI
+
+#### 2. Frontend Shows Approval UI
+Upon receiving `plamarinating_awaiting_user` status:
+- Displays the plan to the user
+- Shows two options: Approve or Reject/Revise
+- User can provide additional feedback text
+
+#### 3. Frontend Sends Approval Response
 ```json
-// Frontend sends
 {
-  "type": "approval_response",
+  "type": "message",
   "router_id": "uuid",
-  "approved": true|false,
-  "feedback": "Optional revision feedback"
+  "message": "User's feedback or instructions",
+  "approval_response": {
+    "approved": true|false,
+    "feedback": "Additional context if rejecting"
+  }
 }
 ```
+
+#### 4. Backend Processes Approval
+The WebSocket handler (`main.py`):
+- Detects `approval_response` in message data
+- Transforms into structured format:
+  ```python
+  message_data = {
+    "type": "approval_response",
+    "approved": true/false,
+    "feedback": "user feedback",
+    "message": "original message"
+  }
+  ```
+- Passes to `handle_message` which routes based on approval:
+  - If approved → Immediately triggers `handle_complex_request`
+  - If rejected → Returns to plamarination with feedback
+
+#### 5. Execution Begins
+When approved:
+- Status changes to `"executing"`
+- Planner/Worker pipeline starts immediately
+- No further user interaction needed until completion
+
+**Note**: The planner/worker entry point will be redesigned in future iterations.
 
 ## Testing Scenarios
 

@@ -183,7 +183,23 @@ async def handle_websocket_message(websocket: WebSocket, data: dict):
                 logger.info(f"Updating router {router_id} mode to {mode}")
                 # Update mode in database
                 agent_db = await AgentDatabase.create()
-                await agent_db.update_router(router_id=router_id, mode=mode)
+                
+                # Handle agent_phase based on mode
+                if mode != "agent":
+                    # Clear agent_phase when not in agent mode
+                    await agent_db.update_router(
+                        router_id=router_id, 
+                        mode=mode,
+                        agent_phase=None
+                    )
+                else:
+                    # Set default phase when entering agent mode
+                    await agent_db.update_router(
+                        router_id=router_id, 
+                        mode=mode,
+                        agent_phase="plamarination"
+                    )
+                
                 # Send confirmation
                 await websocket.send_json({
                     "type": "mode_updated",
@@ -191,6 +207,74 @@ async def handle_websocket_message(websocket: WebSocket, data: dict):
                     "mode": mode
                 })
                 logger.info(f"Router {router_id} mode updated to {mode}")
+        
+        elif message_type == "update_phase":
+            # Update agent phase (only valid in agent mode)
+            router_id = data.get("router_id")
+            phase = data.get("phase")
+            
+            if router_id:
+                agent_db = await AgentDatabase.create()
+                router_record = await agent_db.get_router(router_id)
+                
+                if not router_record:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": f"Router {router_id} not found",
+                        "router_id": router_id
+                    })
+                elif router_record.get("mode") != "agent":
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "Phase updates only available in agent mode",
+                        "router_id": router_id
+                    })
+                elif phase not in ["plamarination", "execution"]:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "Invalid phase. Must be 'plamarination' or 'execution'",
+                        "router_id": router_id
+                    })
+                else:
+                    logger.info(f"Updating router {router_id} phase to {phase}")
+                    
+                    # Update in database
+                    await agent_db.update_router(
+                        router_id=router_id,
+                        agent_phase=phase
+                    )
+                    
+                    # Send confirmation
+                    await websocket.send_json({
+                        "type": "phase_updated",
+                        "phase": phase,
+                        "router_id": router_id
+                    })
+                    logger.info(f"Router {router_id} phase updated to {phase}")
+        
+        elif message_type == "continue_plamarination":
+            # Continue plamarination iteration
+            router_id = data.get("router_id")
+            if router_id:
+                logger.info(f"Continuing plamarination for router {router_id}")
+                
+                # Create ephemeral router state and check status
+                router_state = await router_operations.create_router(router_id=router_id)
+                agent_db = router_state["agent_db"]
+                router_record = await agent_db.get_router(router_id)
+                
+                if router_record and router_record.get("status") == "plamarinating":
+                    # Import planning_mode_response from router_operations
+                    from agent.core.router_operations import planning_mode_response
+                    await planning_mode_response(router_state, websocket)
+                else:
+                    status = router_record.get("status") if router_record else "unknown"
+                    logger.warning(f"Continue plamarination called but status is {status}")
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": f"Cannot continue plamarination - current status is {status}",
+                        "router_id": router_id
+                    })
         
         elif message_type == "message":
             # Regular chat message - ephemeral router creation
@@ -222,9 +306,22 @@ async def handle_websocket_message(websocket: WebSocket, data: dict):
                     router_id=router_id
                 )  # Load state from database
 
+                # Check for approval_response within message data
+                if data.get("approval_response"):
+                    # Merge approval response into message data for handle_message
+                    message_data = {
+                        "message": data.get("message", ""),
+                        "files": data.get("files", []),
+                        "type": "approval_response",
+                        "approved": data["approval_response"].get("approved", False),
+                        "feedback": data["approval_response"].get("feedback", "")
+                    }
+                else:
+                    message_data = data
+
                 # Handle message with WebSocket parameter
                 await router_operations.handle_message(
-                    router_state=router_state, message_data=data, websocket=websocket
+                    router_state=router_state, message_data=message_data, websocket=websocket
                 )
 
             logger.info(

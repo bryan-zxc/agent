@@ -123,6 +123,7 @@ async def create_router(router_id: Optional[str] = None) -> Dict[str, Any]:
             "model": loaded_state["model"],
             "temperature": loaded_state["temperature"],
             "mode": loaded_state.get("mode", "auto"),
+            "agent_phase": loaded_state.get("agent_phase"),
             "agent_db": agent_db,
             "message_manager": message_manager,
         }
@@ -173,11 +174,21 @@ async def load_existing_router_state(
         await agent_db.update_router(router_id=router_id, status="active")
         status = "active"
 
+    # Load agent_phase if present
+    agent_phase = state.get("agent_phase")
+    mode = state.get("mode", "auto")
+    
     logger.info(
-        f"Router {router_id} state loaded - model: {model}, temp: {temperature}, status: {status}"
+        f"Router {router_id} state loaded - model: {model}, temp: {temperature}, status: {status}, mode: {mode}, agent_phase: {agent_phase}"
     )
 
-    return {"model": model, "temperature": temperature, "status": status}
+    return {
+        "model": model, 
+        "temperature": temperature, 
+        "status": status,
+        "mode": mode,
+        "agent_phase": agent_phase
+    }
 
 
 def encode_image_content(
@@ -249,6 +260,14 @@ async def activate_conversation(
         title=title,
         preview=preview,
     )
+    
+    # Set agent_phase if in agent mode
+    if mode == "agent":
+        # Default to plamarination phase when entering agent mode
+        await agent_db.update_router(router_id=router_id, agent_phase="plamarination")
+        router_state["agent_phase"] = "plamarination"
+    else:
+        router_state["agent_phase"] = None
 
     # Create MessageManager for this new router
     message_manager = MessageManager(
@@ -786,6 +805,54 @@ async def send_input_unlock(
                 logger.warning(f"WebSocket closed while sending input unlock: {e}")
             else:
                 raise
+
+
+async def send_mode_status(
+    mode: str,
+    router_id: str,
+    websocket: WebSocket
+):
+    """Send mode change status to frontend."""
+    if not websocket:
+        return
+    
+    try:
+        await websocket.send_json({
+            "type": "mode_status",
+            "mode": mode,
+            "router_id": router_id,
+            "message": f"Switched to {mode} mode"
+        })
+        logger.info(f"Sent mode status update for router {router_id}: {mode}")
+    except RuntimeError as e:
+        if "close message has been sent" in str(e):
+            logger.warning(f"WebSocket closed while sending mode status: {e}")
+        else:
+            raise
+
+
+async def send_phase_status(
+    phase: str,
+    router_id: str,
+    websocket: WebSocket
+):
+    """Send phase change status to frontend."""
+    if not websocket:
+        return
+    
+    try:
+        await websocket.send_json({
+            "type": "phase_status",
+            "phase": phase,
+            "router_id": router_id,
+            "message": f"Switched to {phase} phase"
+        })
+        logger.info(f"Sent phase status update for router {router_id}: {phase}")
+    except RuntimeError as e:
+        if "close message has been sent" in str(e):
+            logger.warning(f"WebSocket closed while sending phase status: {e}")
+        else:
+            raise
 
 
 async def handle_complex_request(
