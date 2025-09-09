@@ -49,22 +49,26 @@ class MessageManager:
         Args:
             role: Message role ('user', 'assistant', 'system', 'developer')
             content: Message content (can be string, list, or other JSON-serialisable content)
-            need_message_id: If True, returns dict with message_id and messages. If False, returns just messages.
+            need_message_id: If True, returns dict with message_id, messages, and display_texts. If False, returns just messages.
 
         Returns:
             If need_message_id is False (default): Complete updated message list for immediate use with LLM calls
             If need_message_id is True: Dict containing:
-            - message_id: Database ID of the added message (Optional[int])
+            - message_id: Database ID of the added message
             - messages: Complete updated message list
+            - display_texts: List of newly added display texts
         """
         # Ensure we're synced with database first
         if not self._synced:
             await self._sync_from_db()
 
-        # Persist to database
-        message_id = await self.db.add_message(
+        # Persist to database - now returns dict with message_id and display_texts
+        result = await self.db.add_message(
             self.agent_type, self.agent_id, role, content
         )
+        
+        message_id = result["message_id"]
+        display_texts = result["display_texts"]
 
         if message_id is not None:
             # Check if we should combine with last cached message
@@ -112,7 +116,11 @@ class MessageManager:
         messages = await self.get_messages()
 
         if need_message_id:
-            return {"message_id": message_id, "messages": messages}
+            return {
+                "message_id": message_id, 
+                "messages": messages,
+                "display_texts": display_texts
+            }
         else:
             return messages  # Default behavior - unchanged from original
 

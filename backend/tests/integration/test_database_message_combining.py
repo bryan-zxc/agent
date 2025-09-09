@@ -45,12 +45,16 @@ class TestDatabaseMessageCombining(unittest.IsolatedAsyncioTestCase):
     async def test_combine_consecutive_same_role_messages_planner(self):
         """Test that consecutive same-role messages are combined for planner."""
         # Add first user message
-        msg1_id = await self.db.add_message("planner", self.planner_id, "user", "First message")
+        result1 = await self.db.add_message("planner", self.planner_id, "user", "First message")
+        msg1_id = result1["message_id"]
         self.assertIsNotNone(msg1_id)
+        self.assertEqual(len(result1["display_texts"]), 1)
         
         # Add second user message - should combine with first
-        msg2_id = await self.db.add_message("planner", self.planner_id, "user", "Second message")
+        result2 = await self.db.add_message("planner", self.planner_id, "user", "Second message")
+        msg2_id = result2["message_id"]
         self.assertEqual(msg2_id, msg1_id, "Should return same message ID when combining")
+        self.assertEqual(len(result2["display_texts"]), 1)  # Only the newly added text
         
         # Verify messages are combined
         messages = await self.db.get_messages("planner", self.planner_id)
@@ -67,14 +71,17 @@ class TestDatabaseMessageCombining(unittest.IsolatedAsyncioTestCase):
     async def test_alternating_roles_create_separate_messages(self):
         """Test that alternating roles create separate messages."""
         # Add user message
-        user_msg_id = await self.db.add_message("planner", self.planner_id, "user", "User message")
+        user_result = await self.db.add_message("planner", self.planner_id, "user", "User message")
+        user_msg_id = user_result["message_id"]
         
         # Add assistant message - should create new message
-        assistant_msg_id = await self.db.add_message("planner", self.planner_id, "assistant", "Assistant response")
+        assistant_result = await self.db.add_message("planner", self.planner_id, "assistant", "Assistant response")
+        assistant_msg_id = assistant_result["message_id"]
         self.assertNotEqual(assistant_msg_id, user_msg_id, "Different roles should create new messages")
         
         # Add another user message - should create third message
-        user2_msg_id = await self.db.add_message("planner", self.planner_id, "user", "Another user message")
+        user2_result = await self.db.add_message("planner", self.planner_id, "user", "Another user message")
+        user2_msg_id = user2_result["message_id"]
         self.assertNotEqual(user2_msg_id, assistant_msg_id)
         self.assertNotEqual(user2_msg_id, user_msg_id)
         
@@ -88,9 +95,12 @@ class TestDatabaseMessageCombining(unittest.IsolatedAsyncioTestCase):
     async def test_combine_worker_messages(self):
         """Test message combining for worker agent type."""
         # Add multiple assistant messages
-        msg1_id = await self.db.add_message("worker", self.worker_id, "assistant", "First output")
-        msg2_id = await self.db.add_message("worker", self.worker_id, "assistant", "Second output")
-        msg3_id = await self.db.add_message("worker", self.worker_id, "assistant", "Third output")
+        result1 = await self.db.add_message("worker", self.worker_id, "assistant", "First output")
+        msg1_id = result1["message_id"]
+        result2 = await self.db.add_message("worker", self.worker_id, "assistant", "Second output")
+        msg2_id = result2["message_id"]
+        result3 = await self.db.add_message("worker", self.worker_id, "assistant", "Third output")
+        msg3_id = result3["message_id"]
         
         # All should combine into the same message
         self.assertEqual(msg2_id, msg1_id)
@@ -107,14 +117,17 @@ class TestDatabaseMessageCombining(unittest.IsolatedAsyncioTestCase):
         await self.db.create_router(self.router_id, status="active")
         
         # Add multiple user messages
-        msg1_id = await self.db.add_message("router", self.router_id, "user", "First input")
-        msg2_id = await self.db.add_message("router", self.router_id, "user", "Second input")
+        result1 = await self.db.add_message("router", self.router_id, "user", "First input")
+        msg1_id = result1["message_id"]
+        result2 = await self.db.add_message("router", self.router_id, "user", "Second input")
+        msg2_id = result2["message_id"]
         
         # Should combine
         self.assertEqual(msg2_id, msg1_id)
         
         # Add assistant message
-        assistant_msg_id = await self.db.add_message("router", self.router_id, "assistant", "Response")
+        assistant_result = await self.db.add_message("router", self.router_id, "assistant", "Response")
+        assistant_msg_id = assistant_result["message_id"]
         self.assertNotEqual(assistant_msg_id, msg1_id)
         
         # Verify structure
@@ -125,19 +138,22 @@ class TestDatabaseMessageCombining(unittest.IsolatedAsyncioTestCase):
     async def test_mixed_content_types(self):
         """Test combining messages with different content types."""
         # Add string content
-        msg_id = await self.db.add_message("planner", self.planner_id, "user", "String content")
+        result1 = await self.db.add_message("planner", self.planner_id, "user", "String content")
+        msg_id = result1["message_id"]
         
         # Add list content to same role
         list_content = [
             {"type": "text", "text": "List item 1"},
             {"type": "text", "text": "List item 2"}
         ]
-        msg_id2 = await self.db.add_message("planner", self.planner_id, "user", list_content)
+        result2 = await self.db.add_message("planner", self.planner_id, "user", list_content)
+        msg_id2 = result2["message_id"]
         self.assertEqual(msg_id2, msg_id, "Should combine different content types")
         
         # Add dict content to same role
         dict_content = {"type": "text", "text": "Dict content"}
-        msg_id3 = await self.db.add_message("planner", self.planner_id, "user", dict_content)
+        result3 = await self.db.add_message("planner", self.planner_id, "user", dict_content)
+        msg_id3 = result3["message_id"]
         self.assertEqual(msg_id3, msg_id, "Should combine dict content")
         
         # Verify all content is combined
@@ -155,11 +171,13 @@ class TestDatabaseMessageCombining(unittest.IsolatedAsyncioTestCase):
     async def test_empty_content_handling(self):
         """Test handling of empty content."""
         # Add empty string content
-        msg1_id = await self.db.add_message("planner", self.planner_id, "user", "")
+        result1 = await self.db.add_message("planner", self.planner_id, "user", "")
+        msg1_id = result1["message_id"]
         self.assertIsNotNone(msg1_id)
         
         # Add empty list content - should combine
-        msg2_id = await self.db.add_message("planner", self.planner_id, "user", [])
+        result2 = await self.db.add_message("planner", self.planner_id, "user", [])
+        msg2_id = result2["message_id"]
         self.assertEqual(msg2_id, msg1_id)
         
         # Verify messages
@@ -172,10 +190,10 @@ class TestDatabaseMessageCombining(unittest.IsolatedAsyncioTestCase):
         # Add 5 consecutive user messages
         msg_ids = []
         for i in range(5):
-            msg_id = await self.db.add_message(
+            result = await self.db.add_message(
                 "planner", self.planner_id, "user", f"Message {i+1}"
             )
-            msg_ids.append(msg_id)
+            msg_ids.append(result["message_id"])
         
         # All should have same ID
         for msg_id in msg_ids[1:]:
@@ -193,14 +211,17 @@ class TestDatabaseMessageCombining(unittest.IsolatedAsyncioTestCase):
     async def test_system_role_messages(self):
         """Test that system role messages also combine correctly."""
         # Add multiple system messages
-        msg1_id = await self.db.add_message("planner", self.planner_id, "system", "System prompt 1")
-        msg2_id = await self.db.add_message("planner", self.planner_id, "system", "System prompt 2")
+        result1 = await self.db.add_message("planner", self.planner_id, "system", "System prompt 1")
+        msg1_id = result1["message_id"]
+        result2 = await self.db.add_message("planner", self.planner_id, "system", "System prompt 2")
+        msg2_id = result2["message_id"]
         
         # Should combine
         self.assertEqual(msg2_id, msg1_id)
         
         # Add user message
-        user_msg_id = await self.db.add_message("planner", self.planner_id, "user", "User input")
+        user_result = await self.db.add_message("planner", self.planner_id, "user", "User input")
+        user_msg_id = user_result["message_id"]
         self.assertNotEqual(user_msg_id, msg1_id)
         
         # Verify structure
@@ -210,24 +231,31 @@ class TestDatabaseMessageCombining(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(messages[1]["role"], "user")
 
     async def test_display_text_generation(self):
-        """Test that display text is correctly generated from combined messages."""
+        """Test that display texts are correctly generated from combined messages."""
         # Add messages that will be combined
-        msg_id = await self.db.add_message("planner", self.planner_id, "user", "Part 1")
-        await self.db.add_message("planner", self.planner_id, "user", [
+        result1 = await self.db.add_message("planner", self.planner_id, "user", "Part 1")
+        msg_id = result1["message_id"]
+        self.assertEqual(result1["display_texts"], ["Part 1"])
+        
+        result2 = await self.db.add_message("planner", self.planner_id, "user", [
             {"type": "text", "text": "Part 2"},
             {"type": "image", "url": "image.png"},  # Non-text content
             {"type": "text", "text": "Part 3"}
         ])
         
-        # Get display text using the message ID
-        display_text = await self.db.get_message_display_text("planner", msg_id)
+        # Should only return newly added display texts
+        self.assertEqual(len(result2["display_texts"]), 2)  # Part 2 and Part 3
+        self.assertIn("Part 2", result2["display_texts"])
+        self.assertIn("Part 3", result2["display_texts"])
         
-        # Should concatenate only text parts
-        self.assertIn("Part 1", display_text)
-        self.assertIn("Part 2", display_text)
-        self.assertIn("Part 3", display_text)
-        # Image URL should not be in display text
-        self.assertNotIn("image.png", display_text)
+        # Get all display texts using the message ID
+        all_display_texts = await self.db.get_message_display_texts("planner", msg_id)
+        
+        # Should have all text parts as separate items (empty texts filtered out)
+        self.assertEqual(len(all_display_texts), 3)
+        self.assertEqual(all_display_texts[0], "Part 1")
+        self.assertEqual(all_display_texts[1], "Part 2")
+        self.assertEqual(all_display_texts[2], "Part 3")
 
 
 if __name__ == "__main__":

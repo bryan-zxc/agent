@@ -581,7 +581,7 @@ class AgentDatabase:
 
     async def add_message(
         self, agent_type: AgentType, agent_id: str, role: str, content: Any
-    ) -> Optional[int]:
+    ) -> Dict[str, Any]:
         """Add a message and its content to appropriate satellite table.
         
         If the last message has the same role, content will be appended to it
@@ -597,86 +597,52 @@ class AgentDatabase:
             ValueError: If content is not string or list of dictionaries
         
         Returns:
-            Message ID (either new or existing if combined)
+            Dictionary containing:
+            - message_id: Message ID (either new or existing if combined)
+            - display_texts: List of newly added display texts
         """
-        # First check if we should combine with the last message
-        last_message = await self._get_last_message(agent_type, agent_id)
-        
-        # If last message has same role, append content to it
-        if last_message and last_message.role == role:
-            async with self.AsyncSessionLocal() as session:
-                # Determine the ContentClass based on agent type
-                if agent_type == "planner":
-                    ContentClass = PlannerMessageContent
-                elif agent_type == "worker":
-                    ContentClass = WorkerMessageContent
-                else:  # router
-                    ContentClass = RouterMessageContent
-                
-                # Add content to existing message's satellite table
-                if isinstance(content, str):
-                    # Single text content
-                    content_entry = ContentClass(
-                        message_id=last_message.id,
-                        content={"type": "text", "text": content},
-                        display_text=content
-                    )
-                    session.add(content_entry)
-                
-                elif isinstance(content, list):
-                    # Multiple content parts - must be list of dictionaries
-                    for part in content:
-                        if not isinstance(part, dict):
-                            raise ValueError(f"List content must contain dictionaries, got {type(part)}")
-                        
-                        content_entry = ContentClass(
-                            message_id=last_message.id,
-                            content=part,
-                            display_text=part.get("text", "")
-                        )
-                        session.add(content_entry)
-                
-                elif isinstance(content, dict):
-                    # Single dictionary content - wrap in list
-                    content_entry = ContentClass(
-                        message_id=last_message.id,
-                        content=content,
-                        display_text=content.get("text", "")
-                    )
-                    session.add(content_entry)
-                
-                else:
-                    raise ValueError(f"Content must be string, dict, or list of dictionaries, got {type(content)}")
-                
-                await session.commit()
-                return last_message.id  # Return existing message ID
-        
-        # Different role or no previous message - create new message
         async with self.AsyncSessionLocal() as session:
-            # Create message record (no content column anymore)
+            # Determine the ContentClass based on agent type
             if agent_type == "planner":
-                message = PlannerMessage(agent_id=agent_id, role=role)
                 ContentClass = PlannerMessageContent
             elif agent_type == "worker":
-                message = WorkerMessage(agent_id=agent_id, role=role)
                 ContentClass = WorkerMessageContent
             else:  # router
-                # For router, agent_id is the router_id
-                message = RouterMessage(router_id=agent_id, role=role)
                 ContentClass = RouterMessageContent
-
-            session.add(message)
-            await session.flush()  # Flush to get the message ID
-
-            # Process and store content in satellite table
+            
+            # Check if we should combine with the last message
+            last_message = await self._get_last_message(agent_type, agent_id)
+            
+            # Determine the message_id to use
+            if last_message and last_message.role == role:
+                # Use existing message ID - combining with last message
+                message_id = last_message.id
+            else:
+                # Create new message record
+                if agent_type == "planner":
+                    message = PlannerMessage(agent_id=agent_id, role=role)
+                elif agent_type == "worker":
+                    message = WorkerMessage(agent_id=agent_id, role=role)
+                else:  # router
+                    message = RouterMessage(router_id=agent_id, role=role)
+                
+                session.add(message)
+                await session.flush()  # Flush to get the message ID
+                message_id = message.id
+            
+            # Now process content and add to satellite table
+            new_display_texts = []
+            
             if isinstance(content, str):
                 # Single text content
+                display_text = content
                 content_entry = ContentClass(
-                    message_id=message.id,
+                    message_id=message_id,
                     content={"type": "text", "text": content},
-                    display_text=content
+                    display_text=display_text
                 )
                 session.add(content_entry)
+                new_display_texts.append(display_text)
             
             elif isinstance(content, list):
                 # Multiple content parts - must be list of dictionaries
@@ -684,27 +650,35 @@ class AgentDatabase:
                     if not isinstance(part, dict):
                         raise ValueError(f"List content must contain dictionaries, got {type(part)}")
                     
+                    display_text = part.get("text", "")
                     content_entry = ContentClass(
-                        message_id=message.id,
+                        message_id=message_id,
                         content=part,
-                        display_text=part.get("text", "")
+                        display_text=display_text
                     )
                     session.add(content_entry)
+                    new_display_texts.append(display_text)
             
             elif isinstance(content, dict):
                 # Single dictionary content
+                display_text = content.get("text", "")
                 content_entry = ContentClass(
-                    message_id=message.id,
+                    message_id=message_id,
                     content=content,
-                    display_text=content.get("text", "")
+                    display_text=display_text
                 )
                 session.add(content_entry)
+                new_display_texts.append(display_text)
             
             else:
                 raise ValueError(f"Content must be string, dict, or list of dictionaries, got {type(content)}")
-
+            
             await session.commit()
-            return message.id
+            # Filter out empty display texts before returning
+            return {
+                "message_id": message_id,
+                "display_texts": [text for text in new_display_texts if text]
+            }
 
 
     async def update_router(self, router_id: str, **kwargs) -> bool:
@@ -807,15 +781,15 @@ class AgentDatabase:
 
             await session.commit()
 
-    async def get_message_display_text(self, agent_type: AgentType, message_id: int) -> str:
-        """Get concatenated display text for a message
+    async def get_message_display_texts(self, agent_type: AgentType, message_id: int) -> List[str]:
+        """Get all display texts for a message as separate entries
         
         Args:
             agent_type: Type of agent ('planner', 'worker', 'router')
             message_id: ID of the message
             
         Returns:
-            Concatenated display text, multiple parts joined with markdown separator
+            List of display texts in the order they were created
         """
         async with self.AsyncSessionLocal() as session:
             # Select appropriate content table
@@ -832,15 +806,13 @@ class AgentDatabase:
                 .where(ContentClass.message_id == message_id)
                 .order_by(ContentClass.id)
             )
-            display_texts = [row[0] for row in result]
+            # Filter out empty display texts
+            display_texts = [row[0] for row in result if row[0]]
             
-            if len(display_texts) == 0:
-                raise ValueError(f"No content found for message {message_id}")
-            elif len(display_texts) == 1:
-                return display_texts[0]
-            else:
-                # Multiple parts - join with markdown separator
-                return "\n\n---\n\n".join(display_texts)
+            # Note: We don't raise an error if all display_texts are empty
+            # This can happen with non-text content like images
+            return display_texts
+    
 
     # Agent State Operations
 

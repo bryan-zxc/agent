@@ -346,7 +346,7 @@ async def handle_message(
         f"DEBUG: files type: {type(files)}, length: {len(files) if files else 'None'}"
     )
 
-    # Store user message
+    # Store user message - content is now always stored as-is
     await message_manager.add_message(role="user", content=user_message)
 
     try:
@@ -362,7 +362,9 @@ async def handle_message(
             # RAPID mode: Always use simple chat, skip assessment
             logger.info(f"RAPID mode: Using simple chat only")
             response = await handle_simple_chat(router_state=router_state)
+            # Store message - content is stored as-is in satellite tables
             await message_manager.add_message(role="assistant", content=response)
+            # For simple text responses, display_text is just the response string
             await send_assistant_message(
                 content=response, router_id=router_id, websocket=websocket
             )
@@ -433,10 +435,11 @@ async def handle_message(
                     # Use the already completed simple chat response
                     response = simple_chat_task.result()
                     logger.info(f"Response generated in router:\n{response}")
-                    # Store and send response for simple chat only
+                    # Store message - content is stored as-is in satellite tables
                     await message_manager.add_message(
                         role="assistant", content=response
                     )
+                    # For simple text responses, display_text is just the response string
                     await send_assistant_message(
                         content=response, router_id=router_id, websocket=websocket
                     )
@@ -529,7 +532,7 @@ async def assess_agent_requirements(router_state: Dict[str, Any]) -> RequireAgen
     return response
 
 
-async def planning_mode_response(router_state: Dict[str, Any], websocket: WebSocket):
+async def plamarination_response(router_state: Dict[str, Any], websocket: WebSocket):
     """
     Execute one iteration of plamarination (research/context gathering).
     Non-blocking - returns after single iteration, frontend orchestrates continuation.
@@ -554,9 +557,16 @@ async def planning_mode_response(router_state: Dict[str, Any], websocket: WebSoc
             payload={"router_id": router_id},  # For hook context
         )
         
-        # Extract content and store message (unified handling)
+        # Extract content
         content = response["content"] if isinstance(response, dict) else response
-        messages = await message_manager.add_message(role="assistant", content=content)
+        
+        # Store message and get display texts
+        result = await message_manager.add_message(
+            role="assistant", content=content, need_message_id=True
+        )
+        message_id = result["message_id"]
+        messages = result["messages"]
+        display_texts = result["display_texts"]
         
         # Determine continuation based on response type
         if isinstance(response, dict):
@@ -566,14 +576,28 @@ async def planning_mode_response(router_state: Dict[str, Any], websocket: WebSoc
             # Check for set_plan_and_answer
             if "agent_tools__set_plan_and_answer" in tool_calls:
                 # Hook handles approval flow and status update
+                # The hook will send the appropriate WebSocket messages
                 return
             
             # Other tools - must continue to process results
             continue_plamarination = True
             status = "plamarinating"
             
+            # Send each display text as a separate WebSocket message
+            for idx, text in enumerate(display_texts):
+                is_last = idx == len(display_texts) - 1
+                await websocket.send_json({
+                    "type": "assistant_message",
+                    "content": text,
+                    "message_id": message_id,
+                    "part_index": idx,
+                    "total_parts": len(display_texts),
+                    "continue_plamarination": is_last and continue_plamarination,
+                    "router_id": router_id,
+                })
+            
         else:
-            # No tools - need LLM decision
+            # No tools - simple text response (display_texts will have single entry)
             continuation = llm.get_response(
                 messages=messages,  # Use returned messages with latest context
                 model=settings.router_model,  # GPT-5-nano for fast decision
@@ -583,16 +607,17 @@ async def planning_mode_response(router_state: Dict[str, Any], websocket: WebSoc
             
             continue_plamarination = continuation.continue_research
             status = "plamarinating" if continue_plamarination else "plamarinating_awaiting_user"
+            
+            # Send single message (display_texts[0] is the text response)
+            await websocket.send_json({
+                "type": "assistant_message",
+                "content": display_texts[0] if display_texts else content,
+                "continue_plamarination": continue_plamarination,
+                "router_id": router_id,
+            })
         
-        # Update status and send response
+        # Update status
         await agent_db.update_router(router_id=router_id, status=status)
-        
-        await websocket.send_json({
-            "type": "assistant_message",
-            "content": content,
-            "continue_plamarination": continue_plamarination,
-            "router_id": router_id,
-        })
         
     except Exception as e:
         logger.error(f"Error in plamarination: {e}")
