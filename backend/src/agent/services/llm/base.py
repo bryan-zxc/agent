@@ -178,19 +178,3 @@ class BaseLLMProvider(ABC):
         """
         pass
 
-    def normalise_content_to_structured(self, content: Union[str, List]) -> List:
-        """
-        Convert content to structured list format for APIs that require it.
-
-        Args:
-            content: Either string or existing list of content blocks
-
-        Returns:
-            List of content blocks in structured format
-        """
-        if isinstance(content, str):
-            return [{"type": "text", "text": content}]
-        elif isinstance(content, list):
-            return content
-        else:
-            return [{"type": "text", "text": str(content)}]

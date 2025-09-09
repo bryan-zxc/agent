@@ -16,6 +16,7 @@ from google.genai.types import Tool, GenerateContentConfig, GoogleSearch, UrlCon
 
 from .base import BaseLLMProvider, RequestType, delay_exp
 from .usage_tracker import UsageTracker
+from ...utils.message_utils import append_user_content
 
 logger = logging.getLogger(__name__)
 
@@ -360,50 +361,6 @@ class AnthropicProvider(BaseLLMProvider):
         """Get actual Anthropic model name."""
         return self.MODELS.get(model, model)
 
-    def _convert_messages(self, messages: List[Dict]) -> List[Dict]:
-        """Convert OpenAI format messages to Anthropic format."""
-        anthropic_messages = []
-
-        for message in messages:
-            role = message.get("role")
-            content = message.get("content", "")
-
-            if role == "system":
-                # Skip system messages - should be passed separately
-                continue
-            elif role == "developer":
-                # Convert developer role to user role
-                anthropic_messages.append(
-                    {
-                        "role": "user",
-                        "content": self.normalise_content_to_structured(content),
-                    }
-                )
-            else:
-                anthropic_messages.append(
-                    {
-                        "role": role,
-                        "content": self.normalise_content_to_structured(content),
-                    }
-                )
-
-        # Merge consecutive messages with same role
-        return self._merge_consecutive_messages(anthropic_messages)
-
-    def _merge_consecutive_messages(self, messages: List[Dict]) -> List[Dict]:
-        """Merge consecutive messages with the same role."""
-        if not messages:
-            return messages
-
-        merged = []
-        for message in messages:
-            if not merged or merged[-1]["role"] != message["role"]:
-                merged.append(message.copy())
-            else:
-                # Extend content arrays
-                merged[-1]["content"].extend(message["content"])
-
-        return merged
 
     def text_response(
         self,
@@ -415,13 +372,12 @@ class AnthropicProvider(BaseLLMProvider):
         """Get text response from Anthropic."""
         try:
             actual_model = self.get_actual_model_name(model)
-            anthropic_messages = self._convert_messages(messages)
 
             kwargs = {
                 "model": actual_model,
                 "max_tokens": 4096,
                 "temperature": temperature,
-                "messages": anthropic_messages,
+                "messages": messages,
             }
 
             if system_instruction:
@@ -450,7 +406,6 @@ class AnthropicProvider(BaseLLMProvider):
         """Get structured response from Anthropic using prefill technique."""
         try:
             actual_model = self.get_actual_model_name(model)
-            anthropic_messages = self._convert_messages(messages)
 
             # Determine format type
             is_pydantic = isinstance(response_format, type) and issubclass(
@@ -467,13 +422,8 @@ class AnthropicProvider(BaseLLMProvider):
                 logger.error(f"Unsupported response_format: {response_format}")
                 return None
 
-            # Add format instruction
-            enhanced_messages = anthropic_messages + [
-                {
-                    "role": "user",
-                    "content": [{"type": "text", "text": format_instruction}],
-                }
-            ]
+            # Add format instruction using append_user_content helper
+            enhanced_messages = append_user_content(messages, format_instruction)
 
             for attempt in range(MAX_LLM_RETRIES):
                 kwargs = {
@@ -562,7 +512,6 @@ class AnthropicProvider(BaseLLMProvider):
         """
         try:
             actual_model = self.get_actual_model_name(model)
-            anthropic_messages = self._convert_messages(messages)
 
             # Build complete tools list (MCP tools + web search if enabled)
             anthropic_tools = []
@@ -598,7 +547,7 @@ class AnthropicProvider(BaseLLMProvider):
                 "model": actual_model,
                 "max_tokens": 4096,
                 "temperature": temperature,
-                "messages": anthropic_messages,
+                "messages": messages,
             }
 
             if anthropic_tools:
@@ -854,7 +803,6 @@ class GoogleProvider(BaseLLMProvider):
         role_map = {
             "user": "user",
             "assistant": "model",
-            "developer": "user",
         }
 
         for message in messages:
