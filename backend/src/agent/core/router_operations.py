@@ -1074,16 +1074,21 @@ async def determine_file_groups(
             messages=[
                 {
                     "role": "user",
-                    "content": f"User question/request:\n\n{user_question}\n\nFiles: {', '.join(files)}",
-                },
-                {
-                    "role": "developer",
-                    "content": "Restructure the files to a list of groups of files that need to be processed one by one. "
-                    "By default, in case of doubt, there should only be one group with all the files in it. "
-                    "If the user's question indicates that they want to process files independently from each other, looking for one response per file (as opposed to a single response using all files), "
-                    "then by default, each group should contain only one file unless there is evidence to suggest otherwise. "
-                    "In the case where the user specifically instructs to repeatedly use a particular file (for example) when processing other files one by one, the groups should reflect that and have the file repeat across groups.",
-                },
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": f"User question/request:\n\n{user_question}\n\nFiles: {', '.join(files)}"
+                        },
+                        {
+                            "type": "text",
+                            "text": "Restructure the files to a list of groups of files that need to be processed one by one. "
+                            "By default, in case of doubt, there should only be one group with all the files in it. "
+                            "If the user's question indicates that they want to process files independently from each other, looking for one response per file (as opposed to a single response using all files), "
+                            "then by default, each group should contain only one file unless there is evidence to suggest otherwise. "
+                            "In the case where the user specifically instructs to repeatedly use a particular file (for example) when processing other files one by one, the groups should reflect that and have the file repeat across groups."
+                        }
+                    ]
+                }
             ],
             model=router_state["model"],
             temperature=0.0,

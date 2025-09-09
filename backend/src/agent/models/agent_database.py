@@ -39,7 +39,7 @@ class PlannerMessage(Base):
     agent_id = Column(String(32), nullable=False, index=True)  # UUID hex string
     role = Column(
         String(20), nullable=False
-    )  # 'user', 'assistant', 'system', 'developer'
+    )  # 'user', 'assistant'
     # content column REMOVED - now stored in PlannerMessageContent
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
@@ -53,7 +53,7 @@ class WorkerMessage(Base):
     )  # UUID hex string (task_id)
     role = Column(
         String(20), nullable=False
-    )  # 'user', 'assistant', 'system', 'developer'
+    )  # 'user', 'assistant'
     # content column REMOVED - now stored in WorkerMessageContent
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
@@ -590,7 +590,7 @@ class AgentDatabase:
         Args:
             agent_type: Type of agent ('planner', 'worker', 'router')
             agent_id: Agent identifier (router_id for router type)
-            role: Message role ('user', 'assistant', 'system', 'developer')
+            role: Message role ('user', 'assistant')
             content: Either a string or list of dictionaries
         
         Raises:

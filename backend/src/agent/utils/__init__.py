@@ -11,6 +11,7 @@ from .image_utils import (
     decode_image,
     get_img_breakdown,
 )
+from .message_utils import append_user_content
 from .sandbox import CodeSandbox
 
 __all__ = [
@@ -21,5 +22,6 @@ __all__ = [
     "get_text_and_table_json_from_image",
     "get_chart_readings_from_image",
     "is_serialisable",
+    "append_user_content",
     "CodeSandbox",
 ]

@@ -36,6 +36,7 @@ from ..utils.execution_plan_converter import (
     has_pending_tasks,
 )
 from ..utils.tools import encode_image
+from ..utils.message_utils import append_user_content
 from .file_manager import (
     save_planner_variable,
     save_planner_image,
@@ -580,7 +581,7 @@ async def execute_initial_planning(task_data: dict):
 
             # Get initial execution plan from LLM
             initial_plan = await llm.a_get_response(
-                messages=messages + [{"role": "developer", "content": plan_prompt}],
+                messages=append_user_content(messages, plan_prompt),
                 model=model,
                 temperature=temperature,
                 response_format=InitialExecutionPlan,
@@ -615,9 +616,7 @@ async def execute_initial_planning(task_data: dict):
                 "Keep the template as succinct and concise as possible."
             )
 
-            answer_template_messages = messages + [
-                {"role": "developer", "content": answer_template_prompt}
-            ]
+            answer_template_messages = append_user_content(messages, answer_template_prompt)
 
             answer_template_response = await llm.a_get_response(
                 messages=answer_template_messages,
@@ -709,43 +708,26 @@ async def execute_task_creation(task_data: dict):
             [f"# {name}\n{tool.__doc__}" for name, tool in TOOLS.items()]
         )
 
-        # Create task generation prompt (following PlannerAgent pattern)
-        appending_msgs = [
-            {
-                "role": "developer",
-                "content": f"You can use the following tools:\n\n{tools_text}",
-            }
-        ]
-
+        # Build context content as list of dictionaries
+        content = []
+        
+        # Add tools information
+        content.append({"type": "text", "text": f"You can use the following tools:\n\n{tools_text}"})
+        
         # Add image keys if available
         image_file_paths = planner_data.get("image_file_paths", {})
         if image_file_paths:
-            appending_msgs.append(
-                {
-                    "role": "developer",
-                    "content": f"The following image keys are available for use: {list(image_file_paths.keys())}",
-                }
-            )
-
+            content.append({"type": "text", "text": f"The following image keys are available for use: {list(image_file_paths.keys())}"})
+        
         # Add variable keys if available
         variable_file_paths = planner_data.get("variable_file_paths", {})
         if variable_file_paths:
-            appending_msgs.append(
-                {
-                    "role": "developer",
-                    "content": f"The following variable keys are available for use: {list(variable_file_paths.keys())}",
-                }
-            )
-
+            content.append({"type": "text", "text": f"The following variable keys are available for use: {list(variable_file_paths.keys())}"})
+        
         # Add today's date
         today_date = datetime.now().strftime("%d %b %Y")
-        appending_msgs.append(
-            {
-                "role": "developer",
-                "content": f"Today's date is {today_date}.\n\n",
-            }
-        )
-
+        content.append({"type": "text", "text": f"Today's date is {today_date}."})
+        
         # Add latest 10 task responses if available (worker context)
         task_responses = load_worker_message_history(planner_id)
         if task_responses:
@@ -753,24 +735,21 @@ async def execute_task_creation(task_data: dict):
             responses_content = "\n\n---\n\n".join(
                 [response.model_dump_json(indent=2) for response in latest_responses]
             )
-            appending_msgs.append(
-                {
-                    "role": "developer",
-                    "content": f"For additional context, the detailed outcomes of the previous {len(latest_responses)} tasks are as follows:\n\n{responses_content}",
-                }
-            )
-
-        appending_msgs.append(
-            {
-                "role": "developer",
-                "content": f"For context, your complete execution plan is: {planner_data['execution_plan']}\n"
-                f"The next todo item to be converted to a task is: {next_task.description}",
-            }
-        )
-
+            content.append({
+                "type": "text", 
+                "text": f"For additional context, the detailed outcomes of the previous {len(latest_responses)} tasks are as follows:\n\n{responses_content}"
+            })
+        
+        # Add execution plan and next task
+        content.append({
+            "type": "text",
+            "text": f"For context, your complete execution plan is: {planner_data['execution_plan']}\n"
+                   f"The next todo item to be converted to a task is: {next_task.description}"
+        })
+        
         # Generate task from LLM
         task = await llm.a_get_response(
-            messages=messages + appending_msgs,
+            messages=append_user_content(messages, content),
             model=planner_data["model"],
             temperature=planner_data["temperature"],
             response_format=Task,
@@ -832,22 +811,19 @@ async def _complete_planner_execution(
     final_wip_template = load_wip_answer_template(planner_id) or ""
     planner_messages = await db.get_messages(agent_type="planner", agent_id=planner_id)
 
-    # Filter to exclude system messages for final response generation
-    user_response_messages = [
-        msg for msg in planner_messages if msg.get("role") != "system"
-    ] + [
-        {
-            "role": "developer",
-            "content": "The current answer template to the user's original question is:"
-            f"```markdown\n{final_wip_template}\n```\n\n"
-            "Using only provided information without creating any new, complete the answer template to a state that will be seen by the user. "
-            "If there is missing information, simply explain that the information is not found in the provided context, do not try to fill it yourself. "
-            "Return only the markdown answer and nothing else, do not use the user's question as a title. Do not wrap the response in ```markdown ... ``` block. "
-            "Agressively use inline citation such that the citing references provided are used individually whenever possible as opposed to making multiple citings at the end. "
-            "Citations must not ever use information that is meaningless to the user such as task IDs. "
-            "It should be using web links, or file references including page numbers, table/illustration references, or data references. ",
-        }
-    ]
+    # Append the answer template context to planner messages
+    answer_template_context = (
+        "The current answer template to the user's original question is:"
+        f"```markdown\n{final_wip_template}\n```\n\n"
+        "Using only provided information without creating any new, complete the answer template to a state that will be seen by the user. "
+        "If there is missing information, simply explain that the information is not found in the provided context, do not try to fill it yourself. "
+        "Return only the markdown answer and nothing else, do not use the user's question as a title. Do not wrap the response in ```markdown ... ``` block. "
+        "Agressively use inline citation such that the citing references provided are used individually whenever possible as opposed to making multiple citings at the end. "
+        "Citations must not ever use information that is meaningless to the user such as task IDs. "
+        "It should be using web links, or file references including page numbers, table/illustration references, or data references. "
+    )
+    
+    user_response_messages = append_user_content(planner_messages, answer_template_context)
 
     # Generate final response using LLM
     response = await llm.a_get_response(
@@ -1000,23 +976,20 @@ async def execute_synthesis(task_data: dict):
                     planner_messages = await message_manager.get_messages()
 
                     # Create answer template update prompt (following planner.py pattern)
-                    template_update_messages = planner_messages + [
-                        {
-                            "role": "developer",
-                            "content": "The current answer template that will be filled to provide the final answer to the user's question is:\n\n"
-                            f"```markdown\n{current_answer_template}\n```\n\n"
-                            "The latest work in progress fill of the answer template is:\n\n"
-                            f"```markdown\n{current_wip_template}\n```\n\n"
-                            "Update the template if required and further fill the WIP answer with latest information available.\n"
-                            "IMPORTANT: the original template is typically created in absence of information, if the structure should change on discovery of information, do not be restrained by the starting template. "
-                            "If different concepts identified in the data that can answer the user's question as it wasn't specific enough, be eager to include all concepts consistently across the template "
-                            "(e.g. if differing concepts are found in one document, add the concepts to the answer template and make sure you look for the same differences in other documents too). ",
-                        }
-                    ]
+                    template_update_content = (
+                        "The current answer template that will be filled to provide the final answer to the user's question is:\n\n"
+                        f"```markdown\n{current_answer_template}\n```\n\n"
+                        "The latest work in progress fill of the answer template is:\n\n"
+                        f"```markdown\n{current_wip_template}\n```\n\n"
+                        "Update the template if required and further fill the WIP answer with latest information available.\n"
+                        "IMPORTANT: the original template is typically created in absence of information, if the structure should change on discovery of information, do not be restrained by the starting template. "
+                        "If different concepts identified in the data that can answer the user's question as it wasn't specific enough, be eager to include all concepts consistently across the template "
+                        "(e.g. if differing concepts are found in one document, add the concepts to the answer template and make sure you look for the same differences in other documents too). "
+                    )
 
                     # Get updated answer template from LLM
                     answer_template_response = await llm.a_get_response(
-                        messages=template_update_messages,
+                        messages=append_user_content(planner_messages, template_update_content),
                         model=planner_data["model"],
                         temperature=planner_data["temperature"],
                         response_format=AnswerTemplate,
@@ -1082,35 +1055,35 @@ async def execute_synthesis(task_data: dict):
                 )
 
                 # Update execution plan using LLM (simplified version)
-                update_messages = messages + [
+                update_content = [
                     {
-                        "role": "developer",
-                        "content": f"**Current open tasks from execution plan:**\n\n{open_todos_model.model_dump_json(indent=2)}\n\n"
-                        f"The latest answer template is:\n\n{updated_wip_template}\n\n"
-                        f"Instructions for reference:\n\n{planner_data.get('instruction', '')}",
+                        "type": "text",
+                        "text": f"**Current open tasks from execution plan:**\n\n{open_todos_model.model_dump_json(indent=2)}\n\n"
+                               f"The latest answer template is:\n\n{updated_wip_template}\n\n"
+                               f"Instructions for reference:\n\n{planner_data.get('instruction', '')}"
                     },
                     {
-                        "role": "developer",
-                        "content": f"Based on the completed task execution details above for task `{task_description}`, "
-                        f"please update the execution plan as follows:\n"
-                        "1. Update existing task descriptions using updated_description field if needed\n"
-                        "2. Add new tasks if required, marking them with '(new)' in the description field\n"
-                        "3. Leave next_action as False - separate logic will determine next action\n"
-                        "4. Mark unnecessary tasks as obsolete=True\n"
-                        "If the answer template suggests that calculations are required, "
-                        "and you haven't performed the corresponding calculation action, "
-                        "you must create a calculation task, "
-                        "or keep existing calculation task, "
-                        "even if the answer template autofilled the calculation outcome.\n"
-                        "Tasks will be executed strictly in order on the list, if a new task is created please place it in the position of when it is supposed to be executed, don't leave it to the end.\n"
-                        "Do not create tasks to formulate answer, as the answer is already being formulated progressively with the answer template. "
-                        "You can return an empty todo list there is no further work to be done (for example, the answer template is completely populated).",
-                    },
+                        "type": "text",
+                        "text": f"Based on the completed task execution details above for task `{task_description}`, "
+                               f"please update the execution plan as follows:\n"
+                               "1. Update existing task descriptions using updated_description field if needed\n"
+                               "2. Add new tasks if required, marking them with '(new)' in the description field\n"
+                               "3. Leave next_action as False - separate logic will determine next action\n"
+                               "4. Mark unnecessary tasks as obsolete=True\n"
+                               "If the answer template suggests that calculations are required, "
+                               "and you haven't performed the corresponding calculation action, "
+                               "you must create a calculation task, "
+                               "or keep existing calculation task, "
+                               "even if the answer template autofilled the calculation outcome.\n"
+                               "Tasks will be executed strictly in order on the list, if a new task is created please place it in the position of when it is supposed to be executed, don't leave it to the end.\n"
+                               "Do not create tasks to formulate answer, as the answer is already being formulated progressively with the answer template. "
+                               "You can return an empty todo list there is no further work to be done (for example, the answer template is completely populated)."
+                    }
                 ]
 
                 # Get LLM response
                 llm_updated_model = await llm.a_get_response(
-                    messages=update_messages,
+                    messages=append_user_content(messages, update_content),
                     model=planner_data["model"],
                     temperature=planner_data["temperature"],
                     response_format=ExecutionPlanModel,

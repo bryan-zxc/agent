@@ -67,13 +67,42 @@ class MessageManager:
         )
 
         if message_id is not None:
-            # Add to in-memory cache
-            message_dict = {"role": role, "content": content}
-            self._messages.append(message_dict)
-
-            logger.debug(
-                f"Added message (ID: {message_id}) to {self.agent_type} {self.agent_id}"
-            )
+            # Check if we should combine with last cached message
+            if self._messages and self._messages[-1]["role"] == role:
+                # Same role - database combined it, update last cached message
+                last_content = self._messages[-1]["content"]
+                
+                # Normalize new content to list format
+                if isinstance(content, str):
+                    new_content = [{"type": "text", "text": content}]
+                elif isinstance(content, dict):
+                    new_content = [content]
+                else:  # already a list
+                    new_content = content
+                
+                # Extend the last message's content
+                if isinstance(last_content, str):
+                    # Convert to list format
+                    self._messages[-1]["content"] = [
+                        {"type": "text", "text": last_content}
+                    ] + new_content
+                elif isinstance(last_content, list):
+                    last_content.extend(new_content)
+                else:
+                    # Single dict, convert to list
+                    self._messages[-1]["content"] = [last_content] + new_content
+                
+                logger.debug(
+                    f"Combined content with existing message (ID: {message_id}) for {self.agent_type} {self.agent_id}"
+                )
+            else:
+                # Different role - add as new message to cache
+                message_dict = {"role": role, "content": content}
+                self._messages.append(message_dict)
+                
+                logger.debug(
+                    f"Added new message (ID: {message_id}) to {self.agent_type} {self.agent_id}"
+                )
         else:
             logger.error(
                 f"Failed to add message to database for {self.agent_type} {self.agent_id}"

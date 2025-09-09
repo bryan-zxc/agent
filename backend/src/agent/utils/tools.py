@@ -397,8 +397,8 @@ def search_doc(question: str, criteria, doc):
        - If no additional information found: returns initial answer with unanswered questions
        - If images provided additional context: generates comprehensive final answer
     """
-    # Initialize message list for LLM conversation
-    messages = []
+    # Initialize content list for the user message
+    content = []
 
     # Phase 1: Filter and prepare document content based on search criteria
     if criteria.page_start:
@@ -410,34 +410,34 @@ def search_doc(question: str, criteria, doc):
                 and p.page_number <= criteria.page_end
             ):
                 # Exclude image data to reduce token usage in initial search
-                messages.append(
-                    {
-                        "role": "developer",
-                        "content": f"{p.model_dump_json(exclude="images", indent=2)}",
-                    }
-                )
+                content.append({
+                    "type": "text",
+                    "text": f"{p.model_dump_json(exclude="images", indent=2)}"
+                })
     else:
         # Search entire document if no page range specified
-        messages.append(
-            {
-                "role": "developer",
-                "content": f"{get_doc_json(doc, include_image=False)}",
-            }
-        )
+        content.append({
+            "type": "text",
+            "text": f"{get_doc_json(doc, include_image=False)}"
+        })
 
-    # Phase 2: Prepare search instructions and execute initial text-based search
-    extension_messages = [
-        {
-            "role": "developer",
-            "content": "Based completely on the above context, extract all the facts useful for providing a comprehensive answer to the user's question. "
-            "The facts will be presented as question answer pairs.",
-        },
-        {"role": "user", "content": question},
-    ]
+    # Phase 2: Add search instructions and user question
+    content.append({
+        "type": "text",
+        "text": "Based completely on the above context, extract all the facts useful for providing a comprehensive answer to the user's question. "
+        "The facts will be presented as question answer pairs."
+    })
+    content.append({
+        "type": "text",
+        "text": question
+    })
+    
+    # Build final messages list
+    messages = [{"role": "user", "content": content}]
     llm = LLM(caller="tools")
 
     response = llm.get_response(
-        messages=messages + extension_messages,
+        messages=messages,
         model="gemini-2.5-pro",
         response_format=QnAList,
     )

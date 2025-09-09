@@ -63,7 +63,7 @@ async def validate_worker_result(
     
     # Add validation message and get updated messages in one operation
     validation_messages = await message_manager.add_message(
-        role="developer",
+        role="user",
         content=f"Determine if the task is successfully completed based on the acceptance criteria:\n{acceptance_criteria}\n\n"
         "Note: if python code is generated, the acceptance criteria will also include needing a print statement at the end of the code (unless it is an image, in which case it should be stored as a PIL.Image object).",
     )
@@ -323,79 +323,80 @@ async def worker_initialisation(task_data: dict):
             instruction_type="default"
         )
 
-        # Set up initial messages for worker (following worker.py pattern lines 68-80)
-        # Add developer message with broader context (following worker.py pattern)
+        # Build complete content list for the user message
+        content = []
+        
+        # Add broader context
         wip_template = load_wip_answer_template(planner_id) or ""
-        await message_manager.add_message(
-            role="user",
-            content="Below is broader level context for your task:\n\n"
+        content.append({
+            "type": "text",
+            "text": "Below is broader level context for your task:\n\n"
             f"**Original user request:**\n\n{task.user_request}\n\n"
             f"**Work in progress answer template:**\n\n{wip_template}\n\n"
-            "This is not your goal for this task, make sure you stay focused on the task at hand.",
-        )
+            "This is not your goal for this task, make sure you stay focused on the task at hand."
+        })
 
         # Add input images if any
         if task.image_keys and planner_images:
             for image_key in task.image_keys:
                 if image_key in planner_images:
                     image = planner_images[image_key]
-                    # Create multimodal content for image
-                    content = [
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{image}"},
-                        }
-                    ]
+                    # Add image content
+                    content.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{image}"}
+                    })
+                    # Add image instructions
                     decoded_image = decode_image(image)
-                    content.append(
-                        {
-                            "type": "text",
-                            "text": f"The above image can be accessed via python using the following code to convert the image into PIL.Image object:\n"
-                            f"```python\nimport io\nimport base64\nImage.open(io.BytesIO(base64.b64decode({image_key})))\n```\n"
-                            f"Note 1: Do not assign {image_key} variable, assume it already exists in the environment.\n"
-                            f"Note 2: You must import io and base64 as part of the code.\n"
-                            f"The dimensions of the image is width = {decoded_image.width}, height = {decoded_image.height}. "
-                            "If image manipulation is required, use these dimensions to produce precise coordinates for cropping or combining charts.",
-                        }
-                    )
-                    await message_manager.add_message(role="user", content=content)
+                    content.append({
+                        "type": "text",
+                        "text": f"The above image can be accessed via python using the following code to convert the image into PIL.Image object:\n"
+                        f"```python\nimport io\nimport base64\nImage.open(io.BytesIO(base64.b64decode({image_key})))\n```\n"
+                        f"Note 1: Do not assign {image_key} variable, assume it already exists in the environment.\n"
+                        f"Note 2: You must import io and base64 as part of the code.\n"
+                        f"The dimensions of the image is width = {decoded_image.width}, height = {decoded_image.height}. "
+                        "If image manipulation is required, use these dimensions to produce precise coordinates for cropping or combining charts."
+                    })
 
         # Add input variables if any
         if task.variable_keys and planner_variables:
-            await message_manager.add_message(
-                role="developer",
-                content="The following variables are available for use, they already exist in the environment, "
-                f"you do not need to declare or create it: {', '.join(task.variable_keys)}",
-            )
+            content.append({
+                "type": "text",
+                "text": "The following variables are available for use, they already exist in the environment, "
+                f"you do not need to declare or create it: {', '.join(task.variable_keys)}"
+            })
             for variable_name in task.variable_keys:
                 if variable_name in planner_variables:
                     variable = planner_variables[variable_name]
-                    await message_manager.add_message(
-                        role="developer",
-                        content=f"# {variable_name}\nType: {type(variable)}\n\n"
+                    content.append({
+                        "type": "text",
+                        "text": f"# {variable_name}\nType: {type(variable)}\n\n"
                         f"Length of variable: {len(str(variable))}\n\n"
-                        f"Variable content (first 10000 characters)```\n{str(variable)[:10000]}\n```",
-                    )
+                        f"Variable content (first 10000 characters)```\n{str(variable)[:10000]}\n```"
+                    })
 
         # Add file paths if any
         if filepaths:
-            await message_manager.add_message(
-                role="developer",
-                content=f"The following PDF files are available for use: {', '.join(filepaths)}",
-            )
+            content.append({
+                "type": "text",
+                "text": f"The following PDF files are available for use: {', '.join(filepaths)}"
+            })
 
         # Add tools if any
         if task.tools:
             tools_text = "\n\n---\n\n".join(
                 [f"# {t}\n{TOOLS.get(t).__doc__}" for t in task.tools]
             )
-            await message_manager.add_message(
-                role="developer",
-                content=f"You may use the following function(s):\n\n{tools_text}\n\n"
+            content.append({
+                "type": "text",
+                "text": f"You may use the following function(s):\n\n{tools_text}\n\n"
                 "When using the function(s) you can assume that they already exists in the environment, "
                 "to use it, simply call the function with the required parameters. "
-                "You must use the function(s) where possible, do not ever try to perform the same action with other code.",
-            )
+                "You must use the function(s) where possible, do not ever try to perform the same action with other code."
+            })
+        
+        # Single add_message call with all content
+        await message_manager.add_message(role="user", content=content)
 
         logger.info(f"Set up initial messages for worker {worker_id}")
 
