@@ -542,10 +542,50 @@ class AgentDatabase:
 
     # Removed initialise_async() - now handled automatically in create()
 
+    async def _get_last_message(
+        self, agent_type: AgentType, agent_id: str
+    ) -> Optional[Any]:
+        """Get the most recent message for an agent.
+        
+        Args:
+            agent_type: Type of agent ('planner', 'worker', 'router')
+            agent_id: Agent identifier (router_id for router type)
+            
+        Returns:
+            The last message object or None if no messages exist
+        """
+        async with self.AsyncSessionLocal() as session:
+            if agent_type == "planner":
+                result = await session.execute(
+                    select(PlannerMessage)
+                    .where(PlannerMessage.agent_id == agent_id)
+                    .order_by(PlannerMessage.created_at.desc())
+                    .limit(1)
+                )
+            elif agent_type == "worker":
+                result = await session.execute(
+                    select(WorkerMessage)
+                    .where(WorkerMessage.agent_id == agent_id)
+                    .order_by(WorkerMessage.created_at.desc())
+                    .limit(1)
+                )
+            else:  # router
+                result = await session.execute(
+                    select(RouterMessage)
+                    .where(RouterMessage.router_id == agent_id)
+                    .order_by(RouterMessage.created_at.desc())
+                    .limit(1)
+                )
+            
+            return result.scalar_one_or_none()
+
     async def add_message(
         self, agent_type: AgentType, agent_id: str, role: str, content: Any
     ) -> Optional[int]:
-        """Add a message and its content to appropriate satellite table
+        """Add a message and its content to appropriate satellite table.
+        
+        If the last message has the same role, content will be appended to it
+        instead of creating a new message, ensuring alternating user/assistant pattern.
         
         Args:
             agent_type: Type of agent ('planner', 'worker', 'router')
@@ -555,7 +595,63 @@ class AgentDatabase:
         
         Raises:
             ValueError: If content is not string or list of dictionaries
+        
+        Returns:
+            Message ID (either new or existing if combined)
         """
+        # First check if we should combine with the last message
+        last_message = await self._get_last_message(agent_type, agent_id)
+        
+        # If last message has same role, append content to it
+        if last_message and last_message.role == role:
+            async with self.AsyncSessionLocal() as session:
+                # Determine the ContentClass based on agent type
+                if agent_type == "planner":
+                    ContentClass = PlannerMessageContent
+                elif agent_type == "worker":
+                    ContentClass = WorkerMessageContent
+                else:  # router
+                    ContentClass = RouterMessageContent
+                
+                # Add content to existing message's satellite table
+                if isinstance(content, str):
+                    # Single text content
+                    content_entry = ContentClass(
+                        message_id=last_message.id,
+                        content={"type": "text", "text": content},
+                        display_text=content
+                    )
+                    session.add(content_entry)
+                
+                elif isinstance(content, list):
+                    # Multiple content parts - must be list of dictionaries
+                    for part in content:
+                        if not isinstance(part, dict):
+                            raise ValueError(f"List content must contain dictionaries, got {type(part)}")
+                        
+                        content_entry = ContentClass(
+                            message_id=last_message.id,
+                            content=part,
+                            display_text=part.get("text", "")
+                        )
+                        session.add(content_entry)
+                
+                elif isinstance(content, dict):
+                    # Single dictionary content - wrap in list
+                    content_entry = ContentClass(
+                        message_id=last_message.id,
+                        content=content,
+                        display_text=content.get("text", "")
+                    )
+                    session.add(content_entry)
+                
+                else:
+                    raise ValueError(f"Content must be string, dict, or list of dictionaries, got {type(content)}")
+                
+                await session.commit()
+                return last_message.id  # Return existing message ID
+        
+        # Different role or no previous message - create new message
         async with self.AsyncSessionLocal() as session:
             # Create message record (no content column anymore)
             if agent_type == "planner":
@@ -595,8 +691,17 @@ class AgentDatabase:
                     )
                     session.add(content_entry)
             
+            elif isinstance(content, dict):
+                # Single dictionary content
+                content_entry = ContentClass(
+                    message_id=message.id,
+                    content=content,
+                    display_text=content.get("text", "")
+                )
+                session.add(content_entry)
+            
             else:
-                raise ValueError(f"Content must be string or list of dictionaries, got {type(content)}")
+                raise ValueError(f"Content must be string, dict, or list of dictionaries, got {type(content)}")
 
             await session.commit()
             return message.id
