@@ -127,6 +127,12 @@ class Router(Base):
     model = Column(String(100))  # LLM model used
     temperature = Column(Float)  # LLM temperature setting
     mode = Column(String(10), nullable=False, default="auto")  # auto, rapid, agent
+    agent_phase = Column(
+        String(20),
+        nullable=True,  # Null when not in agent mode
+        default=None,
+        comment="Phase when in agent mode: plamarination or execution",
+    )
     title = Column(String(255), nullable=False, default="New conversation")
     preview = Column(String(255), nullable=False, default="")
     agent_metadata = Column(JSON, default=lambda: {})  # Future extensibility
