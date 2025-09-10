@@ -667,10 +667,10 @@ async def get_usage_stats():
         from datetime import datetime, timedelta
         from sqlalchemy import create_engine, func
         from sqlalchemy.orm import sessionmaker
-        from src.agent.services.llm_service import LLMUsage, Base
+        from src.agent.models.agent_database import LLMUsage, Base
 
         # Database setup with WAL mode optimisations (same as LLM service)
-        db_path = Path("/app/db/llm_usage.db")
+        db_path = Path("/app/db/agent_database.db")
         engine = create_engine(
             f"sqlite:///{db_path}",
             connect_args={
