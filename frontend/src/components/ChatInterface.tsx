@@ -16,7 +16,7 @@ import { SidebarProvider, SidebarInset } from './ui/sidebar';
 import { fileUploadService, DuplicateFileInfo } from '../lib/fileUpload';
 
 export const ChatInterface: React.FC = () => {
-  const { messages, status, currentRouterId, currentMode, setMode, createNewConversation, setCurrentConversation, isConversationLocked } = useChatStore();
+  const { messages, status, currentRouterId, currentMode, currentPhase, phaseActive, setMode, setPhase, createNewConversation, setCurrentConversation, isConversationLocked } = useChatStore();
   console.log('ChatInterface render - currentRouterId:', currentRouterId);
   const [conversationStarted, setConversationStarted] = useState(false);
   const [, setPendingRouterId] = useState<string | null>(null);
@@ -34,7 +34,7 @@ export const ChatInterface: React.FC = () => {
   });
   
   // Use single persistent WebSocket connection
-  const { sendMessage, loadConversation, updateMode, isConnected: wsConnected, isWebSocketOpen } = useWebSocket();
+  const { sendMessage, loadConversation, updateMode, updatePhase, isConnected: wsConnected, isWebSocketOpen } = useWebSocket();
 
   const waitForWebSocketConnection = (): Promise<void> => {
     return new Promise((resolve, reject) => {
@@ -114,7 +114,7 @@ export const ChatInterface: React.FC = () => {
 
       // Send first message via WebSocket with no router_id - backend will create router
       console.log('Sending first message via WebSocket...');
-      sendMessage(message, filePaths, null); // null router_id for new conversation
+      sendMessage(message, filePaths, undefined); // undefined router_id for new conversation
       
       // Trigger sidebar refresh to show new conversation
       setRefreshTrigger(prev => prev + 1);
@@ -254,6 +254,15 @@ export const ChatInterface: React.FC = () => {
                         updateMode(mode, currentRouterId);
                       }
                     }}
+                    phase={currentPhase}
+                    onPhaseChange={(phase) => {
+                      setPhase(phase);
+                      // Update phase in backend for existing conversations
+                      if (currentRouterId) {
+                        updatePhase(phase, currentRouterId);
+                      }
+                    }}
+                    phaseActive={phaseActive}
                   />
                 </div>
               </div>

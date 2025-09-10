@@ -17,7 +17,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   onDuplicateFound,
   isConnected,
 }) => {
-  const { currentRouterId, currentMode, setMode, isConversationLocked } = useChatStore();
+  const { currentRouterId, currentMode, currentPhase, phaseActive, setMode, setPhase, isConversationLocked } = useChatStore();
   
   console.log('LandingPage: Rendering with mode:', currentMode);
   
@@ -58,6 +58,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               placeholder={isConversationLocked(currentRouterId) ? "Processing... Please wait" : "Type your message to start a conversation..."}
               mode={currentMode}
               onModeChange={handleModeChange}
+              phase={currentPhase}
+              onPhaseChange={setPhase}
+              phaseActive={phaseActive}
             />
           </div>
         </div>

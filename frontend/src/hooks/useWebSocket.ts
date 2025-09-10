@@ -154,6 +154,13 @@ export const useWebSocket = (url?: string) => {
               }
               break;
               
+            case 'phase_updated':
+              if (data.agent_phase !== undefined) {
+                store.setPhase(data.agent_phase);
+                console.log('Phase updated to:', data.agent_phase);
+              }
+              break;
+              
             // execution_plan_update case removed - now using frontend polling instead
               
             default:
@@ -337,11 +344,30 @@ export const useWebSocket = (url?: string) => {
     }
   }, []);
 
+  const updatePhase = useCallback((phase: 'plamarination' | 'execution', routerId?: string) => {
+    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+      const { currentRouterId } = useChatStore.getState();
+      const targetRouterId = routerId || currentRouterId;
+      
+      if (targetRouterId) {
+        const payload = {
+          type: 'update_phase',
+          router_id: targetRouterId,
+          agent_phase: phase,
+        };
+        
+        console.log('Updating router phase via WebSocket:', payload);
+        ws.current.send(JSON.stringify(payload));
+      }
+    }
+  }, []);
+
   return {
     sendMessage,
     loadConversation,
     disconnect,
     updateMode,
+    updatePhase,
     isConnected: ws.current?.readyState === WebSocket.OPEN,
     isWebSocketOpen,
   };

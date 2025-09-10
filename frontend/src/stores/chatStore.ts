@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { ChatMessage, AgentStatus } from '../../../shared/types';
 
 export type RouterMode = 'auto' | 'rapid' | 'agent';
+export type AgentPhase = 'plamarination' | 'execution' | null;
 
 interface Conversation {
   id: string;
@@ -18,6 +19,8 @@ interface ChatStore {
   temperature: number;
   currentRouterId: string;
   currentMode: RouterMode;
+  currentPhase: AgentPhase;
+  phaseActive: boolean; // For visual indicators when processing
   conversations: Conversation[];
   lockedConversations: Set<string>;
   
@@ -28,6 +31,8 @@ interface ChatStore {
   setConnecting: (connecting: boolean) => void;
   setTemperature: (temperature: number) => void;
   setMode: (mode: RouterMode) => void;
+  setPhase: (phase: AgentPhase) => void;
+  setPhaseActive: (active: boolean) => void;
   clearMessages: () => void;
   setCurrentConversation: (routerId: string) => void;
   setConversations: (conversations: Conversation[]) => void;
@@ -47,6 +52,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   temperature: 0.7,
   currentRouterId: '', // Start with empty router_id - backend will provide one
   currentMode: 'auto', // Default to auto mode
+  currentPhase: null, // Phase defaults to null - only set when in agent mode
+  phaseActive: false, // Not processing initially
   conversations: [],
   lockedConversations: new Set(),
   
@@ -70,8 +77,25 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   setMode: (mode) => 
     set((state) => {
       console.log('ChatStore: setMode changing from', state.currentMode, 'to', mode);
-      return { currentMode: mode };
+      // When switching to agent mode, set phase to 'plamarination'
+      // When switching away from agent mode, clear phase to null
+      let newPhase = state.currentPhase;
+      if (mode === 'agent' && state.currentMode !== 'agent') {
+        newPhase = 'plamarination';
+      } else if (mode !== 'agent') {
+        newPhase = null;
+      }
+      return { currentMode: mode, currentPhase: newPhase };
     }),
+    
+  setPhase: (phase) => 
+    set((state) => {
+      console.log('ChatStore: setPhase changing from', state.currentPhase, 'to', phase);
+      return { currentPhase: phase };
+    }),
+    
+  setPhaseActive: (active) =>
+    set({ phaseActive: active }),
     
   clearMessages: () =>
     set({ messages: [] }),

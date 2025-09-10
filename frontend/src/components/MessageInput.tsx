@@ -4,6 +4,7 @@ import { useState, useRef, KeyboardEvent } from 'react';
 import { cn } from '@/lib/utils';
 import { FileAttachment } from './FileAttachment';
 import { ModeToggle, RouterMode } from './ModeToggle';
+import { PhaseToggle, AgentPhase } from './PhaseToggle';
 import { Button } from './ui/button';
 import { Textarea } from './ui/textarea';
 import { Send, Paperclip } from 'lucide-react';
@@ -17,6 +18,9 @@ interface MessageInputProps {
   placeholder?: string;
   mode: RouterMode;
   onModeChange: (mode: RouterMode) => void;
+  phase: AgentPhase;
+  onPhaseChange: (phase: 'plamarination' | 'execution') => void;
+  phaseActive?: boolean;
 }
 
 export const MessageInput: React.FC<MessageInputProps> = ({
@@ -26,7 +30,10 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   className,
   placeholder = "Type your message... (Enter to send, Shift+Enter for new line)",
   mode,
-  onModeChange
+  onModeChange,
+  phase,
+  onPhaseChange,
+  phaseActive = false
 }) => {
   console.log('MessageInput: Rendering with mode:', mode);
   
@@ -98,14 +105,21 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       )}
       role="contentinfo"
     >
-      {/* Mode toggle - show above input area */}
-      <div className="flex items-center justify-between mb-3">
-        <ModeToggle
-          mode={mode}
-          onModeChange={handleModeChange}
-          disabled={disabled}
-          className="ml-auto"
-        />
+      {/* Mode and Phase toggles - show above input area */}
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <div className="flex items-center gap-3 ml-auto">
+          <ModeToggle
+            mode={mode}
+            onModeChange={handleModeChange}
+            disabled={disabled}
+          />
+          <PhaseToggle
+            phase={phase}
+            onPhaseChange={onPhaseChange}
+            disabled={disabled}
+            isActive={phaseActive}
+          />
+        </div>
       </div>
       
       <form onSubmit={handleSubmit} className={cn(selectedFiles.length > 0 ? "space-y-3" : "")}>
