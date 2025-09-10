@@ -69,6 +69,7 @@ When ready to finalise:
 - This will present the plan to the user for approval
 - Include clear structure and reasoning in your plan
 - This tool MUST be used to finalise, do not simply present the plan in text to the user without using this tool
+- Do not call this tool until the end when you are fully ready to present the plan for approval
 
 Important:
 - Acknowledge user messages immediately if they appear during your work
