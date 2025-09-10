@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { ChatMessage, AgentStatus } from '../../../shared/types';
+import { ChatMessage, AgentStatus, ApprovalRequest, PlamarinationStatus } from '../../../shared/types';
 
 export type RouterMode = 'auto' | 'rapid' | 'agent';
 export type AgentPhase = 'plamarination' | 'execution' | null;
@@ -24,6 +24,10 @@ interface ChatStore {
   conversations: Conversation[];
   lockedConversations: Set<string>;
   
+  // Approval state
+  pendingApproval: ApprovalRequest | null;
+  plamarinationStatus: PlamarinationStatus;
+  
   // Actions
   addMessage: (message: ChatMessage) => void;
   updateStatus: (status: AgentStatus) => void;
@@ -41,6 +45,10 @@ interface ChatStore {
   lockConversation: (routerId: string) => void;
   unlockConversation: (routerId: string) => void;
   isConversationLocked: (routerId: string) => boolean;
+  
+  // Approval actions
+  setPendingApproval: (approval: ApprovalRequest | null) => void;
+  setPlamarinationStatus: (status: PlamarinationStatus) => void;
 }
 
 
@@ -56,6 +64,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   phaseActive: false, // Not processing initially
   conversations: [],
   lockedConversations: new Set(),
+  
+  // Approval state
+  pendingApproval: null,
+  plamarinationStatus: null,
   
   addMessage: (message) =>
     set((state) => ({
@@ -136,5 +148,12 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     
   isConversationLocked: (routerId) =>
     get().lockedConversations.has(routerId),
+  
+  // Approval actions
+  setPendingApproval: (approval) =>
+    set({ pendingApproval: approval }),
+    
+  setPlamarinationStatus: (status) =>
+    set({ plamarinationStatus: status }),
     
 }));

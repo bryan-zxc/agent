@@ -11,7 +11,7 @@ export interface ChatMessage {
 }
 
 export interface WebSocketMessage {
-  type: 'message' | 'status' | 'response' | 'error' | 'message_history' | 'load_router';
+  type: 'message' | 'status' | 'response' | 'error' | 'message_history' | 'load_router' | 'approval_request' | 'approval_response' | 'plamarination_status';
   data: any;
   timestamp?: Date;
 }
@@ -44,3 +44,19 @@ export interface PlannerInfo {
   planner_name?: string | null;
   user_question?: string | null;
 }
+
+export interface ApprovalRequest {
+  request_id: string;
+  plan: string;
+  template?: string;
+  findings?: string;
+  router_id: string;
+}
+
+export interface ApprovalResponse {
+  request_id: string;
+  approved: boolean;
+  feedback?: string;
+}
+
+export type PlamarinationStatus = 'planning' | 'waiting_approval' | 'revising' | 'approved' | null;

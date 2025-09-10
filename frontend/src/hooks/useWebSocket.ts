@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useChatStore } from '../stores/chatStore';
-import { ChatMessage } from '../../../shared/types';
+import { ChatMessage, ApprovalRequest } from '../../../shared/types';
 
 export const useWebSocket = (url?: string) => {
   const wsUrl = url || `${process.env.NEXT_PUBLIC_WS_URL}/chat`;
@@ -159,6 +159,44 @@ export const useWebSocket = (url?: string) => {
                 store.setPhase(data.agent_phase);
                 console.log('Phase updated to:', data.agent_phase);
               }
+              break;
+              
+            case 'approval_request':
+              // Handle plamarination approval requests
+              const approvalRequest: ApprovalRequest = {
+                request_id: data.request_id,
+                plan: data.plan,
+                template: data.template,
+                findings: data.findings,
+                router_id: data.router_id,
+              };
+              store.setPendingApproval(approvalRequest);
+              store.setPlamarinationStatus('waiting_approval');
+              console.log('Approval request received:', approvalRequest.request_id);
+              break;
+              
+            case 'approval_response':
+              // Clear pending approval when response is processed
+              if (data.approved) {
+                store.setPlamarinationStatus('approved');
+                console.log('Plan approved, proceeding to execution');
+              } else {
+                store.setPlamarinationStatus('revising');
+                console.log('Plan revision requested');
+              }
+              // Clear the pending approval after a brief delay to show status
+              setTimeout(() => {
+                store.setPendingApproval(null);
+                if (data.approved) {
+                  store.setPlamarinationStatus(null); // Clear status when moving to execution
+                }
+              }, 2000);
+              break;
+              
+            case 'plamarination_status':
+              // Handle plamarination status updates
+              store.setPlamarinationStatus(data.status);
+              console.log('Plamarination status updated:', data.status);
               break;
               
             // execution_plan_update case removed - now using frontend polling instead
@@ -362,12 +400,29 @@ export const useWebSocket = (url?: string) => {
     }
   }, []);
 
+  const sendApprovalResponse = useCallback((requestId: string, approved: boolean, feedback?: string) => {
+    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+      const payload = {
+        type: 'approval_response',
+        request_id: requestId,
+        approved,
+        feedback,
+      };
+      
+      console.log('Sending approval response via WebSocket:', payload);
+      ws.current.send(JSON.stringify(payload));
+    } else {
+      console.error('WebSocket is not connected for sending approval response');
+    }
+  }, []);
+
   return {
     sendMessage,
     loadConversation,
     disconnect,
     updateMode,
     updatePhase,
+    sendApprovalResponse,
     isConnected: ws.current?.readyState === WebSocket.OPEN,
     isWebSocketOpen,
   };

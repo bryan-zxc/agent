@@ -11,12 +11,14 @@ import { LandingPage } from './LandingPage';
 import { ErrorBoundary } from './ErrorBoundary';
 import { RightPanel } from './RightPanel';
 import { DuplicateFileDialog } from './DuplicateFileDialog';
+import { PlanApprovalCard } from './PlanApprovalCard';
+import { PlamarinationStatus } from './PlamarinationStatus';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from './ui/resizable';
 import { SidebarProvider, SidebarInset } from './ui/sidebar';
 import { fileUploadService, DuplicateFileInfo } from '../lib/fileUpload';
 
 export const ChatInterface: React.FC = () => {
-  const { messages, status, currentRouterId, currentMode, currentPhase, phaseActive, setMode, setPhase, createNewConversation, setCurrentConversation, isConversationLocked } = useChatStore();
+  const { messages, status, currentRouterId, currentMode, currentPhase, phaseActive, setMode, setPhase, createNewConversation, setCurrentConversation, isConversationLocked, pendingApproval, plamarinationStatus } = useChatStore();
   console.log('ChatInterface render - currentRouterId:', currentRouterId);
   const [conversationStarted, setConversationStarted] = useState(false);
   const [, setPendingRouterId] = useState<string | null>(null);
@@ -34,7 +36,7 @@ export const ChatInterface: React.FC = () => {
   });
   
   // Use single persistent WebSocket connection
-  const { sendMessage, loadConversation, updateMode, updatePhase, isConnected: wsConnected, isWebSocketOpen } = useWebSocket();
+  const { sendMessage, loadConversation, updateMode, updatePhase, sendApprovalResponse, isConnected: wsConnected, isWebSocketOpen } = useWebSocket();
 
   const waitForWebSocketConnection = (): Promise<void> => {
     return new Promise((resolve, reject) => {
@@ -162,6 +164,22 @@ export const ChatInterface: React.FC = () => {
     }
   };
 
+  const handleApprovalApprove = async (requestId: string) => {
+    try {
+      await sendApprovalResponse(requestId, true);
+    } catch (error) {
+      console.error('Error approving plan:', error);
+    }
+  };
+
+  const handleApprovalRevise = async (requestId: string, feedback: string) => {
+    try {
+      await sendApprovalResponse(requestId, false, feedback);
+    } catch (error) {
+      console.error('Error requesting plan revision:', error);
+    }
+  };
+
   // Show landing page if conversation hasn't started
   if (!conversationStarted) {
     return (
@@ -192,6 +210,27 @@ export const ChatInterface: React.FC = () => {
                 <RightPanel />
               </ResizablePanel>
             </ResizablePanelGroup>
+            
+            {/* Approval UI Components */}
+            <PlamarinationStatus status={plamarinationStatus} />
+            
+            {/* Plan Approval Card */}
+            {pendingApproval && (
+              <div className="fixed inset-0 bg-black/20 dark:bg-black/40 backdrop-blur-sm z-40 flex items-centre justify-centre p-4">
+                <div className="w-full max-w-4xl max-h-[80vh] overflow-y-auto">
+                  <PlanApprovalCard
+                    data={{
+                      plan: pendingApproval.plan,
+                      template: pendingApproval.template,
+                      findings: pendingApproval.findings,
+                      requestId: pendingApproval.request_id,
+                    }}
+                    onApprove={handleApprovalApprove}
+                    onRevise={handleApprovalRevise}
+                  />
+                </div>
+              </div>
+            )}
             
             {/* Duplicate File Dialog */}
             {duplicateDialog.open && duplicateDialog.duplicateInfo && duplicateDialog.duplicateInfo.existing_file && (
@@ -276,6 +315,27 @@ export const ChatInterface: React.FC = () => {
               <RightPanel />
             </ResizablePanel>
           </ResizablePanelGroup>
+          
+          {/* Approval UI Components */}
+          <PlamarinationStatus status={plamarinationStatus} />
+          
+          {/* Plan Approval Card */}
+          {pendingApproval && (
+            <div className="fixed inset-0 bg-black/20 dark:bg-black/40 backdrop-blur-sm z-40 flex items-centre justify-centre p-4">
+              <div className="w-full max-w-4xl max-h-[80vh] overflow-y-auto">
+                <PlanApprovalCard
+                  data={{
+                    plan: pendingApproval.plan,
+                    template: pendingApproval.template,
+                    findings: pendingApproval.findings,
+                    requestId: pendingApproval.request_id,
+                  }}
+                  onApprove={handleApprovalApprove}
+                  onRevise={handleApprovalRevise}
+                />
+              </div>
+            </div>
+          )}
           
           {/* Duplicate File Dialog */}
           {duplicateDialog.open && duplicateDialog.duplicateInfo && duplicateDialog.duplicateInfo.existing_file && (
