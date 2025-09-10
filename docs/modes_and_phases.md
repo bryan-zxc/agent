@@ -122,22 +122,23 @@ router_state = {
 
 ### Message Routing Logic
 
-The `handle_message` function routes based on mode and phase:
+The `handle_message` function routes based on **status first**, then mode and phase:
 
-1. **Check router mode**:
-   - `rapid` → Always simple chat
-   - `agent` → Check agent_phase
-     - `plamarination` → Start planning_mode_response
-     - `execution` → Start handle_complex_request
-   - `auto` → Assess complexity
-     - Simple → Simple chat
-     - Complex → Start planning_mode_response
-
-2. **Check router status** (for continuation):
-   - `plamarinating` → Continue planning_mode_response
+1. **Check router status** (prevents double-triggering):
+   - `plamarinating` → Return immediately (no trigger - auto-continuation already running)
    - `plamarinating_awaiting_user` → Process user input, continue planning
    - `awaiting_approval` → Handle approval/rejection
    - `executing` → Execution in progress, no new messages
+   - `active` → Check mode for new request routing
+
+2. **When status is active, check router mode**:
+   - `rapid` → Always simple chat
+   - `agent` → **INVALID STATE** - Raises error (agent mode should never have active status)
+   - `auto` → Assess complexity
+     - Simple → Simple chat
+     - Complex → Start plamarination_response
+
+**Important**: Agent mode is activated through mode/phase toggles which immediately set status and trigger actions. The router never naturally reaches `active` status in agent mode.
 
 ### User Interface
 
@@ -156,7 +157,7 @@ Phase: [Plamarination] [Execution]
 
 The Router table includes:
 - `mode`: String(10) - "auto", "rapid", or "agent"
-- `agent_phase`: String(20) - "plamarination" or "execution" (nullable, only set in agent mode)
+- `agent_phase`: String(20) - "plamarination" or "execution" (NULL by default, only set when agent mode is active)
 - `status`: String(50) - Current processing status
 
 ## Decision Guidelines
@@ -214,6 +215,33 @@ The Router table includes:
   "agent_phase": "plamarination|execution"  // Only if mode="agent"
 }
 ```
+
+**Mode Toggle Behaviour**:
+- Switching to `agent` mode immediately:
+  - Sets `agent_phase` to "plamarination" (default)
+  - Sets `status` to "plamarinating"
+  - Triggers `plamarination_response()` to start planning
+- Switching from `agent` to other modes:
+  - Clears `agent_phase` (sets to NULL)
+  - Sets `status` to "active"
+  - Ready for normal message processing
+
+### Phase Changes (Agent Mode Only)
+```json
+{
+  "type": "update_phase",
+  "router_id": "uuid",
+  "agent_phase": "plamarination|execution"
+}
+```
+
+**Phase Toggle Behaviour**:
+- Switching to `plamarination` phase:
+  - Sets `status` to "plamarinating"
+  - Triggers `plamarination_response()` immediately
+- Switching to `execution` phase:
+  - Sets `status` to "executing"
+  - Triggers `handle_complex_request()` immediately
 
 ### Status Updates
 ```json
@@ -276,6 +304,36 @@ When approved:
 - No further user interaction needed until completion
 
 **Note**: The planner/worker entry point will be redesigned in future iterations.
+
+## Double-Triggering Prevention
+
+The system prevents double-triggering of plamarination through status-based routing:
+
+### Three Types of Plamarination Triggers
+
+1. **Auto-continuation** (Frontend-triggered):
+   - Frontend sends `continue_plamarination: true` in status update
+   - Backend continues existing plamarination chain
+   - No user message involved
+
+2. **Proactive User Input** (No trigger):
+   - User sends message while `status="plamarinating"`
+   - `handle_message` returns immediately without triggering
+   - Message is added to chain, picked up by ongoing plamarination
+   - No duplicate processing occurs
+
+3. **Required User Response** (User-triggered):
+   - Status is `"plamarinating_awaiting_user"`
+   - User input triggers continuation of plamarination
+   - Processes user's response and continues planning
+
+### Key Implementation Details
+
+- `handle_message` **always checks status first** before mode/phase
+- When `status="plamarinating"`, function returns immediately
+- Mode/phase toggles are **active state changes** that set status and trigger immediately
+- Agent mode **never has `active` status** - it's always in a processing state
+- Invalid states (e.g., agent mode with active status) **raise errors** instead of silent recovery
 
 ## Testing Scenarios
 
