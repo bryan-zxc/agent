@@ -823,16 +823,21 @@ async def send_error(error: str, router_id: str, websocket: WebSocket):
 async def send_message_history(router_state: Dict[str, Any], websocket: WebSocket):
     """Send message history to frontend on connect"""
     if websocket:
-        message_manager = router_state["message_manager"]
-        messages = await message_manager.get_messages()
-        # Only send non-system messages
-        router_messages = [msg for msg in messages if msg.get("role") != "system"]
+        # Use the new display-specific method for frontend
+        agent_db = router_state["agent_db"]
+        router_id = router_state["id"]
+        
+        # Get messages formatted for display (with display_text, filtered)
+        display_messages = await agent_db.get_messages_for_display(
+            agent_type="router", agent_id=router_id
+        )
+        
         try:
             await websocket.send_json(
                 {
                     "type": "message_history",
-                    "messages": router_messages,
-                    "router_id": router_state["id"],
+                    "messages": display_messages,
+                    "router_id": router_id,
                 }
             )
         except RuntimeError as e:

@@ -751,6 +751,60 @@ class AgentDatabase:
             
             return message_list
 
+    async def get_messages_for_display(
+        self, agent_type: AgentType, agent_id: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieve messages formatted for frontend display.
+        Returns messages with display_text for each content part.
+        Empty or blank display_text entries are filtered out completely.
+        """
+        async with self.AsyncSessionLocal() as session:
+            # Select appropriate tables based on agent type
+            if agent_type == "planner":
+                MessageClass = PlannerMessage
+                ContentClass = PlannerMessageContent
+                query = select(MessageClass).where(MessageClass.agent_id == agent_id)
+            elif agent_type == "worker":
+                MessageClass = WorkerMessage
+                ContentClass = WorkerMessageContent
+                query = select(MessageClass).where(MessageClass.agent_id == agent_id)
+            else:  # router
+                MessageClass = RouterMessage
+                ContentClass = RouterMessageContent
+                query = select(MessageClass).where(MessageClass.router_id == agent_id)
+            
+            # Get messages ordered by creation time
+            result = await session.execute(query.order_by(MessageClass.created_at))
+            messages = result.scalars().all()
+            
+            # Build message list formatted for display
+            display_messages = []
+            for msg in messages:
+                # Get content parts from satellite table
+                content_result = await session.execute(
+                    select(ContentClass)
+                    .where(ContentClass.message_id == msg.id)
+                    .order_by(ContentClass.id)  # Order by ID to maintain insertion order
+                )
+                content_parts = content_result.scalars().all()
+                
+                if len(content_parts) == 0:
+                    continue  # Skip messages with no content
+                
+                # Return each content part with its display_text
+                # Frontend will render each as a separate message
+                # Filter out empty or blank display_text
+                for part in content_parts:
+                    if part.display_text and part.display_text.strip():
+                        display_messages.append({
+                            "role": msg.role,
+                            "content": part.display_text,  # Use display_text as content for frontend
+                            "message_id": msg.id
+                        })
+            
+            return display_messages
+
     async def clear_messages(self, agent_type: AgentType, agent_id: str) -> None:
         """Clear all messages and their content for an agent"""
         async with self.AsyncSessionLocal() as session:

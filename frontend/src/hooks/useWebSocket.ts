@@ -123,7 +123,6 @@ export const useWebSocket = (url?: string) => {
             case 'message_history':
               // Handle message history for specific router
               const historyMessages = data.messages
-                .filter((msg: {role: string; content: string; message_id?: number}) => msg.role !== 'system')
                 .map((msg: {role: string; content: string; message_id?: number}, index: number) => ({
                   id: index.toString(),
                   message: msg.content,
