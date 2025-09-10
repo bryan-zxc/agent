@@ -381,8 +381,8 @@ async def handle_message(
     message_manager = router_state["message_manager"]
     agent_db = router_state["agent_db"]
 
-    # Lock input immediately
-    await send_input_lock(router_id=router_id, agent_db=agent_db, websocket=websocket)
+    # Input locking temporarily disabled - tracked in separate ticket
+    # await send_input_lock(router_id=router_id, agent_db=agent_db, websocket=websocket)
 
     # Get current router state from database
     router_record = await agent_db.get_router(router_id)
@@ -558,10 +558,11 @@ async def handle_message(
             error=f"Error: {str(e)}", router_id=router_id, websocket=websocket
         )
     finally:
-        # Always unlock input at the end
-        await send_input_unlock(
-            router_id=router_id, agent_db=agent_db, websocket=websocket
-        )
+        # Input unlocking temporarily disabled - tracked in separate ticket
+        # await send_input_unlock(
+        #     router_id=router_id, agent_db=agent_db, websocket=websocket
+        # )
+        pass
 
 
 async def handle_simple_chat(router_state: Dict[str, Any]) -> str:
