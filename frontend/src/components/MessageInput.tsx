@@ -113,12 +113,14 @@ export const MessageInput: React.FC<MessageInputProps> = ({
             onModeChange={handleModeChange}
             disabled={disabled}
           />
-          <PhaseToggle
-            phase={phase}
-            onPhaseChange={onPhaseChange}
-            disabled={disabled}
-            isActive={phaseActive}
-          />
+          {mode === 'agent' && (
+            <PhaseToggle
+              phase={phase}
+              onPhaseChange={onPhaseChange}
+              disabled={disabled}
+              isActive={phaseActive}
+            />
+          )}
         </div>
       </div>
       

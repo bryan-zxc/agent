@@ -501,11 +501,30 @@ async def handle_message(
                 # Check if we should activate agent mode
                 if files or await should_activate_agent_mode(router_state):
                     # Complex request - start plamarination
-                    logger.info(f"AUTO mode: Complexity detected, starting plamarination")
+                    logger.info(f"AUTO mode: Complexity detected, switching to agent mode and starting plamarination")
+                    
+                    # Update router to agent mode with plamarination phase
                     await agent_db.update_router(
                         router_id=router_id,
+                        mode="agent",
+                        agent_phase="plamarination",
                         status="plamarinating"
                     )
+                    
+                    # Notify frontend of mode change
+                    await websocket.send_json({
+                        "type": "mode_updated",
+                        "mode": "agent",
+                        "router_id": router_id
+                    })
+                    
+                    # Notify frontend of phase change
+                    await websocket.send_json({
+                        "type": "phase_updated",
+                        "agent_phase": "plamarination",
+                        "router_id": router_id
+                    })
+                    
                     await plamarination_response(router_state, websocket)
                 else:
                     # Simple request - use simple chat
