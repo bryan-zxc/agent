@@ -633,6 +633,9 @@ async def plamarination_response(router_state: Dict[str, Any], websocket: WebSoc
     agent_db = router_state["agent_db"]
     llm = router_state["llm"]
     
+    # Send thinking status for continuation calls (first entry already has it from handle_message)
+    await send_status(status="Thinking", router_id=router_id, websocket=websocket)
+    
     messages = await message_manager.get_messages()
     
     try:
@@ -676,14 +679,10 @@ async def plamarination_response(router_state: Dict[str, Any], websocket: WebSoc
             
             # Send each display text as a separate WebSocket message
             for idx, text in enumerate(display_texts):
-                is_last = idx == len(display_texts) - 1
                 await websocket.send_json({
-                    "type": "assistant_message",
-                    "content": text,
+                    "type": "response",
+                    "message": text,
                     "message_id": message_id,
-                    "part_index": idx,
-                    "total_parts": len(display_texts),
-                    "continue_plamarination": is_last and continue_plamarination,
                     "router_id": router_id,
                 })
             
@@ -701,14 +700,22 @@ async def plamarination_response(router_state: Dict[str, Any], websocket: WebSoc
             
             # Send single message (display_texts[0] is the text response)
             await websocket.send_json({
-                "type": "assistant_message",
-                "content": display_texts[0] if display_texts else content,
-                "continue_plamarination": continue_plamarination,
+                "type": "response",
+                "message": display_texts[0] if display_texts else content,
+                "message_id": message_id,
                 "router_id": router_id,
             })
         
         # Update status
         await agent_db.update_router(router_id=router_id, status=status)
+        
+        # Send continuation signal if needed
+        if continue_plamarination:
+            await websocket.send_json({
+                "type": "continue_plamarination_signal",
+                "router_id": router_id,
+            })
+        # No else needed - frontend already idle after receiving response
         
     except Exception as e:
         logger.error(f"Error in plamarination: {e}")

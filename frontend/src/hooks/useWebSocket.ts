@@ -107,6 +107,19 @@ export const useWebSocket = (url?: string) => {
               }
               break;
               
+            case 'continue_plamarination_signal':
+              // Auto-send continuation request for plamarination
+              console.log('Received plamarination continuation signal, auto-continuing...');
+              setTimeout(() => {
+                if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+                  ws.current.send(JSON.stringify({
+                    type: 'continue_plamarination',
+                    router_id: data.router_id
+                  }));
+                }
+              }, 100);  // Small delay to let UI update
+              break;
+              
             case 'message_history':
               // Handle message history for specific router
               const historyMessages = data.messages
