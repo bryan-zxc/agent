@@ -17,7 +17,9 @@ frontend/
 │   │   ├── MessageList.tsx      # Message display and scrolling
 │   │   ├── MessageInput.tsx     # Auto-resizing input with shortcuts
 │   │   ├── FileAttachment.tsx   # File upload with drag-and-drop
-│   │   └── ErrorBoundary.tsx    # Error handling and recovery
+│   │   ├── ErrorBoundary.tsx    # Error handling and recovery
+│   │   ├── ModeToggle.tsx       # Mode selector (auto/rapid/agent)
+│   │   └── PhaseToggle.tsx      # Phase selector for agent mode
 │   ├── hooks/            # Custom React hooks
 │   │   └── useWebSocket.ts    # WebSocket connection hook
 │   ├── lib/              # Utility functions
@@ -39,6 +41,8 @@ frontend/
 - **Status indicators** - Real-time agent processing status with animations
 - **Message history** - Persistent router display with timestamps
 - **Auto-scroll** - Automatically scrolls to latest messages with smooth behavior
+- **Mode selection** - Choose between auto, rapid, and agent processing modes
+- **Phase toggle** - Switch between plamarination and execution phases in agent mode
 
 ### Modern User Experience
 - **Mobile-first responsive design** - Progressive enhancement from mobile to desktop
@@ -55,6 +59,22 @@ frontend/
 - **CSS variables** - Consistent theming with dark/light mode support
 - **Design tokens** - Systematic color, spacing, and typography scales
 - **Component modularity** - 6 focused components vs monolithic approach
+- **Shading-based UI** - Uses background colors (bg-muted, bg-primary) instead of borders
+
+### Modes and Phases
+The interface supports three processing modes with intelligent routing:
+
+#### Processing Modes
+- **Auto Mode** (Default) - Intelligently routes between simple and complex processing
+- **Rapid Mode** - Fast, lightweight responses without deep analysis
+- **Agent Mode** - Advanced processing with explicit planning and execution phases
+
+#### Agent Mode Phases
+When in agent mode, users can toggle between:
+- **Plamarination Phase** - Research, analysis, and planning before execution
+- **Execution Phase** - Direct task execution without planning overhead
+
+The phase toggle only appears when agent mode is active. Phase defaults to null and is automatically set to "plamarination" when entering agent mode.
 
 ## Development Setup
 

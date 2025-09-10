@@ -31,7 +31,7 @@ backend/
 - **Router Operations** - WebSocket-enabled chat interface with intelligent routing (functional architecture)
 - **PlannerAgent** - Breaks down complex tasks into subtasks (activated automatically)
 - **WorkerAgents** - Execute individual tasks (general and SQL-specialized)
-- **Database Layer** - SQLite-based router persistence
+- **Database Layer** - SQLite-based router persistence with mode/phase tracking
 
 ## Development Setup
 
@@ -95,18 +95,58 @@ Response types:
 
 ## Agent Flow
 
-### Intelligent Routing
-The router operations automatically switch between simple chat and complex analysis modes:
+### Modes and Phases Architecture
+The system operates with three primary modes and two agent-specific phases:
 
-**Simple Chat Mode:**
-- Direct LLM conversation for general questions
-- Stored in database with router history
-- Fast response times
+#### Processing Modes
+1. **Auto Mode** (Default)
+   - Intelligent routing based on request complexity
+   - Simple requests → Direct response via simple chat
+   - Complex requests → Automatically triggers agent mode with plamarination phase
+   - Files attached → Typically triggers agent mode
 
-**Analysis Mode (Auto-triggered by):**
-1. **File uploads** - Images, PDFs, CSVs
-2. **Keywords** - "analyze", "process", "generate", "report", "chart", "table", "data"
-3. **Complex requests** - Multi-step tasks requiring planning
+2. **Rapid Mode**
+   - Fast, lightweight responses without agent processing
+   - Always uses simple chat, bypassing all agent assessment
+   - No file processing capabilities
+   - Warns users when questions may need deeper analysis
+
+3. **Agent Mode**
+   - Advanced processing with explicit planning and execution phases
+   - Always involves deeper analysis and tool usage
+   - Supports complex multi-step operations
+   - Two distinct phases: Plamarination and Execution
+
+#### Agent Mode Phases
+When in agent mode, the system operates in one of two phases:
+
+**Plamarination Phase** (Default for agent mode):
+- Thoroughly analyses the request and any attached files
+- Researches using available tools (file reading, web search, etc.)
+- Builds comprehensive context
+- Generates a structured execution plan
+- Presents plan for user approval
+
+**Execution Phase**:
+- Skips plamarination entirely
+- Immediately proceeds to handle_complex_request
+- Executes task with available tools
+- Returns results directly
+
+### Message Routing Logic
+The `handle_message` function routes based on **status first**, then mode and phase:
+
+1. **Check router status** (prevents double-triggering):
+   - `plamarinating` → Return immediately (no trigger)
+   - `plamarinating_awaiting_user` → Process user input, continue planning
+   - `awaiting_approval` → Handle approval/rejection
+   - `executing` → Execution in progress
+   - `active` → Check mode for new request routing
+
+2. **When status is active, check router mode**:
+   - `rapid` → Always simple chat
+   - `agent` → Invalid state (raises error)
+   - `auto` → Assess complexity
 
 ### Processing Pipeline
 1. **WebSocket Connection** - Frontend connects with router ID
@@ -114,6 +154,41 @@ The router operations automatically switch between simple chat and complex analy
 3. **Route Decision** - Simple chat OR complex analysis
 4. **Processing** - Direct LLM response OR PlannerAgent → WorkerAgents
 5. **Response** - Store and send result via WebSocket
+
+### WebSocket Message Formats
+
+#### Mode Change
+```json
+{
+  "type": "update_mode",
+  "router_id": "uuid",
+  "mode": "auto|rapid|agent"
+}
+```
+
+#### Phase Change (Agent Mode Only)
+```json
+{
+  "type": "update_phase",
+  "router_id": "uuid",
+  "agent_phase": "plamarination|execution"
+}
+```
+
+#### Status Updates
+```json
+{
+  "type": "status",
+  "router_id": "uuid",
+  "status": "active|plamarinating|executing|awaiting_approval|..."
+}
+```
+
+### Database Schema
+The Router table includes:
+- `mode`: String(10) - "auto", "rapid", or "agent"
+- `agent_phase`: String(20) - "plamarination" or "execution" (NULL by default, only set when agent mode is active)
+- `status`: String(50) - Current processing status
 
 ## Configuration
 
