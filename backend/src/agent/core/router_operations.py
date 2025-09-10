@@ -23,12 +23,13 @@ logger = logging.getLogger(__name__)
 
 # ========== PLAMARINATION CONFIGURATION ==========
 
+
 def plamarination_tool_filter(server_name, tool):
     """Filter tools for plamarination phase."""
     if server_name == "filesystem":
         # Block only media reading - use our read_image instead
         return tool.name != "read_media_file"
-    
+
     if server_name == "agent_tools":
         # Only research/analysis tools
         allowed = [
@@ -38,7 +39,7 @@ def plamarination_tool_filter(server_name, tool):
             "set_plan_and_answer",
         ]
         return tool.name in allowed
-    
+
     # Block other servers during plamarination
     return False
 
@@ -67,15 +68,19 @@ When ready to finalise:
 - Use set_plan_and_answer tool to commit your plan and answer template
 - This will present the plan to the user for approval
 - Include clear structure and reasoning in your plan
+- This tool MUST be used to finalise, do not simply present the plan in text to the user without using this tool
 
 Important:
 - Acknowledge user messages immediately if they appear during your work
 - You can finish your current task but must respond to user quickly and let them know when you will address their request
-- You should be doing most of the work yourself, but you can ask the user for clarification. When you need user response, you must explicitly ask the question at the end of your message."""
+- You should be doing most of the work yourself, but you can ask the user for clarification. When you need user response, you must explicitly ask the question at the end of your message.
+- The execution phase following this does not have user interaction capability so anything you need from the user should be collected before you end the current phase by producing the plan through set_plan_and_answer.
+"""
 
 
 class PlamarinationContinuation(BaseModel):
     """Determine if plamarination should continue researching."""
+
     continue_research: bool = Field(
         description="True if mid-research/analysis/exploring files. False if assistant asked a question at the end or needs user clarification"
     )
@@ -177,17 +182,17 @@ async def load_existing_router_state(
     # Load agent_phase if present
     agent_phase = state.get("agent_phase")
     mode = state.get("mode", "auto")
-    
+
     logger.info(
         f"Router {router_id} state loaded - model: {model}, temp: {temperature}, status: {status}, mode: {mode}, agent_phase: {agent_phase}"
     )
 
     return {
-        "model": model, 
-        "temperature": temperature, 
+        "model": model,
+        "temperature": temperature,
         "status": status,
         "mode": mode,
-        "agent_phase": agent_phase
+        "agent_phase": agent_phase,
     }
 
 
@@ -260,7 +265,7 @@ async def activate_conversation(
         title=title,
         preview=preview,
     )
-    
+
     # Set agent_phase if in agent mode
     if mode == "agent":
         # Default to plamarination phase when entering agent mode
@@ -338,25 +343,22 @@ INSTRUCTION_LIBRARY = {
 }
 
 
-async def should_activate_agent_mode(
-    router_state: Dict[str, Any]
-) -> bool:
+async def should_activate_agent_mode(router_state: Dict[str, Any]) -> bool:
     """
     Determine if auto mode should activate agent mode.
-    
+
     Uses existing assess_agent_requirements to determine complexity.
     """
     # Use existing assess_agent_requirements
     agent_requirements = await assess_agent_requirements(router_state)
-    
+
     # Check if any requirements are true
     boolean_requirements = [
         getattr(agent_requirements, field_name)
         for field_name, field_info in agent_requirements.__class__.model_fields.items()
-        if field_info.annotation == bool
-        and hasattr(agent_requirements, field_name)
+        if field_info.annotation == bool and hasattr(agent_requirements, field_name)
     ]
-    
+
     return any(boolean_requirements)
 
 
@@ -365,10 +367,10 @@ async def handle_message(
 ):
     """
     Main message handler - routes based on status, mode, and phase.
-    
+
     Critical: When status is "plamarinating", this function returns immediately
     to avoid double-triggering with auto-continuation.
-    
+
     Args:
         router_state: Router state dictionary from create_router
         message_data: Message data containing 'message' and optional 'files'
@@ -379,77 +381,80 @@ async def handle_message(
     agent_db = router_state["agent_db"]
 
     # Lock input immediately
-    await send_input_lock(
-        router_id=router_id, agent_db=agent_db, websocket=websocket
-    )
+    await send_input_lock(router_id=router_id, agent_db=agent_db, websocket=websocket)
 
     # Get current router state from database
     router_record = await agent_db.get_router(router_id)
     router_status = router_record.get("status") if router_record else "active"
     router_mode = router_state.get("mode", "auto")
     agent_phase = router_state.get("agent_phase")
-    
+
     user_message = message_data.get("message", "")
     files = message_data.get("files", [])
-    
-    logger.info(f"Router {router_id} - mode: {router_mode}, phase: {agent_phase}, status: {router_status}")
+
+    logger.info(
+        f"Router {router_id} - mode: {router_mode}, phase: {agent_phase}, status: {router_status}"
+    )
     logger.info(f"Message data type: {message_data.get('type', 'message')}")
-    
+
     # Store user message
     await message_manager.add_message(role="user", content=user_message)
-    
+
     try:
         # CRITICAL: Check status first to handle ongoing operations
-        
+
         if router_status == "plamarinating":
             # DO NOT TRIGGER - auto-continuation is already running
             # Just acknowledge and return immediately
-            logger.info(f"Proactive input during plamarination for router {router_id} - not triggering")
+            logger.info(
+                f"Proactive input during plamarination for router {router_id} - not triggering"
+            )
             # Message is already added to chain, will be picked up by ongoing plamarination
             # No status message, just return
-            
+
         elif router_status == "plamarinating_awaiting_user":
             # User provided required input - DO TRIGGER
-            logger.info(f"Required user response received for router {router_id} - triggering plamarination")
-            await send_status(status="Processing your input", router_id=router_id, websocket=websocket)
-            await agent_db.update_router(
-                router_id=router_id,
-                status="plamarinating"
+            logger.info(
+                f"Required user response received for router {router_id} - triggering plamarination"
             )
+            await send_status(
+                status="Processing your input", router_id=router_id, websocket=websocket
+            )
+            await agent_db.update_router(router_id=router_id, status="plamarinating")
             # Continue plamarination with user input
             await plamarination_response(router_state, websocket)
-            
+
         elif router_status == "awaiting_approval":
             # Handle approval/revision of plan
             if message_data.get("type") == "approval_response":
                 approved = message_data.get("approved", False)
-                
+
                 if approved:
                     # Move to execution
-                    logger.info(f"Plan approved for router {router_id}, starting execution")
+                    logger.info(
+                        f"Plan approved for router {router_id}, starting execution"
+                    )
                     await agent_db.update_router(
-                        router_id=router_id,
-                        status="executing"
+                        router_id=router_id, status="executing"
                     )
                     await send_status(
                         status="Executing approved plan",
                         router_id=router_id,
-                        websocket=websocket
+                        websocket=websocket,
                     )
                     # Execute the approved plan
                     await handle_complex_request(
-                        router_state=router_state,
-                        websocket=websocket,
-                        files=files
+                        router_state=router_state, websocket=websocket, files=files
                     )
                 else:
                     # User wants revision
                     feedback = message_data.get("feedback", "")
-                    logger.info(f"Plan rejected for router {router_id}, continuing plamarination")
-                    
+                    logger.info(
+                        f"Plan rejected for router {router_id}, continuing plamarination"
+                    )
+
                     await agent_db.update_router(
-                        router_id=router_id,
-                        status="plamarinating"
+                        router_id=router_id, status="plamarinating"
                     )
                     # Continue plamarination with feedback
                     await plamarination_response(router_state, websocket)
@@ -457,24 +462,23 @@ async def handle_message(
                 # Regular message during awaiting_approval - treat as revision request
                 logger.info(f"Message during awaiting_approval, treating as revision")
                 await agent_db.update_router(
-                    router_id=router_id,
-                    status="plamarinating"
+                    router_id=router_id, status="plamarinating"
                 )
                 await plamarination_response(router_state, websocket)
-                    
+
         elif router_status == "executing":
             # Currently executing - shouldn't receive messages
             logger.warning(f"Message received while executing for router {router_id}")
             await send_status(
                 status="Currently executing. Please wait for completion.",
                 router_id=router_id,
-                websocket=websocket
+                websocket=websocket,
             )
-            
+
         else:
             # Status is "active" - only valid for rapid/auto modes
             # Agent mode should NEVER have status="active"
-            
+
             if router_mode == "agent":
                 # This should never happen - agent mode toggles set status immediately
                 raise ValueError(
@@ -482,9 +486,11 @@ async def handle_message(
                     f"Router {router_id} is in agent mode but has active status. "
                     f"This indicates a bug in the mode/phase toggle handlers."
                 )
-                
-            await send_status(status="Thinking", router_id=router_id, websocket=websocket)
-            
+
+            await send_status(
+                status="Thinking", router_id=router_id, websocket=websocket
+            )
+
             if router_mode == "rapid":
                 # RAPID MODE: Always simple chat
                 logger.info(f"RAPID mode: Using simple chat only")
@@ -493,48 +499,56 @@ async def handle_message(
                 await send_assistant_message(
                     content=response, router_id=router_id, websocket=websocket
                 )
-                    
+
             else:
                 # AUTO MODE: Assess and decide
                 logger.info(f"AUTO mode: Assessing complexity")
-                
+
                 # Check if we should activate agent mode
                 if files or await should_activate_agent_mode(router_state):
                     # Complex request - start plamarination
-                    logger.info(f"AUTO mode: Complexity detected, switching to agent mode and starting plamarination")
-                    
+                    logger.info(
+                        f"AUTO mode: Complexity detected, switching to agent mode and starting plamarination"
+                    )
+
                     # Update router to agent mode with plamarination phase
                     await agent_db.update_router(
                         router_id=router_id,
                         mode="agent",
                         agent_phase="plamarination",
-                        status="plamarinating"
+                        status="plamarinating",
                     )
-                    
+
                     # Notify frontend of mode change
-                    await websocket.send_json({
-                        "type": "mode_updated",
-                        "mode": "agent",
-                        "router_id": router_id
-                    })
-                    
+                    await websocket.send_json(
+                        {
+                            "type": "mode_updated",
+                            "mode": "agent",
+                            "router_id": router_id,
+                        }
+                    )
+
                     # Notify frontend of phase change
-                    await websocket.send_json({
-                        "type": "phase_updated",
-                        "agent_phase": "plamarination",
-                        "router_id": router_id
-                    })
-                    
+                    await websocket.send_json(
+                        {
+                            "type": "phase_updated",
+                            "agent_phase": "plamarination",
+                            "router_id": router_id,
+                        }
+                    )
+
                     await plamarination_response(router_state, websocket)
                 else:
                     # Simple request - use simple chat
                     logger.info(f"AUTO mode: Simple request, using chat")
                     response = await handle_simple_chat(router_state=router_state)
-                    await message_manager.add_message(role="assistant", content=response)
+                    await message_manager.add_message(
+                        role="assistant", content=response
+                    )
                     await send_assistant_message(
                         content=response, router_id=router_id, websocket=websocket
                     )
-        
+
     except Exception as e:
         logger.error(
             f"Error handling message in router {router_id}: {str(e)}", exc_info=True
@@ -632,12 +646,12 @@ async def plamarination_response(router_state: Dict[str, Any], websocket: WebSoc
     message_manager = router_state["message_manager"]
     agent_db = router_state["agent_db"]
     llm = router_state["llm"]
-    
+
     # Send thinking status for continuation calls (first entry already has it from handle_message)
     await send_status(status="Thinking", router_id=router_id, websocket=websocket)
-    
+
     messages = await message_manager.get_messages()
-    
+
     try:
         # Get response (dict if tools called, string if not)
         response = await llm.a_get_response(
@@ -650,10 +664,10 @@ async def plamarination_response(router_state: Dict[str, Any], websocket: WebSoc
             websocket=websocket,
             payload={"router_id": router_id},  # For hook context
         )
-        
+
         # Extract content
         content = response["content"] if isinstance(response, dict) else response
-        
+
         # Store message and get display texts
         result = await message_manager.add_message(
             role="assistant", content=content, need_message_id=True
@@ -661,31 +675,33 @@ async def plamarination_response(router_state: Dict[str, Any], websocket: WebSoc
         message_id = result["message_id"]
         messages = result["messages"]
         display_texts = result["display_texts"]
-        
+
         # Determine continuation based on response type
         if isinstance(response, dict):
             # Tools were called
             tool_calls = response["tool_calls"]
-            
+
             # Check for set_plan_and_answer
             if "agent_tools__set_plan_and_answer" in tool_calls:
                 # Hook handles approval flow and status update
                 # The hook will send the appropriate WebSocket messages
                 return
-            
+
             # Other tools - must continue to process results
             continue_plamarination = True
             status = "plamarinating"
-            
+
             # Send each display text as a separate WebSocket message
             for idx, text in enumerate(display_texts):
-                await websocket.send_json({
-                    "type": "response",
-                    "message": text,
-                    "message_id": message_id,
-                    "router_id": router_id,
-                })
-            
+                await websocket.send_json(
+                    {
+                        "type": "response",
+                        "message": text,
+                        "message_id": message_id,
+                        "router_id": router_id,
+                    }
+                )
+
         else:
             # No tools - simple text response (display_texts will have single entry)
             continuation = llm.get_response(
@@ -694,29 +710,37 @@ async def plamarination_response(router_state: Dict[str, Any], websocket: WebSoc
                 temperature=0,
                 response_format=PlamarinationContinuation,
             )
-            
+
             continue_plamarination = continuation.continue_research
-            status = "plamarinating" if continue_plamarination else "plamarinating_awaiting_user"
-            
+            status = (
+                "plamarinating"
+                if continue_plamarination
+                else "plamarinating_awaiting_user"
+            )
+
             # Send single message (display_texts[0] is the text response)
-            await websocket.send_json({
-                "type": "response",
-                "message": display_texts[0] if display_texts else content,
-                "message_id": message_id,
-                "router_id": router_id,
-            })
-        
+            await websocket.send_json(
+                {
+                    "type": "response",
+                    "message": display_texts[0] if display_texts else content,
+                    "message_id": message_id,
+                    "router_id": router_id,
+                }
+            )
+
         # Update status
         await agent_db.update_router(router_id=router_id, status=status)
-        
+
         # Send continuation signal if needed
         if continue_plamarination:
-            await websocket.send_json({
-                "type": "continue_plamarination_signal",
-                "router_id": router_id,
-            })
+            await websocket.send_json(
+                {
+                    "type": "continue_plamarination_signal",
+                    "router_id": router_id,
+                }
+            )
         # No else needed - frontend already idle after receiving response
-        
+
     except Exception as e:
         logger.error(f"Error in plamarination: {e}")
         await send_error(
@@ -826,12 +850,12 @@ async def send_message_history(router_state: Dict[str, Any], websocket: WebSocke
         # Use the new display-specific method for frontend
         agent_db = router_state["agent_db"]
         router_id = router_state["id"]
-        
+
         # Get messages formatted for display (with display_text, filtered)
         display_messages = await agent_db.get_messages_for_display(
             agent_type="router", agent_id=router_id
         )
-        
+
         try:
             await websocket.send_json(
                 {
@@ -891,22 +915,20 @@ async def send_input_unlock(
                 raise
 
 
-async def send_mode_status(
-    mode: str,
-    router_id: str,
-    websocket: WebSocket
-):
+async def send_mode_status(mode: str, router_id: str, websocket: WebSocket):
     """Send mode change status to frontend."""
     if not websocket:
         return
-    
+
     try:
-        await websocket.send_json({
-            "type": "mode_status",
-            "mode": mode,
-            "router_id": router_id,
-            "message": f"Switched to {mode} mode"
-        })
+        await websocket.send_json(
+            {
+                "type": "mode_status",
+                "mode": mode,
+                "router_id": router_id,
+                "message": f"Switched to {mode} mode",
+            }
+        )
         logger.info(f"Sent mode status update for router {router_id}: {mode}")
     except RuntimeError as e:
         if "close message has been sent" in str(e):
@@ -915,22 +937,20 @@ async def send_mode_status(
             raise
 
 
-async def send_phase_status(
-    phase: str,
-    router_id: str,
-    websocket: WebSocket
-):
+async def send_phase_status(phase: str, router_id: str, websocket: WebSocket):
     """Send phase change status to frontend."""
     if not websocket:
         return
-    
+
     try:
-        await websocket.send_json({
-            "type": "phase_status",
-            "phase": phase,
-            "router_id": router_id,
-            "message": f"Switched to {phase} phase"
-        })
+        await websocket.send_json(
+            {
+                "type": "phase_status",
+                "phase": phase,
+                "router_id": router_id,
+                "message": f"Switched to {phase} phase",
+            }
+        )
         logger.info(f"Sent phase status update for router {router_id}: {phase}")
     except RuntimeError as e:
         if "close message has been sent" in str(e):
@@ -1253,7 +1273,7 @@ async def determine_file_groups(
                     "content": [
                         {
                             "type": "text",
-                            "text": f"User question/request:\n\n{user_question}\n\nFiles: {', '.join(files)}"
+                            "text": f"User question/request:\n\n{user_question}\n\nFiles: {', '.join(files)}",
                         },
                         {
                             "type": "text",
@@ -1261,9 +1281,9 @@ async def determine_file_groups(
                             "By default, in case of doubt, there should only be one group with all the files in it. "
                             "If the user's question indicates that they want to process files independently from each other, looking for one response per file (as opposed to a single response using all files), "
                             "then by default, each group should contain only one file unless there is evidence to suggest otherwise. "
-                            "In the case where the user specifically instructs to repeatedly use a particular file (for example) when processing other files one by one, the groups should reflect that and have the file repeat across groups."
-                        }
-                    ]
+                            "In the case where the user specifically instructs to repeatedly use a particular file (for example) when processing other files one by one, the groups should reflect that and have the file repeat across groups.",
+                        },
+                    ],
                 }
             ],
             model=router_state["model"],
