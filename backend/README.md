@@ -74,18 +74,104 @@ Server will be available at:
 
 Connect to `ws://localhost:8000/chat` and send JSON messages:
 
+#### Request Format
 ```json
 {
-  "content": "Analyze this sales data",
-  "files": ["uploads/sales_data.csv"]
+  "type": "message",
+  "message": "Analyze this sales data",
+  "files": ["uploads/sales_data.csv"],
+  "router_id": "uuid"  // Optional - for continuing existing conversation
 }
 ```
 
-Response types:
-- `{"type": "message_history", "messages": [...], "router_id": "..."}` - On connect
-- `{"type": "status", "message": "Processing..."}` - Status updates
-- `{"type": "message", "role": "assistant", "content": "Analysis result", "router_id": "..."}` - Chat messages
-- `{"type": "error", "message": "Error details"}` - Error messages
+#### Response Types
+
+**Connection Established**
+```json
+{
+  "type": "connection_established",
+  "session_id": "session_uuid"
+}
+```
+
+**Message History** (On connect or router load)
+```json
+{
+  "type": "message_history",
+  "messages": [
+    {"role": "user", "content": "...", "message_id": 123},
+    {"role": "assistant", "content": "...", "message_id": 124}
+  ],
+  "router_id": "uuid"
+}
+```
+
+**Status Updates**
+```json
+{
+  "type": "status",
+  "message": "Thinking...",
+  "router_id": "uuid"
+}
+```
+
+**Assistant Response**
+```json
+{
+  "type": "response",
+  "message": "Analysis result here",
+  "message_id": 125,
+  "router_id": "uuid"
+}
+```
+
+**Plamarination Continuation Signal** (Auto-continuation)
+```json
+{
+  "type": "continue_plamarination_signal",
+  "router_id": "uuid"
+}
+```
+Frontend automatically responds with:
+```json
+{
+  "type": "continue_plamarination",
+  "router_id": "uuid"
+}
+```
+
+**Approval Request** (Plamarination complete)
+```json
+{
+  "type": "approval_request",
+  "request_id": "req_uuid",
+  "plan": "Execution plan details",
+  "template": "Template to be used",
+  "findings": "Research findings",
+  "router_id": "uuid"
+}
+```
+
+**Mode/Phase Updates**
+```json
+{
+  "type": "mode_updated",
+  "mode": "auto|rapid|agent"
+}
+```
+```json
+{
+  "type": "phase_updated",
+  "agent_phase": "plamarination|execution"
+}
+```
+
+**Error Messages**
+```json
+{
+  "type": "error",
+  "message": "Error details"
+}
 
 ### HTTP Endpoints
 
@@ -126,6 +212,19 @@ When in agent mode, the system operates in one of two phases:
 - Builds comprehensive context
 - Generates a structured execution plan
 - Presents plan for user approval
+
+**Automatic Continuation in Plamarination**:
+The plamarination phase uses an intelligent continuation mechanism:
+1. After each research step, GPT-5-nano determines if more research is needed
+2. If continuing: Backend sends `continue_plamarination_signal`
+3. Frontend automatically sends `continue_plamarination` request
+4. Research continues without user intervention
+5. If user input needed: System waits for response (no signal sent)
+
+This creates seamless research cycles where:
+- Tool calls always trigger continuation (research incomplete by definition)
+- Text responses may continue research OR wait for user input
+- User sees all intermediate results but doesn't need to manually continue
 
 **Execution Phase**:
 - Skips plamarination entirely

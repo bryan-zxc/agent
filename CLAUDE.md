@@ -20,6 +20,7 @@
 ### 3. Complete → Close & Commit
 - Run tests and verify implementation
 - Update documentation as required
+- Update ticket
 - Close ticket: `gh issue close`
 - Commit code changes with issue reference: `fixes #123`
 

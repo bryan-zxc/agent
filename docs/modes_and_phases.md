@@ -44,10 +44,15 @@ When in agent mode, users can toggle between two phases:
   3. Build comprehensive context
   4. Generate a structured execution plan
   5. Present plan for user approval
+- **Automatic Continuation**:
+  - After each research step, GPT-5-nano determines if more research is needed
+  - If continuing: Frontend automatically sends continuation request
+  - If user input needed: System waits for response
+  - This creates seamless research cycles without manual intervention
 - **Status Flow**:
   ```
   plamarinating (actively researching)
-      ↕ (iterations)
+      ↕ (automatic iterations via continuation signals)
   plamarinating_awaiting_user (needs clarification)
       ↓
   awaiting_approval (plan ready)
@@ -139,6 +144,42 @@ The `handle_message` function routes based on **status first**, then mode and ph
      - Complex → Start plamarination_response
 
 **Important**: Agent mode is activated through mode/phase toggles which immediately set status and trigger actions. The router never naturally reaches `active` status in agent mode.
+
+### Plamarination Message Flow
+
+The plamarination phase uses a sophisticated message flow to handle research iterations:
+
+#### WebSocket Message Types
+- `response`: Assistant's message to display in chat
+- `status`: Processing status updates ("Thinking", etc.)
+- `continue_plamarination_signal`: Signal to frontend to auto-continue research
+- `continue_plamarination`: Frontend's request to continue research
+
+#### Message Sequences
+
+**When Tools Are Called (Always Continues)**:
+1. Backend sends multiple `response` messages (one per tool result)
+2. Backend sends `continue_plamarination_signal`
+3. Frontend automatically sends `continue_plamarination`
+4. Loop continues with next research iteration
+
+**When Text Response + Continue Research**:
+1. GPT-5-nano determines continuation is needed
+2. Backend sends `response` with assistant's thoughts
+3. Backend sends `continue_plamarination_signal`
+4. Frontend automatically sends `continue_plamarination`
+
+**When Text Response + User Input Needed**:
+1. GPT-5-nano determines user input is required
+2. Backend sends `response` with assistant's question
+3. No continuation signal sent
+4. Frontend stays idle, waiting for user input
+
+#### Key Design Decisions
+- **Separation of Concerns**: Messages are for display, signals are for control flow
+- **Automatic Continuation**: Frontend handles continuation without user intervention
+- **Clean State Management**: Each message type has a single, clear purpose
+- **No Redundant Messages**: Only send signals when action is needed
 
 ### User Interface
 

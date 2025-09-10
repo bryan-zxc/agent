@@ -72,6 +72,10 @@ The interface supports three processing modes with intelligent routing:
 #### Agent Mode Phases
 When in agent mode, users can toggle between:
 - **Plamarination Phase** - Research, analysis, and planning before execution
+  - Automatically continues research cycles without user intervention
+  - Frontend receives `continue_plamarination_signal` and responds automatically
+  - User sees all intermediate results but doesn't need to manually continue
+  - Only waits for user input when clarification is needed
 - **Execution Phase** - Direct task execution without planning overhead
 
 The phase toggle only appears when agent mode is active. Phase defaults to null and is automatically set to "plamarination" when entering agent mode.
@@ -249,13 +253,76 @@ interface ChatStore {
 ## API Integration
 
 ### WebSocket Messages
+
+#### Sending Messages
 Sends JSON to `ws://localhost:8000/chat`:
 ```typescript
 {
+  type: "message",
   message: string;
   files: string[];
-  model: string;
   temperature: number;
+  mode?: string;  // Current mode (auto/rapid/agent)
+  router_id?: string;  // For continuing existing conversation
+}
+```
+
+#### Receiving Messages
+Frontend handles these message types from backend:
+
+**Assistant Response**
+```typescript
+{
+  type: "response",
+  message: string;
+  message_id?: number;  // Database message ID
+  router_id: string;
+}
+```
+
+**Status Update**
+```typescript
+{
+  type: "status",
+  message: string;  // "Thinking...", "Processing...", etc.
+  router_id?: string;
+}
+```
+
+**Continuation Signal** (Plamarination Auto-continuation)
+```typescript
+{
+  type: "continue_plamarination_signal",
+  router_id: string;
+}
+// Frontend automatically responds with:
+{
+  type: "continue_plamarination",
+  router_id: string;
+}
+```
+
+**Mode/Phase Updates**
+```typescript
+{
+  type: "mode_updated",
+  mode: "auto" | "rapid" | "agent";
+}
+{
+  type: "phase_updated",
+  agent_phase: "plamarination" | "execution";
+}
+```
+
+**Approval Request** (Plamarination Complete)
+```typescript
+{
+  type: "approval_request",
+  request_id: string;
+  plan: string;
+  template: string;
+  findings: string;
+  router_id: string;
 }
 ```
 
