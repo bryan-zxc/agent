@@ -338,12 +338,37 @@ INSTRUCTION_LIBRARY = {
 }
 
 
+async def should_activate_agent_mode(
+    router_state: Dict[str, Any]
+) -> bool:
+    """
+    Determine if auto mode should activate agent mode.
+    
+    Uses existing assess_agent_requirements to determine complexity.
+    """
+    # Use existing assess_agent_requirements
+    agent_requirements = await assess_agent_requirements(router_state)
+    
+    # Check if any requirements are true
+    boolean_requirements = [
+        getattr(agent_requirements, field_name)
+        for field_name, field_info in agent_requirements.__class__.model_fields.items()
+        if field_info.annotation == bool
+        and hasattr(agent_requirements, field_name)
+    ]
+    
+    return any(boolean_requirements)
+
+
 async def handle_message(
     router_state: Dict[str, Any], message_data: dict, websocket: WebSocket
 ):
     """
-    Main message handler - processes user messages.
-
+    Main message handler - routes based on status, mode, and phase.
+    
+    Critical: When status is "plamarinating", this function returns immediately
+    to avoid double-triggering with auto-continuation.
+    
     Args:
         router_state: Router state dictionary from create_router
         message_data: Message data containing 'message' and optional 'files'
@@ -351,118 +376,146 @@ async def handle_message(
     """
     router_id = router_state["id"]
     message_manager = router_state["message_manager"]
+    agent_db = router_state["agent_db"]
 
     # Lock input immediately
     await send_input_lock(
-        router_id=router_id, agent_db=router_state["agent_db"], websocket=websocket
+        router_id=router_id, agent_db=agent_db, websocket=websocket
     )
 
+    # Get current router state from database
+    router_record = await agent_db.get_router(router_id)
+    router_status = router_record.get("status") if router_record else "active"
+    router_mode = router_state.get("mode", "auto")
+    agent_phase = router_state.get("agent_phase")
+    
     user_message = message_data.get("message", "")
     files = message_data.get("files", [])
-
-    logger.info(f"DEBUG: handle_message called with files: {files}")
-    logger.info(
-        f"DEBUG: files type: {type(files)}, length: {len(files) if files else 'None'}"
-    )
-
-    # Store user message - content is now always stored as-is
+    
+    logger.info(f"Router {router_id} - mode: {router_mode}, phase: {agent_phase}, status: {router_status}")
+    logger.info(f"Message data type: {message_data.get('type', 'message')}")
+    
+    # Store user message
     await message_manager.add_message(role="user", content=user_message)
-
+    
     try:
-        # Send processing status
-        await send_status(status="Thinking", router_id=router_id, websocket=websocket)
-
-        # Get router mode
-        router_mode = router_state.get("mode", "auto")
-        logger.info(f"Router {router_id} handling message in {router_mode} mode")
-
-        # Determine response type based on mode
-        if router_mode == "rapid":
-            # RAPID mode: Always use simple chat, skip assessment
-            logger.info(f"RAPID mode: Using simple chat only")
-            response = await handle_simple_chat(router_state=router_state)
-            # Store message - content is stored as-is in satellite tables
-            await message_manager.add_message(role="assistant", content=response)
-            # For simple text responses, display_text is just the response string
-            await send_assistant_message(
-                content=response, router_id=router_id, websocket=websocket
+        # CRITICAL: Check status first to handle ongoing operations
+        
+        if router_status == "plamarinating":
+            # DO NOT TRIGGER - auto-continuation is already running
+            # Just acknowledge and return immediately
+            logger.info(f"Proactive input during plamarination for router {router_id} - not triggering")
+            # Message is already added to chain, will be picked up by ongoing plamarination
+            # No status message, just return
+            
+        elif router_status == "plamarinating_awaiting_user":
+            # User provided required input - DO TRIGGER
+            logger.info(f"Required user response received for router {router_id} - triggering plamarination")
+            await send_status(status="Processing your input", router_id=router_id, websocket=websocket)
+            await agent_db.update_router(
+                router_id=router_id,
+                status="plamarinating"
             )
-        elif router_mode == "agent":
-            # AGENT mode: Always use complex handling
-            logger.info(f"AGENT mode: Forcing complex request handling")
-            # First assess requirements even without files
-            if not files:
-                agent_requirements = await assess_agent_requirements(
-                    router_state=router_state
-                )
-                # Force at least one requirement to be true to trigger complex handling
-                agent_requirements.require_agent = True
-            else:
-                agent_requirements = None
-
-            await handle_complex_request(
-                router_state=router_state,
-                websocket=websocket,
-                files=files,
-                agent_requirements=agent_requirements,
-            )
-        else:
-            # AUTO mode: Original behaviour
-            logger.info(
-                f"AUTO mode: Checking if files exist - files: {files}, bool(files): {bool(files)}"
-            )
-            if files:
-                logger.info(
-                    f"AUTO mode: Taking complex request path with files: {files}"
-                )
-                await handle_complex_request(
-                    router_state=router_state, websocket=websocket, files=files
-                )
-                # Complex request handles its own messaging - no response to send
-            else:
-                logger.info(f"AUTO mode: Taking simple chat path - no files provided")
-                # Run assessment and simple chat concurrently to reduce wait time
-                async with asyncio.TaskGroup() as tg:
-                    assessment_task = tg.create_task(
-                        assess_agent_requirements(router_state=router_state)
+            # Continue plamarination with user input
+            await plamarination_response(router_state, websocket)
+            
+        elif router_status == "awaiting_approval":
+            # Handle approval/revision of plan
+            if message_data.get("type") == "approval_response":
+                approved = message_data.get("approved", False)
+                
+                if approved:
+                    # Move to execution
+                    logger.info(f"Plan approved for router {router_id}, starting execution")
+                    await agent_db.update_router(
+                        router_id=router_id,
+                        status="executing"
                     )
-                    simple_chat_task = tg.create_task(
-                        handle_simple_chat(router_state=router_state)
+                    await send_status(
+                        status="Executing approved plan",
+                        router_id=router_id,
+                        websocket=websocket
                     )
-
-                agent_requirements = assessment_task.result()
-                logger.info(
-                    f"Agent requirements assessed for router {router_id}: {agent_requirements.model_dump_json(indent=2)}"
-                )
-
-                # Check if agent is needed
-                boolean_requirements = [
-                    getattr(agent_requirements, field_name)
-                    for field_name, field_info in agent_requirements.__class__.model_fields.items()
-                    if field_info.annotation == bool
-                    and hasattr(agent_requirements, field_name)
-                ]
-                if any(boolean_requirements):
-                    # We need complex handling - simple chat result is discarded
+                    # Execute the approved plan
                     await handle_complex_request(
                         router_state=router_state,
                         websocket=websocket,
-                        agent_requirements=agent_requirements,
+                        files=files
                     )
-                    # Complex request handles its own messaging
                 else:
-                    # Use the already completed simple chat response
-                    response = simple_chat_task.result()
-                    logger.info(f"Response generated in router:\n{response}")
-                    # Store message - content is stored as-is in satellite tables
-                    await message_manager.add_message(
-                        role="assistant", content=response
+                    # User wants revision
+                    feedback = message_data.get("feedback", "")
+                    logger.info(f"Plan rejected for router {router_id}, continuing plamarination")
+                    
+                    await agent_db.update_router(
+                        router_id=router_id,
+                        status="plamarinating"
                     )
-                    # For simple text responses, display_text is just the response string
+                    # Continue plamarination with feedback
+                    await plamarination_response(router_state, websocket)
+            else:
+                # Regular message during awaiting_approval - treat as revision request
+                logger.info(f"Message during awaiting_approval, treating as revision")
+                await agent_db.update_router(
+                    router_id=router_id,
+                    status="plamarinating"
+                )
+                await plamarination_response(router_state, websocket)
+                    
+        elif router_status == "executing":
+            # Currently executing - shouldn't receive messages
+            logger.warning(f"Message received while executing for router {router_id}")
+            await send_status(
+                status="Currently executing. Please wait for completion.",
+                router_id=router_id,
+                websocket=websocket
+            )
+            
+        else:
+            # Status is "active" - only valid for rapid/auto modes
+            # Agent mode should NEVER have status="active"
+            
+            if router_mode == "agent":
+                # This should never happen - agent mode toggles set status immediately
+                raise ValueError(
+                    f"Invalid state: Agent mode with status='active'. "
+                    f"Router {router_id} is in agent mode but has active status. "
+                    f"This indicates a bug in the mode/phase toggle handlers."
+                )
+                
+            await send_status(status="Thinking", router_id=router_id, websocket=websocket)
+            
+            if router_mode == "rapid":
+                # RAPID MODE: Always simple chat
+                logger.info(f"RAPID mode: Using simple chat only")
+                response = await handle_simple_chat(router_state=router_state)
+                await message_manager.add_message(role="assistant", content=response)
+                await send_assistant_message(
+                    content=response, router_id=router_id, websocket=websocket
+                )
+                    
+            else:
+                # AUTO MODE: Assess and decide
+                logger.info(f"AUTO mode: Assessing complexity")
+                
+                # Check if we should activate agent mode
+                if files or await should_activate_agent_mode(router_state):
+                    # Complex request - start plamarination
+                    logger.info(f"AUTO mode: Complexity detected, starting plamarination")
+                    await agent_db.update_router(
+                        router_id=router_id,
+                        status="plamarinating"
+                    )
+                    await plamarination_response(router_state, websocket)
+                else:
+                    # Simple request - use simple chat
+                    logger.info(f"AUTO mode: Simple request, using chat")
+                    response = await handle_simple_chat(router_state=router_state)
+                    await message_manager.add_message(role="assistant", content=response)
                     await send_assistant_message(
                         content=response, router_id=router_id, websocket=websocket
                     )
-
+        
     except Exception as e:
         logger.error(
             f"Error handling message in router {router_id}: {str(e)}", exc_info=True
@@ -471,9 +524,9 @@ async def handle_message(
             error=f"Error: {str(e)}", router_id=router_id, websocket=websocket
         )
     finally:
-        # Always unlock input, even if processing failed
+        # Always unlock input at the end
         await send_input_unlock(
-            router_id=router_id, agent_db=router_state["agent_db"], websocket=websocket
+            router_id=router_id, agent_db=agent_db, websocket=websocket
         )
 
 
