@@ -14,6 +14,9 @@ import logging
 if TYPE_CHECKING:
     from websockets import WebSocket
 
+# Import for database access
+from ...models.agent_database import AgentDatabase
+
 logger = logging.getLogger(__name__)
 
 
@@ -150,28 +153,73 @@ class ToolHooks:
         
         if isinstance(result, str):
             status = None
+            mode = None
+            agent_phase = None
             
             # Detect based on content structure, not status text
             if result.startswith("# Execution Plan"):
                 # Has todos - needs approval for execution
                 status = "plamarinating_awaiting_user"
+                # Keep current mode and phase (stay in agent mode)
                 logger.info(f"Execution plan stored for router {router_id}, awaiting approval")
             elif result.startswith("# Answer"):
                 # No todos - answer is complete, back to conversation
+                # IMPORTANT: Update all three values together as per design
                 status = "active"
-                logger.info(f"Answer complete for router {router_id}, no execution needed")
+                mode = "auto"
+                agent_phase = None  # Null for auto mode
+                logger.info(f"Answer complete for router {router_id}, transitioning to auto mode")
             
-            # Send status update if determined
-            if status and websocket and router_id:
+            # Update database and send updates if determined
+            if status and router_id:
+                # Create database connection for updates
                 try:
-                    await websocket.send_json({
-                        "type": "status",
-                        "router_id": router_id,
-                        "status": status
-                    })
-                    logger.info(f"Sent status update '{status}' for router {router_id}")
+                    agent_db = await AgentDatabase.create()
+                    
+                    # Update database with all state values when transitioning to auto
+                    if mode == "auto":
+                        await agent_db.update_router(
+                            router_id=router_id,
+                            status=status,
+                            mode=mode,
+                            agent_phase=agent_phase
+                        )
+                        logger.info(f"Updated router {router_id} in database: status={status}, mode={mode}, agent_phase={agent_phase}")
+                    else:
+                        # Just update status for awaiting_approval case
+                        await agent_db.update_router(
+                            router_id=router_id,
+                            status=status
+                        )
+                    
+                    # Send WebSocket updates
+                    if websocket:
+                        # Always send status update
+                        await websocket.send_json({
+                            "type": "status",
+                            "router_id": router_id,
+                            "status": status
+                        })
+                        logger.info(f"Sent status update '{status}' for router {router_id}")
+                        
+                        # Send mode and phase updates when transitioning to auto
+                        if mode == "auto":
+                            await websocket.send_json({
+                                "type": "mode_updated",
+                                "mode": mode,
+                                "router_id": router_id
+                            })
+                            logger.info(f"Sent mode update 'auto' for router {router_id}")
+                            
+                            await websocket.send_json({
+                                "type": "phase_updated",
+                                "agent_phase": agent_phase,
+                                "router_id": router_id
+                            })
+                            logger.info(f"Sent phase update 'null' for router {router_id}")
+                    
                 except Exception as e:
-                    logger.error(f"Failed to send status update: {e}")
+                    logger.error(f"Failed to update router state: {e}")
         
         return result
     

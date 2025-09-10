@@ -303,9 +303,9 @@ async def handle_websocket_message(websocket: WebSocket, data: dict):
                 router_record = await agent_db.get_router(router_id)
                 
                 if router_record and router_record.get("status") == "plamarinating":
-                    # Import planning_mode_response from router_operations
-                    from agent.core.router_operations import planning_mode_response
-                    await planning_mode_response(router_state, websocket)
+                    # Import plamarination_response from router_operations
+                    from agent.core.router_operations import plamarination_response
+                    await plamarination_response(router_state, websocket)
                 else:
                     status = router_record.get("status") if router_record else "unknown"
                     logger.warning(f"Continue plamarination called but status is {status}")
