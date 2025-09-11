@@ -82,7 +82,7 @@ Continue researching until ALL items are verified TRUE.
 
 Steps to execute:
 1. Identify all information sources mentioned or needed
-2. Execute immediate retrieval of ALL information from these sources one step at a time. In any one step only perform one action, such as reading a single file, searching the web about one question, or asking the user about a single question.
+2. Execute immediate retrieval of ALL information from these sources one step at a time. In any one step only perform one action, such as reading a single file, searching the web about one question, or asking the user about a single question. Note, don't ever ask the user too many questions at once, guide them question by question to share their answer.
 3. Continue gathering until you have concrete data for every aspect
 4. Verify completeness using the Research Completion Checklist
 5. Create a plan that operates solely on your gathered information
@@ -694,6 +694,7 @@ async def plamarination_response(router_state: Dict[str, Any], websocket: WebSoc
             model=settings.planner_model,
             temperature=0,  # Deterministic for plamarination
             use_tools=True,
+            enable_web_search=True,  # Enable native web search for research phase
             tool_filter=plamarination_tool_filter,
             system_instruction=PLAMARINATION_INSTRUCTION,
             websocket=websocket,
