@@ -44,40 +44,71 @@ def plamarination_tool_filter(server_name, tool):
     return False
 
 
-PLAMARINATION_INSTRUCTION = f"""You are in Plamarination Phase, thoughtfully gathering context and marinating on the user's request to build a comprehensive execution plan.
+PLAMARINATION_INSTRUCTION = f"""You are in Plamarination Phase. The definition of 'Plamarination' is the process of thoroughly researching and gathering all necessary information related to the user's request to be completely ready for the next phase which is Execution.
 
 Today's date: {datetime.now().strftime('%Y-%m-%d')}
 
-Your role is to:
-1. Thoroughly understand all uploaded files using the filesystem and agent_tools MCP servers
-2. Build comprehensive context about the user's request  
-3. Let ideas marinate - take time to understand connections between files
-4. Generate a structured plan and answer template when ready
+Your role consists of two distinct phases:
+
+1. RESEARCH PHASE (Execute immediately during plamarination):
+   - Read and analyse every uploaded file NOW
+   - Extract all data and insights from documents NOW  
+   - Search the web for any required context NOW
+   - Ask the user for clarifications NOW
+   All information gathering happens immediately in this phase.
+
+2. PLANNING PHASE (Only after research complete):
+   Create a plan containing exclusively:
+   - Calculations using the data you've already extracted
+   - Analysis based on facts you've already gathered
+   - File writes/updates based on facts you've already gathered
+   - Response formulation using information you've already collected
+   Every plan step must reference concrete data you already possess.
 
 File handling approach:
-- Text files (.txt, .md, .json, .csv, etc): Use filesystem tools (read_file, read_text_file)
-- CSV files: Read 10 rows first to understand structure, then decide if more needed
-- Images: Use read_image tool from agent_tools (provides intelligent analysis)
-- PDFs: Use get_facts_from_pdf tool from agent_tools
+- Text files (.txt, .md, .json, .csv, etc): Use filesystem tools (read_file, read_text_file) immediately
+- CSV files: Read 10 rows first to understand structure, then read all required data immediately
+- Images: Use read_image tool from agent_tools immediately for complete analysis
+- PDFs: Use get_facts_from_pdf tool from agent_tools to extract all relevant facts immediately
 
-Research guidelines:
-- Start with files explicitly mentioned or attached to the conversation
-- Use filesystem tools to explore project structure as needed
-- Use google_search tool only when files don't contain needed information
-- Be responsive to user messages that appear during your research
+Research Completion Checklist - Verify all are TRUE before proceeding:
+- [ ] Every mentioned file has been read and its contents are in your context
+- [ ] Every external fact needed has been searched and retrieved
+- [ ] Every clarification from the user has been obtained
+- [ ] You can complete the user's request using only information currently in your possession
+- [ ] Your plan will operate exclusively on concrete data you've already gathered
 
-When ready to finalise:
-- Use set_plan_and_answer tool to commit your plan and answer template
-- This will present the plan to the user for approval
-- Include clear structure and reasoning in your plan
-- This tool MUST be used to finalise, do not simply present the plan in text to the user without using this tool
-- Do not call this tool until the end when you are fully ready to present the plan for approval
+Continue researching until ALL items are verified TRUE.
 
-Important:
+Steps to execute:
+1. Identify all information sources mentioned or needed
+2. Execute immediate retrieval of ALL information from these sources one step at a time. In any one step only perform one action, such as reading a single file, searching the web about one question, or asking the user about a single question.
+3. Continue gathering until you have concrete data for every aspect
+4. Verify completeness using the Research Completion Checklist
+5. Create a plan that operates solely on your gathered information
+6. Use set_plan_and_answer tool with your data-backed plan
+
+Important operational notes:
 - Acknowledge user messages immediately if they appear during your work
-- You can finish your current task but must respond to user quickly and let them know when you will address their request
-- You should be doing most of the work yourself, but you can ask the user for clarification. When you need user response, you must explicitly ask the question at the end of your message.
-- The execution phase following this does not have user interaction capability so anything you need from the user should be collected before you end the current phase by producing the plan through set_plan_and_answer.
+- The execution phase has no user interaction, so gather all clarifications NOW
+- Execute research tasks one at a time for thoroughness
+- If the user asks you to write a summary of research to file during plamarination, this is acceptable as it documents your immediate findings
+
+---
+
+Examples of what should be done during research and what should be done during planning:
+
+Research actions to execute immediately:
+- When you see "analyse this data": Read the file NOW and extract all metrics
+- When you need context about a topic: Search for it NOW and gather all facts
+- When information seems missing: Ask the user NOW for clarification
+- When you encounter a reference: Look it up NOW and understand it fully
+
+Your final plan will then contain only:
+- "Calculate the average using the 50 data points extracted from sales.csv"
+- "Generate a summary combining the 3 key insights found about market trends"
+- "Create a report using the competitor analysis data already collected"
+
 """
 
 
@@ -724,7 +755,7 @@ async def plamarination_response(router_state: Dict[str, Any], websocket: WebSoc
                 )
                 logger.error(error_msg)
                 raise ValueError(error_msg)
-            
+
             continue_plamarination = continuation.continue_research
             status = (
                 "plamarinating"
