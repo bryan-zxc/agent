@@ -61,6 +61,61 @@ class OpenAIProvider(BaseLLMProvider):
             )
             OpenAIProvider._temperature_warning_shown = True
 
+    def _convert_messages_for_api(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Convert internal message format to OpenAI API format.
+        
+        Transforms content types:
+        - "text" -> "input_text"
+        - "image_url" -> "input_image"
+        
+        Args:
+            messages: Messages in internal format
+            
+        Returns:
+            Messages in OpenAI API format
+        """
+        converted = []
+        
+        for msg in messages:
+            converted_msg = {"role": msg["role"]}
+            
+            # Handle content that might be a list of content items
+            if isinstance(msg.get("content"), list):
+                converted_content = []
+                for item in msg["content"]:
+                    if isinstance(item, dict):
+                        if item.get("type") == "text":
+                            # Convert "text" to "input_text"
+                            converted_content.append({
+                                "type": "input_text",
+                                "text": item.get("text", "")
+                            })
+                        elif item.get("type") == "image_url":
+                            # Convert "image_url" to "input_image"
+                            image_url = item.get("image_url", {})
+                            if isinstance(image_url, dict):
+                                url = image_url.get("url", "")
+                            else:
+                                url = image_url
+                            converted_content.append({
+                                "type": "input_image",
+                                "image_url": url
+                            })
+                        else:
+                            # Keep other types as-is
+                            converted_content.append(item)
+                    else:
+                        # Non-dict items, keep as-is
+                        converted_content.append(item)
+                converted_msg["content"] = converted_content
+            else:
+                # Simple string content, keep as-is
+                converted_msg["content"] = msg.get("content", "")
+            
+            converted.append(converted_msg)
+        
+        return converted
+
     def text_response(
         self,
         messages: List[Dict[str, Any]],
@@ -79,7 +134,7 @@ class OpenAIProvider(BaseLLMProvider):
             response = self.client.responses.create(
                 model=actual_model,
                 instructions=system_instruction,
-                input=messages,  # Always pass messages directly
+                input=self._convert_messages_for_api(messages),  # Convert to OpenAI format
             )
 
             # Track usage
@@ -115,7 +170,7 @@ class OpenAIProvider(BaseLLMProvider):
                 response = self.client.responses.parse(
                     model=actual_model,
                     instructions=system_instruction,
-                    input=messages,  # Always pass messages directly
+                    input=self._convert_messages_for_api(messages),  # Convert to OpenAI format
                     text_format=response_format,
                 )
 
@@ -129,7 +184,7 @@ class OpenAIProvider(BaseLLMProvider):
 
             elif response_format == "json":
                 # Use create() with format for generic JSON
-                input_messages = messages.copy()  # Copy to avoid mutating original
+                input_messages = self._convert_messages_for_api(messages.copy())  # Convert and copy
 
                 for attempt in range(MAX_LLM_RETRIES):
                     # Temperature not supported in gpt-5 models
@@ -226,7 +281,7 @@ class OpenAIProvider(BaseLLMProvider):
             response = self.client.responses.create(
                 model=actual_model,
                 instructions=system_instruction,
-                input=messages,  # Always pass messages directly
+                input=self._convert_messages_for_api(messages),  # Convert to OpenAI format
                 tools=tools_list if tools_list else None,
             )
 

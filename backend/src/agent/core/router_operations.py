@@ -44,7 +44,9 @@ def plamarination_tool_filter(server_name, tool):
     return False
 
 
-PLAMARINATION_INSTRUCTION = """You are in Plamarination Phase, thoughtfully gathering context and marinating on the user's request to build a comprehensive execution plan.
+PLAMARINATION_INSTRUCTION = f"""You are in Plamarination Phase, thoughtfully gathering context and marinating on the user's request to build a comprehensive execution plan.
+
+Today's date: {datetime.now().strftime('%Y-%m-%d')}
 
 Your role is to:
 1. Thoroughly understand all uploaded files using the filesystem and agent_tools MCP servers
@@ -713,6 +715,16 @@ async def plamarination_response(router_state: Dict[str, Any], websocket: WebSoc
                 response_format=PlamarinationContinuation,
             )
 
+            # Defensive check - log and raise error if structured response fails
+            if continuation is None:
+                error_msg = (
+                    f"Failed to get PlamarinationContinuation from LLM for router {router_id}. "
+                    "This likely indicates a message format issue with the OpenAI API. "
+                    "Check that message content is properly formatted for structured responses."
+                )
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+            
             continue_plamarination = continuation.continue_research
             status = (
                 "plamarinating"
