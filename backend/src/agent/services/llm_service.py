@@ -126,37 +126,26 @@ class LLM:
             response_format: Optional structured response format
             system_instruction: Optional system instruction for the model
         """
-        for retry in range(FAIL_STRUCTURE_RESPONSE_RETRIES):
-            try:
-                provider = self._get_provider_for_model(model)
-                actual_model = get_actual_model_name(model)
-                
-                if response_format:
-                    result = provider.structured_response(
-                        messages=messages,
-                        model=actual_model,
-                        temperature=temperature,
-                        response_format=response_format,
-                        system_instruction=system_instruction,
-                    )
-                else:
-                    result = provider.text_response(
-                        messages=messages,
-                        model=actual_model,
-                        temperature=temperature,
-                        system_instruction=system_instruction,
-                    )
-                    # Return string directly for text responses
-                
-                return result
-                
-            except Exception as e:
-                logger.error(f"Attempt {retry + 1} failed: {e}")
-                if retry < FAIL_STRUCTURE_RESPONSE_RETRIES - 1:
-                    delay_exp(e, retry)
-                    
-        logger.error(f"All {FAIL_STRUCTURE_RESPONSE_RETRIES} attempts failed")
-        return None
+        provider = self._get_provider_for_model(model)
+        actual_model = get_actual_model_name(model)
+        
+        if response_format:
+            result = provider.structured_response(
+                messages=messages,
+                model=actual_model,
+                temperature=temperature,
+                response_format=response_format,
+                system_instruction=system_instruction,
+            )
+        else:
+            result = provider.text_response(
+                messages=messages,
+                model=actual_model,
+                temperature=temperature,
+                system_instruction=system_instruction,
+            )
+        
+        return result
     
     
     async def a_get_response(
@@ -187,40 +176,83 @@ class LLM:
             websocket: Optional websocket for sending status updates
             payload: Optional context data for tool hooks (e.g., router_id)
         """
-        # Early exit if no tools
-        if not use_tools:
-            return self.get_response(messages, model, temperature, response_format, system_instruction)
-        
-        # Build tools list - MCP ONLY
-        final_tools = []
-        
-        # Only load MCP tools if tools are enabled
-        if use_tools and self.mcp_manager:
+        # Retry loop wrapping all execution paths
+        for retry in range(MAX_LLM_RETRIES):
             try:
-                if tool_filter:
-                    mcp_tools = await self.mcp_manager.get_filtered_tools(tool_filter)
+                # Early exit if no tools
+                if not use_tools:
+                    result = self.get_response(messages, model, temperature, response_format, system_instruction)
+                    
+                    # Validate result for non-tool responses
+                    if result is not None and result != "":
+                        return result
+                    
+                    # Log and continue retry loop if result was invalid  
+                    logger.warning(
+                        f"Attempt {retry + 1}/{MAX_LLM_RETRIES}: Got None or empty content from {model} "
+                        f"(no tools path)"
+                    )
+                    
                 else:
-                    mcp_tools = await self.mcp_manager.get_tools_for_llm()
-                final_tools.extend(mcp_tools)
-                logger.info(f"Loaded {len(mcp_tools)} MCP tools")
+                    # Build tools list - MCP ONLY
+                    final_tools = []
+                    
+                    # Only load MCP tools if tools are enabled
+                    if use_tools and self.mcp_manager:
+                        try:
+                            if tool_filter:
+                                mcp_tools = await self.mcp_manager.get_filtered_tools(tool_filter)
+                            else:
+                                mcp_tools = await self.mcp_manager.get_tools_for_llm()
+                            final_tools.extend(mcp_tools)
+                            logger.info(f"Loaded {len(mcp_tools)} MCP tools")
+                        except Exception as e:
+                            logger.warning(f"Failed to load MCP tools: {e}")
+                    
+                    # Without tools and without web search, use sync get_response
+                    if not final_tools and not enable_web_search:
+                        result = self.get_response(messages, model, temperature, response_format, system_instruction)
+                        
+                        # Validate result
+                        if result is not None and result != "":
+                            return result
+                        
+                        logger.warning(
+                            f"Attempt {retry + 1}/{MAX_LLM_RETRIES}: Got None or empty content from {model} "
+                            f"(no tools, no web search path)"
+                        )
+                    else:
+                        # Tool-enabled flow - pass websocket and web search flag for status updates
+                        result = await self._get_response_with_tools(
+                            messages=messages,
+                            model=model,
+                            temperature=temperature,
+                            system_instruction=system_instruction,
+                            tools=final_tools,
+                            enable_web_search=enable_web_search,  # Pass to providers
+                            websocket=websocket,
+                            payload=payload,  # Pass context for hooks
+                        )
+                        
+                        # For tool responses, validate content
+                        if result is not None and result != "":
+                            return result
+                        
+                        logger.warning(
+                            f"Attempt {retry + 1}/{MAX_LLM_RETRIES}: Got None or empty content from {model} "
+                            f"(tools path)"
+                        )
+                
             except Exception as e:
-                logger.warning(f"Failed to load MCP tools: {e}")
+                logger.error(f"Attempt {retry + 1}/{MAX_LLM_RETRIES} failed with exception: {e}")
+            
+            # Exponential backoff before next retry (except on last iteration)
+            if retry < MAX_LLM_RETRIES - 1:
+                delay_exp(None, retry)  # Pass None since we're handling both exceptions and content validation
         
-        # Without tools and without web search, use sync get_response
-        if not final_tools and not enable_web_search:
-            return self.get_response(messages, model, temperature, response_format, system_instruction)
-        
-        # Tool-enabled flow - pass websocket and web search flag for status updates
-        return await self._get_response_with_tools(
-            messages=messages,
-            model=model,
-            temperature=temperature,
-            system_instruction=system_instruction,
-            tools=final_tools,
-            enable_web_search=enable_web_search,  # Pass to providers
-            websocket=websocket,
-            payload=payload,  # Pass context for hooks
-        )
+        # All retries exhausted - return default message
+        logger.error(f"Failed to get valid response from {model} after {MAX_LLM_RETRIES} attempts")
+        return "I'm processing your request. Please continue."
     
     async def _get_response_with_tools(
         self,
