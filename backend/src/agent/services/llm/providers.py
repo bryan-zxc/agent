@@ -85,9 +85,10 @@ class OpenAIProvider(BaseLLMProvider):
                 for item in msg["content"]:
                     if isinstance(item, dict):
                         if item.get("type") == "text":
-                            # Convert "text" to "input_text"
+                            # Use output_text for assistant, input_text for others
+                            text_type = "output_text" if msg["role"] == "assistant" else "input_text"
                             converted_content.append({
-                                "type": "input_text",
+                                "type": text_type,
                                 "text": item.get("text", "")
                             })
                         elif item.get("type") == "image_url":
