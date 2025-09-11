@@ -317,6 +317,10 @@ class LLM:
         if not response or not response.get("tool_calls"):
             return response.get("content", "") if response else ""
         
+        # Log the tools that were called
+        tool_names_for_logging = [call["name"] for call in response["tool_calls"]]
+        logger.info(f"Tools used: {tool_names_for_logging}")
+        
         # Execute each tool and collect results
         tool_messages = []
         tool_names = []  # Track tool names for structured response
