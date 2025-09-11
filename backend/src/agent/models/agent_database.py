@@ -649,6 +649,8 @@ class AgentDatabase:
                 )
                 session.add(content_entry)
                 new_display_texts.append(display_text)
+                # Log role and display text
+                logger.info(f"[{role}] {display_text}")
             
             elif isinstance(content, list):
                 # Multiple content parts - must be list of dictionaries
@@ -664,6 +666,9 @@ class AgentDatabase:
                     )
                     session.add(content_entry)
                     new_display_texts.append(display_text)
+                    # Log role and display text if not empty
+                    if display_text:
+                        logger.info(f"[{role}] {display_text}")
             
             elif isinstance(content, dict):
                 # Single dictionary content
@@ -675,6 +680,9 @@ class AgentDatabase:
                 )
                 session.add(content_entry)
                 new_display_texts.append(display_text)
+                # Log role and display text if not empty
+                if display_text:
+                    logger.info(f"[{role}] {display_text}")
             
             else:
                 raise ValueError(f"Content must be string, dict, or list of dictionaries, got {type(content)}")
