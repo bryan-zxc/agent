@@ -1083,9 +1083,16 @@ class GoogleProvider(BaseLLMProvider):
         model: str,
         temperature: float,
         tools: List[Dict],
+        enable_web_search: bool = False,  # Accept parameter for compatibility
         system_instruction: Optional[str] = None,
     ) -> Optional[Dict]:
-        """Get tools response from Gemini with MCP tools support."""
+        """Get tools response from Gemini with MCP tools support.
+        
+        Note: Google uses the MCP google_search tool from agent_tools server
+        for web search functionality instead of native web search like OpenAI/Anthropic.
+        The enable_web_search parameter is accepted for compatibility but doesn't
+        affect behavior - web search is available through the google_search MCP tool.
+        """
         try:
             
             actual_model = self.get_actual_model_name(model)
@@ -1096,11 +1103,14 @@ class GoogleProvider(BaseLLMProvider):
 
             # Add MCP tools as function declarations
             if tools:
+                logger.info(f"[GEMINI DEBUG] Received {len(tools)} tools to process")
                 gemini_functions = []
                 for tool in tools:
                     # Extract from MCP's nested structure (similar to OpenAI fix)
                     if tool.get("type") == "function" and "function" in tool:
                         func = tool["function"]
+                        tool_name = func.get("name")
+                        logger.info(f"[GEMINI DEBUG] Processing tool: {tool_name}")
                         
                         # Convert MCP's JSON Schema parameters to Google's Schema format
                         parameters = func.get("parameters", {})
@@ -1115,8 +1125,11 @@ class GoogleProvider(BaseLLMProvider):
                         )
 
                 if gemini_functions:
+                    logger.info(f"[GEMINI DEBUG] Created {len(gemini_functions)} function declarations: {[f.name for f in gemini_functions]}")
                     # Add function declarations wrapped in Tool object
                     all_tools.append(types.Tool(function_declarations=gemini_functions))
+                else:
+                    logger.warning("[GEMINI DEBUG] No valid functions found in tools list")
 
             # Create config with tools and system instruction
             config = types.GenerateContentConfig(
@@ -1376,16 +1389,26 @@ class GoogleProvider(BaseLLMProvider):
                 # Check for URL context metadata
                 if hasattr(candidate, "url_context_metadata") and candidate.url_context_metadata:
                     web_search_happened = True
-                    url_metadata = candidate.url_context_metadata
-                    url_table = self._generate_url_metadata_table(url_metadata)
+                    # The url_context_metadata is a UrlContextMetadata object
+                    # We need to access its url_metadata attribute for the actual list
+                    url_context = candidate.url_context_metadata
                     
-                    # Append URL table to existing content
-                    if text_content:
-                        text_content += "\n\nThe following websites were retrieved:\n" + url_table
+                    # Check if it has the url_metadata attribute
+                    if hasattr(url_context, "url_metadata"):
+                        url_metadata = url_context.url_metadata
+                        logger.info(f"Found {len(url_metadata) if url_metadata else 0} URL metadata items")
+                        url_table = self._generate_url_metadata_table(url_metadata)
                     else:
-                        text_content = "The following websites were retrieved:\n" + url_table
-                        
-                    logger.info(f"URL context extracted from {len(url_metadata)} URLs")
+                        # Fallback if structure is different
+                        logger.warning(f"URL context metadata has unexpected structure: {type(url_context)}")
+                        url_table = ""
+                    
+                    # Append URL table to existing content (only if we have a table)
+                    if url_table:
+                        if text_content:
+                            text_content += "\n\nThe following websites were retrieved:\n" + url_table
+                        else:
+                            text_content = "The following websites were retrieved:\n" + url_table
             
             # IMPORTANT: Only return content if web search actually happened
             if web_search_happened and text_content:

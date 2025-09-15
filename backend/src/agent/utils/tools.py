@@ -80,8 +80,23 @@ str
 @mcp.tool(description=GOOGLE_SEARCH_DOC)
 async def google_search(query: str) -> str:
     try:
+        # Debug: Check environment and settings
+        import os
+        from ..config.settings import settings
+        
+        gemini_key_from_env = os.getenv("GEMINI_API_KEY")
+        gemini_key_from_settings = getattr(settings, 'gemini_api_key', None)
+        
+        logger.info(f"[GOOGLE_SEARCH DEBUG] Environment GEMINI_API_KEY length: {len(gemini_key_from_env) if gemini_key_from_env else 0}")
+        logger.info(f"[GOOGLE_SEARCH DEBUG] Settings gemini_api_key length: {len(gemini_key_from_settings) if gemini_key_from_settings else 0}")
+        logger.info(f"[GOOGLE_SEARCH DEBUG] Settings gemini_api_key first 10 chars: {gemini_key_from_settings[:10] if gemini_key_from_settings else 'None'}")
+        
         # Use the existing LLM service which has search_web method
         llm = LLM(caller="tools")
+        
+        logger.info(f"[GOOGLE_SEARCH DEBUG] LLM providers initialized: {list(llm.providers.keys())}")
+        logger.info(f"[GOOGLE_SEARCH DEBUG] Google provider exists: {'google' in llm.providers}")
+        
         result = llm.search_web(query)
         return result
     except Exception as e:

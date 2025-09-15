@@ -128,6 +128,10 @@ class MCPConfig(BaseModel):
                     "ROUTER_MODEL": settings.router_model,
                     "PLANNER_MODEL": settings.planner_model,
                     "WORKER_MODEL": settings.worker_model,
+                    # Pass API keys so the subprocess can access them
+                    "GEMINI_API_KEY": settings.gemini_api_key or "",
+                    "OPENAI_API_KEY": settings.openai_api_key or "",
+                    "ANTHROPIC_API_KEY": settings.anthropic_api_key or "",
                 },
                 description="Native agent tools for web search and PDF processing",
                 enabled=True

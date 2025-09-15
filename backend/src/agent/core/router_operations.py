@@ -18,6 +18,7 @@ from ..utils.image_utils import is_image, get_img_breakdown, encode_image
 from ..services.llm_service import LLM
 from ..tasks.task_utils import update_planner_next_task_and_queue
 from ..tasks.message_manager import MessageManager
+from .mcp_client import get_mcp_manager
 
 logger = logging.getLogger(__name__)
 
@@ -680,10 +681,13 @@ async def plamarination_response(router_state: Dict[str, Any], websocket: WebSoc
     router_id = router_state["id"]
     message_manager = router_state["message_manager"]
     agent_db = router_state["agent_db"]
-    llm = router_state["llm"]
 
     # Send thinking status for continuation calls (first entry already has it from handle_message)
     await send_status(status="Thinking", router_id=router_id, websocket=websocket)
+
+    # Create LLM with MCP manager specifically for plamarination
+    mcp_manager = await get_mcp_manager()
+    llm = LLM(caller="router", mcp_manager=mcp_manager)
 
     messages = await message_manager.get_messages()
 

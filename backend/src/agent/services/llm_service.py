@@ -197,17 +197,23 @@ class LLM:
                     # Build tools list - MCP ONLY
                     final_tools = []
                     
+                    logger.info(f"[TOOLS DEBUG] use_tools={use_tools}, mcp_manager exists={self.mcp_manager is not None}, tool_filter exists={tool_filter is not None}")
+                    
                     # Only load MCP tools if tools are enabled
                     if use_tools and self.mcp_manager:
                         try:
                             if tool_filter:
+                                logger.info(f"[TOOLS DEBUG] Loading filtered MCP tools with filter")
                                 mcp_tools = await self.mcp_manager.get_filtered_tools(tool_filter)
                             else:
+                                logger.info(f"[TOOLS DEBUG] Loading all MCP tools")
                                 mcp_tools = await self.mcp_manager.get_tools_for_llm()
                             final_tools.extend(mcp_tools)
-                            logger.info(f"Loaded {len(mcp_tools)} MCP tools")
+                            logger.info(f"[TOOLS DEBUG] Loaded {len(mcp_tools)} MCP tools: {[t.get('function', {}).get('name', 'unknown') if t.get('type') == 'function' else 'non-function' for t in mcp_tools[:5]]}")
                         except Exception as e:
-                            logger.warning(f"Failed to load MCP tools: {e}")
+                            logger.warning(f"[TOOLS DEBUG] Failed to load MCP tools: {e}")
+                    else:
+                        logger.info(f"[TOOLS DEBUG] Not loading MCP tools - use_tools={use_tools}, has mcp_manager={self.mcp_manager is not None}")
                     
                     # Without tools and without web search, use sync get_response
                     if not final_tools and not enable_web_search:
