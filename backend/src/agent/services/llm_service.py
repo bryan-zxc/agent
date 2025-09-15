@@ -31,14 +31,14 @@ FAIL_STRUCTURE_RESPONSE_RETRIES = RETRY_CONFIG["max_structured_retries"]
 # Re-export MODEL_MAPPING for backward compatibility
 MODEL_MAPPING = {
     "sonnet-4": "claude-sonnet-4-20250514",
-    "gpt-5-nano": "gpt-5-nano-2025-08-07",
+    "gpt-5-mini": "gpt-5-mini-2025-08-07",
     "gemini-2.5-pro": "gemini-2.5-pro",
 }
 
 # Re-export PRICING for backward compatibility (loaded from config)
 PRICING = {
     "claude-sonnet-4-20250514": {"input": 3.0, "output": 15.0},
-    "gpt-5-nano-2025-08-07": {"input": 0.05, "output": 0.4},
+    "gpt-5-mini-2025-08-07": {"input": 0.25, "output": 2.0},
     "gemini-2.5-pro": {
         "input_low": 1.25,
         "output_low": 10.0,
@@ -112,7 +112,7 @@ class LLM:
     def get_response(
         self,
         messages: List[Dict[str, Any]],
-        model: Literal["gpt-5-nano", "sonnet-4", "gemini-2.5-pro"],
+        model: Literal["gpt-5-mini", "sonnet-4", "gemini-2.5-pro"],
         temperature: float = 0,
         response_format: Optional[Union[Type[BaseModel], Dict]] = None,
         system_instruction: Optional[str] = None,
@@ -151,7 +151,7 @@ class LLM:
     async def a_get_response(
         self,
         messages: List[Dict],
-        model: Literal["gpt-5-nano", "sonnet-4", "gemini-2.5-pro"],
+        model: Literal["gpt-5-mini", "sonnet-4", "gemini-2.5-pro"],
         temperature: float = 0,
         response_format: Any = None,
         system_instruction: Optional[str] = None,  # NEW: System instruction parameter

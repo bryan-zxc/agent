@@ -29,11 +29,11 @@ class OpenAIProvider(BaseLLMProvider):
     """OpenAI provider implementation for GPT models."""
 
     MODELS = {
-        "gpt-5-nano": "gpt-5-nano-2025-08-07",
+        "gpt-5-mini": "gpt-5-mini-2025-08-07",
     }
 
     PRICING = {
-        "gpt-5-nano-2025-08-07": {"input": 0.05, "output": 0.4},
+        "gpt-5-mini-2025-08-07": {"input": 0.25, "output": 2.0},
     }
     
     # Track if we've shown the temperature deprecation warning

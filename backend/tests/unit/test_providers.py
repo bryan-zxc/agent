@@ -97,7 +97,7 @@ class TestOpenAIProviderUnit:
 
         response = provider.text_response(
             messages=messages,
-            model="gpt-5-nano",
+            model="gpt-5-mini",
             temperature=0,
             system_instruction="Answer concisely.",
         )
@@ -116,7 +116,7 @@ class TestOpenAIProviderUnit:
 
         response = provider.structured_response(
             messages=messages,
-            model="gpt-5-nano",
+            model="gpt-5-mini",
             temperature=0,
             response_format=SimpleAnswer,
         )
@@ -132,7 +132,7 @@ class TestOpenAIProviderUnit:
         ]
 
         response = provider.structured_response(
-            messages=messages, model="gpt-5-nano", temperature=0, response_format="json"
+            messages=messages, model="gpt-5-mini", temperature=0, response_format="json"
         )
 
         assert response is not None
@@ -149,7 +149,7 @@ class TestOpenAIProviderUnit:
 
         response = provider.tools_response(
             messages=messages,
-            model="gpt-5-nano",
+            model="gpt-5-mini",
             temperature=0,
             tools=[],
             enable_web_search=True,
@@ -172,7 +172,7 @@ class TestOpenAIProviderUnit:
 
         response = provider.tools_response(
             messages=messages,
-            model="gpt-5-nano",
+            model="gpt-5-mini",
             temperature=0,
             tools=tools,
             enable_web_search=False,
@@ -196,7 +196,7 @@ class TestOpenAIProviderUnit:
 
         response = provider.tools_response(
             messages=messages,
-            model="gpt-5-nano",
+            model="gpt-5-mini",
             temperature=0,
             tools=tools,
             enable_web_search=True,

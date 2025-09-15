@@ -117,7 +117,10 @@ class PlamarinationContinuation(BaseModel):
     """Determine if plamarination should continue researching."""
 
     continue_research: bool = Field(
-        description="True if mid-research/analysis/exploring files. False if assistant asked a question at the end or needs user clarification"
+        description="True if there is no expectation for user intervention. False if assistant asked a question or needs user clarification."
+    )
+    rationale: str = Field(
+        description="Explanation of why the agent should autonomously continue at this point or wait for user response."
     )
 
 
@@ -746,9 +749,12 @@ async def plamarination_response(router_state: Dict[str, Any], websocket: WebSoc
             # No tools - simple text response (display_texts will have single entry)
             continuation = llm.get_response(
                 messages=messages,  # Use returned messages with latest context
-                model=settings.router_model,  # GPT-5-nano for fast decision
+                model=settings.router_model,  # GPT-5-mini for fast decision
                 temperature=0,
                 response_format=PlamarinationContinuation,
+            )
+            logger.info(
+                f"Plamarination continuation: {continuation.model_dump_json(indent=2)}"
             )
 
             # Defensive check - log and raise error if structured response fails

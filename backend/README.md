@@ -215,7 +215,7 @@ When in agent mode, the system operates in one of two phases:
 
 **Automatic Continuation in Plamarination**:
 The plamarination phase uses an intelligent continuation mechanism:
-1. After each research step, GPT-5-nano determines if more research is needed
+1. After each research step, GPT-5-mini determines if more research is needed
 2. If continuing: Backend sends `continue_plamarination_signal`
 3. Frontend automatically sends `continue_plamarination` request
 4. Research continues without user intervention

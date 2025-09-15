@@ -45,7 +45,7 @@ When in agent mode, users can toggle between two phases:
   4. Generate a structured execution plan
   5. Present plan for user approval
 - **Automatic Continuation**:
-  - After each research step, GPT-5-nano determines if more research is needed
+  - After each research step, GPT-5-mini determines if more research is needed
   - If continuing: Frontend automatically sends continuation request
   - If user input needed: System waits for response
   - This creates seamless research cycles without manual intervention
@@ -164,13 +164,13 @@ The plamarination phase uses a sophisticated message flow to handle research ite
 4. Loop continues with next research iteration
 
 **When Text Response + Continue Research**:
-1. GPT-5-nano determines continuation is needed
+1. GPT-5-mini determines continuation is needed
 2. Backend sends `response` with assistant's thoughts
 3. Backend sends `continue_plamarination_signal`
 4. Frontend automatically sends `continue_plamarination`
 
 **When Text Response + User Input Needed**:
-1. GPT-5-nano determines user input is required
+1. GPT-5-mini determines user input is required
 2. Backend sends `response` with assistant's question
 3. No continuation signal sent
 4. Frontend stays idle, waiting for user input

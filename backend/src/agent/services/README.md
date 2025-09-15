@@ -95,7 +95,7 @@ Unified interface for multiple large language model providers.
 - Maps friendly names to actual model identifiers
 - Supported models:
   - `sonnet-4`: Claude Sonnet 4
-  - `gpt-5-nano`: GPT-5 Nano
+  - `gpt-5-mini`: GPT-5 Mini
   - `gemini-2.5-pro`: Gemini 2.5 Pro
 
 **`PRICING`** (backend/src/agent/config/llm_config.py)
@@ -189,7 +189,7 @@ llm = LLM(caller="my_agent", mcp_manager=mcp_manager)
 # Enable MCP tools and optionally web search
 response = await llm.a_get_response(
     messages=[{"role": "user", "content": "Get issue #40 from bryan-zxc/agent"}],
-    model="gpt-5-nano",
+    model="gpt-5-mini",
     temperature=0,
     system_instruction="You are a helpful assistant",
     use_tools=True,  # Enable MCP tools

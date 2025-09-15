@@ -184,7 +184,7 @@ class TestLLMServiceIntegration:
         ]
         
         # Use OpenAI model
-        model = "gpt-5-nano"
+        model = "gpt-5-mini"
         
         # Execute with MCP tools only (no web search)
         response = await llm.a_get_response(
