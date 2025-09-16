@@ -3,38 +3,40 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 
 interface UseDynamicTruncateOptions {
-  reservedWidth?: number;  // Width reserved for other elements (icons, padding, etc.)
   minChars?: number;       // Minimum characters to always show
   fontSize?: number;       // Font size in pixels for width calculation
   fontFamily?: string;     // Font family for accurate measurement
   debounceMs?: number;     // Debounce delay in milliseconds
+  getReservedWidth?: (parentElement: HTMLElement) => number; // Custom function to calculate reserved width
 }
 
 interface UseDynamicTruncateReturn {
-  ref: React.RefObject<HTMLElement>;
+  parentRef: React.RefObject<HTMLElement>;
+  textRef: React.RefObject<HTMLElement>;
   truncatedText: string;
   isTruncated: boolean;
 }
 
 /**
- * Custom hook for dynamically truncating text based on container width
- * Automatically adjusts truncation when container is resized
+ * Custom hook for dynamically truncating text based on parent container width
+ * Measures the parent container and calculates space available for text
  */
 export const useDynamicTruncate = (
   text: string,
   options: UseDynamicTruncateOptions = {}
 ): UseDynamicTruncateReturn => {
   const {
-    reservedWidth = 0,
     minChars = 3,
     fontSize = 14,
     fontFamily = 'system-ui, -apple-system, sans-serif',
-    debounceMs = 100
+    debounceMs = 50,
+    getReservedWidth
   } = options;
 
   const [truncatedText, setTruncatedText] = useState(text);
   const [isTruncated, setIsTruncated] = useState(false);
-  const containerRef = useRef<HTMLElement>(null);
+  const parentRef = useRef<HTMLElement>(null);
+  const textRef = useRef<HTMLElement>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -55,6 +57,41 @@ export const useDynamicTruncate = (
     context.font = `${fontSize}px ${fontFamily}`;
     return context.measureText(str).width;
   }, [fontSize, fontFamily]);
+
+  // Calculate reserved width from actual DOM elements
+  const calculateReservedWidth = useCallback((parentElement: HTMLElement): number => {
+    if (getReservedWidth) {
+      return getReservedWidth(parentElement);
+    }
+
+    // Default calculation: sum up all non-text elements' widths
+    let reserved = 0;
+    const children = Array.from(parentElement.children);
+
+    children.forEach(child => {
+      // Skip the text element itself
+      if (child === textRef.current || child.contains(textRef.current)) {
+        return;
+      }
+
+      // Add width of other elements
+      const rect = child.getBoundingClientRect();
+      reserved += rect.width;
+    });
+
+    // Add gaps (flex gap or margins)
+    const computedStyle = window.getComputedStyle(parentElement);
+    const gap = parseFloat(computedStyle.gap) || 0;
+    const childCount = children.filter(c => c !== textRef.current && !c.contains(textRef.current)).length;
+    reserved += gap * Math.max(0, childCount); // Gaps between elements
+
+    // Add padding
+    const paddingLeft = parseFloat(computedStyle.paddingLeft) || 0;
+    const paddingRight = parseFloat(computedStyle.paddingRight) || 0;
+    reserved += paddingLeft + paddingRight;
+
+    return reserved;
+  }, [getReservedWidth]);
 
   // Truncate text to fit within available width
   const truncateToFit = useCallback((availableWidth: number) => {
@@ -102,7 +139,7 @@ export const useDynamicTruncate = (
 
   // Handle resize with debouncing
   const handleResize = useCallback(() => {
-    if (!containerRef.current) return;
+    if (!parentRef.current) return;
 
     // Clear existing timer
     if (debounceTimerRef.current) {
@@ -111,29 +148,31 @@ export const useDynamicTruncate = (
 
     // Set new debounced update
     debounceTimerRef.current = setTimeout(() => {
-      const container = containerRef.current;
-      if (!container) return;
+      const parent = parentRef.current;
+      if (!parent) return;
 
-      const computedStyle = window.getComputedStyle(container);
-      const paddingLeft = parseFloat(computedStyle.paddingLeft) || 0;
-      const paddingRight = parseFloat(computedStyle.paddingRight) || 0;
+      // Get parent's actual width
+      const parentRect = parent.getBoundingClientRect();
+      const parentWidth = parentRect.width;
 
-      // Use offsetWidth for more accurate measurement including borders
-      const totalWidth = container.offsetWidth || container.clientWidth;
-      const availableWidth = totalWidth - paddingLeft - paddingRight - reservedWidth;
+      // Calculate reserved width from actual elements
+      const reserved = calculateReservedWidth(parent);
+
+      // Available width for text
+      const availableWidth = Math.max(0, parentWidth - reserved);
 
       if (availableWidth > 0) {
         truncateToFit(availableWidth);
       }
     }, debounceMs);
-  }, [truncateToFit, reservedWidth, debounceMs]);
+  }, [truncateToFit, calculateReservedWidth, debounceMs]);
 
-  // Set up ResizeObserver
+  // Set up ResizeObserver on parent
   useEffect(() => {
-    if (!containerRef.current) return;
+    if (!parentRef.current) return;
 
     const resizeObserver = new ResizeObserver(handleResize);
-    resizeObserver.observe(containerRef.current);
+    resizeObserver.observe(parentRef.current);
 
     // Initial calculation
     handleResize();
@@ -151,8 +190,17 @@ export const useDynamicTruncate = (
     handleResize();
   }, [text, handleResize]);
 
+  // Also observe text element in case it gets added/removed from DOM
+  useEffect(() => {
+    if (!textRef.current || !parentRef.current) return;
+
+    // Trigger recalculation when text element is ready
+    handleResize();
+  }, [handleResize]);
+
   return {
-    ref: containerRef as React.RefObject<HTMLElement>,
+    parentRef: parentRef as React.RefObject<HTMLElement>,
+    textRef: textRef as React.RefObject<HTMLElement>,
     truncatedText,
     isTruncated
   };

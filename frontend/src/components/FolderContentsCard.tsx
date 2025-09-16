@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Card,
   CardContent,
@@ -21,34 +21,57 @@ interface FolderContentsCardProps {
 
 // Component for selected file with dynamic truncation
 const SelectedFileInfo: React.FC<{ selectedFile: FileNode }> = ({ selectedFile }) => {
-  // Calculate reserved width for "Selected:" label and file size
-  const reservedWidth = useMemo(() => {
-    let width = 60; // "Selected:" label
-    width += 16; // Gap between elements
-    if (selectedFile.type === 'file' && selectedFile.size !== undefined) {
-      width += 60; // File size display
-    }
-    return width;
-  }, [selectedFile]);
+  // Custom function to calculate reserved width
+  const getReservedWidth = useCallback((parentElement: HTMLElement) => {
+    let reserved = 0;
 
-  const { ref, truncatedText, isTruncated } = useDynamicTruncate(selectedFile.name, {
-    reservedWidth,
+    // Get all children
+    const children = Array.from(parentElement.children);
+
+    children.forEach(child => {
+      // Skip the name container
+      if (child.classList.contains('name-container')) {
+        return;
+      }
+
+      // Add width of other elements
+      const rect = child.getBoundingClientRect();
+      reserved += rect.width;
+    });
+
+    // Add gaps (gap-2 = 8px)
+    const visibleChildren = children.filter(c => !c.classList.contains('name-container'));
+    reserved += 8 * visibleChildren.length;
+
+    // Add some buffer
+    reserved += 16;
+
+    return reserved;
+  }, []);
+
+  const { parentRef, textRef, truncatedText, isTruncated } = useDynamicTruncate(selectedFile.name, {
     minChars: 3,
     fontSize: 12, // text-xs
-    debounceMs: 50
+    debounceMs: 50,
+    getReservedWidth
   });
 
   return (
     <div className="border-t border-gray-300 dark:border-gray-600 p-2 bg-gray-100 dark:bg-gray-800">
-      <div className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-2">
+      <div
+        ref={parentRef as React.RefObject<HTMLDivElement>}
+        className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-2"
+      >
         <span className="font-medium flex-shrink-0">Selected:</span>
-        <span
-          ref={ref as React.RefObject<HTMLSpanElement>}
-          className="flex-1 min-w-0"
-          title={isTruncated ? selectedFile.name : undefined}
-        >
-          {truncatedText}
-        </span>
+        <div className="flex-1 min-w-0 name-container">
+          <span
+            ref={textRef as React.RefObject<HTMLSpanElement>}
+            className="block"
+            title={isTruncated ? selectedFile.name : undefined}
+          >
+            {truncatedText}
+          </span>
+        </div>
         {selectedFile.type === 'file' && selectedFile.size !== undefined && (
           <span className="text-[10px] opacity-75 flex-shrink-0">
             {fileSystemService.formatFileSize(selectedFile.size)}

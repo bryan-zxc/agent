@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo } from 'react';
+import React, { useCallback } from 'react';
 import {
   ChevronRight,
   ChevronDown,
@@ -31,45 +31,6 @@ interface FileTreeItemProps {
   selectedPath?: string;
 }
 
-// Separate component for name with dynamic truncation
-const NameWithDynamicTruncation: React.FC<{
-  name: string;
-  level: number;
-  isFolder: boolean;
-  hasFileSize: boolean;
-}> = ({ name, level, isFolder, hasFileSize }) => {
-  // Calculate reserved width for icons, chevron, padding, and file size
-  const reservedWidth = useMemo(() => {
-    let width = 20; // Icon width + gap
-    width += 24; // Right padding and margins
-    if (isFolder) width += 20; // Chevron space
-    if (hasFileSize) width += 100; // File size display with padding
-    // Note: Indentation is handled by parent padding-left, not included here
-    return width;
-  }, [isFolder, hasFileSize]);
-
-  const { ref, truncatedText, isTruncated } = useDynamicTruncate(name, {
-    reservedWidth,
-    minChars: 3,
-    fontSize: 14, // text-sm
-    debounceMs: 50
-  });
-
-  return (
-    <div
-      ref={ref as React.RefObject<HTMLDivElement>}
-      className="flex-1 min-w-0 overflow-hidden"
-    >
-      <span
-        className="text-sm text-gray-700 dark:text-gray-300 block"
-        title={isTruncated ? name : undefined}
-      >
-        {truncatedText}
-      </span>
-    </div>
-  );
-};
-
 export const FileTreeItem: React.FC<FileTreeItemProps> = ({
   node,
   level,
@@ -81,6 +42,42 @@ export const FileTreeItem: React.FC<FileTreeItemProps> = ({
   const isFolder = node.type === 'folder';
   const hasChildren = isFolder && node.children && node.children.length > 0;
   const isSelected = selectedPath === node.path;
+
+  // Custom function to calculate reserved width based on actual element structure
+  const getReservedWidth = useCallback((parentElement: HTMLElement) => {
+    let reserved = 0;
+
+    // Get all children
+    const children = Array.from(parentElement.children);
+
+    children.forEach(child => {
+      // Skip the text container
+      if (child.classList.contains('name-container')) {
+        return;
+      }
+
+      // Add width of other elements
+      const rect = child.getBoundingClientRect();
+      reserved += rect.width;
+    });
+
+    // Add gaps between elements (using Tailwind's gap-2 = 8px)
+    const visibleChildren = children.filter(c => !c.classList.contains('name-container'));
+    reserved += 8 * visibleChildren.length; // gap-2 = 8px
+
+    // Add some buffer for padding
+    reserved += 16; // Additional padding buffer
+
+    return reserved;
+  }, []);
+
+  // Use the new hook with parent-based measurement
+  const { parentRef, textRef, truncatedText, isTruncated } = useDynamicTruncate(node.name, {
+    minChars: 3,
+    fontSize: 14, // text-sm
+    debounceMs: 50,
+    getReservedWidth
+  });
 
   // Get appropriate icon based on file type
   const getIcon = () => {
@@ -129,6 +126,7 @@ export const FileTreeItem: React.FC<FileTreeItemProps> = ({
 
   const content = (
     <div
+      ref={parentRef as React.RefObject<HTMLDivElement>}
       className={cn(
         "flex items-center gap-2 px-2 py-1.5 rounded-md cursor-pointer transition-colors w-full",
         "hover:bg-gray-300 hover:dark:bg-gray-600",
@@ -160,13 +158,16 @@ export const FileTreeItem: React.FC<FileTreeItemProps> = ({
         {getIcon()}
       </div>
 
-      {/* Name */}
-      <NameWithDynamicTruncation
-        name={node.name}
-        level={level}
-        isFolder={isFolder}
-        hasFileSize={!isFolder && node.size !== undefined}
-      />
+      {/* Name - using flex-1 to fill available space */}
+      <div className="flex-1 min-w-0 name-container">
+        <span
+          ref={textRef as React.RefObject<HTMLSpanElement>}
+          className="text-sm text-gray-700 dark:text-gray-300 block"
+          title={isTruncated ? node.name : undefined}
+        >
+          {truncatedText}
+        </span>
+      </div>
 
       {/* File size for files */}
       {!isFolder && node.size !== undefined && (
