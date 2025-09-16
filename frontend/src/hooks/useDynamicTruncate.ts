@@ -118,7 +118,9 @@ export const useDynamicTruncate = (
       const paddingLeft = parseFloat(computedStyle.paddingLeft) || 0;
       const paddingRight = parseFloat(computedStyle.paddingRight) || 0;
 
-      const availableWidth = container.clientWidth - paddingLeft - paddingRight - reservedWidth;
+      // Use offsetWidth for more accurate measurement including borders
+      const totalWidth = container.offsetWidth || container.clientWidth;
+      const availableWidth = totalWidth - paddingLeft - paddingRight - reservedWidth;
 
       if (availableWidth > 0) {
         truncateToFit(availableWidth);

@@ -40,13 +40,13 @@ const NameWithDynamicTruncation: React.FC<{
 }> = ({ name, level, isFolder, hasFileSize }) => {
   // Calculate reserved width for icons, chevron, padding, and file size
   const reservedWidth = useMemo(() => {
-    let width = 16; // Icon width
-    width += level * 16 + 8; // Indentation
-    width += 16; // Padding
-    if (isFolder) width += 20; // Chevron
-    if (hasFileSize) width += 80; // File size display
+    let width = 20; // Icon width + gap
+    width += 24; // Right padding and margins
+    if (isFolder) width += 20; // Chevron space
+    if (hasFileSize) width += 100; // File size display with padding
+    // Note: Indentation is handled by parent padding-left, not included here
     return width;
-  }, [level, isFolder, hasFileSize]);
+  }, [isFolder, hasFileSize]);
 
   const { ref, truncatedText, isTruncated } = useDynamicTruncate(name, {
     reservedWidth,
@@ -56,13 +56,17 @@ const NameWithDynamicTruncation: React.FC<{
   });
 
   return (
-    <span
-      ref={ref as React.RefObject<HTMLSpanElement>}
-      className="flex-1 text-sm text-gray-700 dark:text-gray-300 min-w-0"
-      title={isTruncated ? name : undefined}
+    <div
+      ref={ref as React.RefObject<HTMLDivElement>}
+      className="flex-1 min-w-0 overflow-hidden"
     >
-      {truncatedText}
-    </span>
+      <span
+        className="text-sm text-gray-700 dark:text-gray-300 block"
+        title={isTruncated ? name : undefined}
+      >
+        {truncatedText}
+      </span>
+    </div>
   );
 };
 
@@ -126,7 +130,7 @@ export const FileTreeItem: React.FC<FileTreeItemProps> = ({
   const content = (
     <div
       className={cn(
-        "flex items-center gap-2 px-2 py-1.5 rounded-md cursor-pointer transition-colors",
+        "flex items-center gap-2 px-2 py-1.5 rounded-md cursor-pointer transition-colors w-full",
         "hover:bg-gray-300 hover:dark:bg-gray-600",
         isSelected && "bg-gray-300 dark:bg-gray-600",
         !isSelected && "bg-transparent"
