@@ -66,6 +66,11 @@ Your role consists of two distinct phases:
    - Response formulation using information you've already collected
    Every plan step must reference concrete data you already possess.
 
+File location:
+- ALL uploaded files are in /app/files/uploads/ directory (historical and newly uploaded)
+- When you see "Files uploaded: [list]" in a user message, those are newly uploaded files
+- To access any file mentioned: use /app/files/uploads/[filename]
+
 File handling approach:
 - Text files (.txt, .md, .json, .csv, etc): Use filesystem tools (read_file, read_text_file) immediately
 - CSV files: Read 10 rows first to understand structure, then read all required data immediately
@@ -437,6 +442,27 @@ async def handle_message(
 
     # Store user message
     await message_manager.add_message(role="user", content=user_message)
+
+    # Create separate message for files if they exist
+    if files:
+        filenames = [Path(f).name for f in files]
+        file_notification = f"Files uploaded: {', '.join(filenames)}"
+
+        # Add as another user message
+        result = await message_manager.add_message(
+            role="user",
+            content=file_notification,
+            need_message_id=True
+        )
+
+        # Send to frontend for display
+        await websocket.send_json({
+            "type": "response",
+            "message": file_notification,
+            "message_id": result["message_id"],
+            "router_id": router_id,
+            "role": "user"  # Indicate this is a user message
+        })
 
     try:
         # CRITICAL: Check status first to handle ongoing operations
