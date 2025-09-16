@@ -577,8 +577,15 @@ async def resolve_duplicate(
 async def delete_file(file_path: str):
     """Delete a file from both filesystem and database"""
     try:
-        # Security check - ensure path is within uploads directory
-        full_path = Path(file_path)
+        # Convert relative path to absolute path within uploads directory
+        # Frontend sends paths like "/interest_income.md"
+        if file_path.startswith('/'):
+            file_path = file_path[1:]  # Remove leading slash
+
+        # Construct full path within uploads directory
+        full_path = Path("/app/files/uploads") / file_path
+
+        # Security check - ensure path is within uploads directory (prevent path traversal)
         if not str(full_path.resolve()).startswith("/app/files/uploads"):
             raise HTTPException(status_code=403, detail="Access denied to this path")
 
