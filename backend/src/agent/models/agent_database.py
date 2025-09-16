@@ -388,13 +388,7 @@ class FileMetadata(Base):
     file_size = Column(Integer, nullable=False)  # File size in bytes
     mime_type = Column(String(255))  # MIME type
     upload_timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    user_id = Column(String(255), nullable=False, index=True)  # User identifier
     reference_count = Column(Integer, default=1)  # Number of times referenced
-
-    __table_args__ = (
-        Index("idx_content_hash_user", "content_hash", "user_id"),
-        Index("idx_filename_user", "original_filename", "user_id"),
-    )
 
 
 class LLMUsage(Base):
@@ -1419,7 +1413,6 @@ class AgentDatabase:
         file_path: str,
         file_size: int,
         mime_type: str,
-        user_id: str,
     ) -> None:
         """Create a new file metadata record"""
         async with self.AsyncSessionLocal() as session:
@@ -1430,20 +1423,18 @@ class AgentDatabase:
                 file_path=file_path,
                 file_size=file_size,
                 mime_type=mime_type,
-                user_id=user_id,
             )
             session.add(file_metadata)
             await session.commit()
 
     async def get_file_by_hash(
-        self, content_hash: str, user_id: str
+        self, content_hash: str
     ) -> Optional[Dict[str, Any]]:
-        """Find existing file by content hash for a specific user"""
+        """Find existing file by content hash"""
         async with self.AsyncSessionLocal() as session:
             result = await session.execute(
                 select(FileMetadata).where(
-                    FileMetadata.content_hash == content_hash,
-                    FileMetadata.user_id == user_id,
+                    FileMetadata.content_hash == content_hash
                 )
             )
             file_record = result.scalars().first()
@@ -1457,7 +1448,6 @@ class AgentDatabase:
                     "file_size": file_record.file_size,
                     "mime_type": file_record.mime_type,
                     "upload_timestamp": file_record.upload_timestamp,
-                    "user_id": file_record.user_id,
                     "reference_count": file_record.reference_count,
                 }
             return None
@@ -1479,7 +1469,6 @@ class AgentDatabase:
                     "file_size": file_record.file_size,
                     "mime_type": file_record.mime_type,
                     "upload_timestamp": file_record.upload_timestamp,
-                    "user_id": file_record.user_id,
                     "reference_count": file_record.reference_count,
                 }
             return None
@@ -1782,6 +1771,22 @@ class AgentDatabase:
                 session.add(instruction)
 
             await session.commit()
+
+    async def delete_file_metadata_by_path(self, file_path: str) -> bool:
+        """Delete file metadata by file path. Returns True even if no record found."""
+        async with self.AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(FileMetadata).where(FileMetadata.file_path == file_path)
+            )
+            file_record = result.scalars().first()
+
+            if file_record:
+                await session.delete(file_record)
+                await session.commit()
+                return True
+
+            # Return True even if no record found (for orphaned files)
+            return True
 
     async def get_worker_system_instruction(
         self, worker_id: str, instruction_type: str = "default"

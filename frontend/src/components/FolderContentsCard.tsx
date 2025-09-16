@@ -151,6 +151,22 @@ export const FolderContentsCard: React.FC<FolderContentsCardProps> = ({ classNam
     // You can add additional actions here like opening a preview
   }, []);
 
+  // Handle file deletion
+  const handleDelete = useCallback(async (node: FileNode) => {
+    try {
+      await fileSystemService.deleteFile(node.path);
+      // Clear selection if the deleted file was selected
+      if (selectedFile?.path === node.path) {
+        setSelectedFile(null);
+      }
+      // Refresh the file tree to reflect the deletion
+      await fetchFileTree();
+    } catch (error) {
+      console.error('Failed to delete file:', error);
+      // You could add toast notification here for error feedback
+    }
+  }, [selectedFile, fetchFileTree]);
+
   // Manual refresh
   const handleRefresh = async () => {
     setIsRefreshing(true);
@@ -277,6 +293,7 @@ export const FolderContentsCard: React.FC<FolderContentsCardProps> = ({ classNam
                 onToggle={handleToggle}
                 onSelect={handleSelect}
                 selectedPath={selectedFile?.path}
+                onDelete={handleDelete}
               />
             ))}
           </div>

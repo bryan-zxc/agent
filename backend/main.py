@@ -390,9 +390,6 @@ async def handle_websocket_message(websocket: WebSocket, data: dict):
 async def upload_file(file: UploadFile = File(...)):
     """Handle file uploads with duplicate detection"""
     try:
-        # TODO: Replace 'bryan000' with actual username from user management system
-        user_id = "bryan000"
-
         # Read file content
         content = await file.read()
         file_size = len(content)
@@ -411,7 +408,7 @@ async def upload_file(file: UploadFile = File(...)):
             Path(temp_file_path).unlink(missing_ok=True)
 
         # Check for duplicate content
-        existing_file = await db.get_file_by_hash(content_hash, user_id)
+        existing_file = await db.get_file_by_hash(content_hash)
 
         if existing_file:
             # Duplicate found - return duplicate info with options
@@ -433,7 +430,7 @@ async def upload_file(file: UploadFile = File(...)):
             }
 
         # No duplicate - save file normally
-        upload_dir = Path("/app/files/uploads") / user_id
+        upload_dir = Path("/app/files/uploads")
         upload_dir.mkdir(parents=True, exist_ok=True)
 
         file_id = uuid.uuid4().hex
@@ -459,7 +456,6 @@ async def upload_file(file: UploadFile = File(...)):
             file_path=str(file_path),
             file_size=file_size,
             mime_type=file.content_type,
-            user_id=user_id,
         )
 
         return {
@@ -484,8 +480,6 @@ async def resolve_duplicate(
 ):
     """Handle duplicate resolution based on user choice"""
     try:
-        # TODO: Replace 'bryan000' with actual username from user management system
-        user_id = "bryan000"
 
         if action == "cancel":
             return {
@@ -531,7 +525,7 @@ async def resolve_duplicate(
             content = await file.read()
 
             # Create new file with unique filename
-            upload_dir = Path("/app/files/uploads") / user_id
+            upload_dir = Path("/app/files/uploads")
             upload_dir.mkdir(parents=True, exist_ok=True)
 
             # Sanitise the new filename
@@ -560,7 +554,6 @@ async def resolve_duplicate(
                 file_path=str(file_path),
                 file_size=len(content),
                 mime_type=file.content_type,
-                user_id=user_id,
             )
 
             return {
@@ -577,6 +570,31 @@ async def resolve_duplicate(
 
     except Exception as e:
         logger.error(f"Error resolving duplicate: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/files/delete")
+async def delete_file(file_path: str):
+    """Delete a file from both filesystem and database"""
+    try:
+        # Security check - ensure path is within uploads directory
+        full_path = Path(file_path)
+        if not str(full_path.resolve()).startswith("/app/files/uploads"):
+            raise HTTPException(status_code=403, detail="Access denied to this path")
+
+        # Delete from filesystem if exists
+        if full_path.exists():
+            full_path.unlink()
+            logger.info(f"Deleted file from filesystem: {file_path}")
+
+        # Delete from database (ignore if no record exists - for orphaned files)
+        await db.delete_file_metadata_by_path(str(full_path))
+        logger.info(f"Deleted file metadata from database: {file_path}")
+
+        return {"success": True, "message": "File deleted successfully"}
+
+    except Exception as e:
+        logger.error(f"Error deleting file: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

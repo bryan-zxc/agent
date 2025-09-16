@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   ChevronRight,
   ChevronDown,
@@ -14,7 +14,8 @@ import {
   Archive,
   Code,
   FileJson,
-  Table
+  Table,
+  Trash2
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible';
@@ -29,6 +30,7 @@ interface FileTreeItemProps {
   onToggle: (path: string) => void;
   onSelect?: (node: FileNode) => void;
   selectedPath?: string;
+  onDelete?: (node: FileNode) => void;
 }
 
 export const FileTreeItem: React.FC<FileTreeItemProps> = ({
@@ -37,8 +39,10 @@ export const FileTreeItem: React.FC<FileTreeItemProps> = ({
   expanded,
   onToggle,
   onSelect,
-  selectedPath
+  selectedPath,
+  onDelete
 }) => {
+  const [isHovered, setIsHovered] = useState(false);
   const isFolder = node.type === 'folder';
   const hasChildren = isFolder && node.children && node.children.length > 0;
   const isSelected = selectedPath === node.path;
@@ -124,6 +128,13 @@ export const FileTreeItem: React.FC<FileTreeItemProps> = ({
     }
   };
 
+  const handleDelete = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onDelete && window.confirm(`Are you sure you want to delete "${node.name}"?`)) {
+      onDelete(node);
+    }
+  };
+
   const content = (
     <div
       ref={parentRef as React.RefObject<HTMLDivElement>}
@@ -135,6 +146,8 @@ export const FileTreeItem: React.FC<FileTreeItemProps> = ({
       )}
       style={{ paddingLeft: `${level * 16 + 8}px` }}
       onClick={handleClick}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
       role="button"
       tabIndex={0}
       aria-expanded={isFolder ? expanded : undefined}
@@ -175,6 +188,17 @@ export const FileTreeItem: React.FC<FileTreeItemProps> = ({
           {fileSystemService.formatFileSize(node.size)}
         </span>
       )}
+
+      {/* Delete button for files - shows on hover */}
+      {!isFolder && onDelete && (isHovered || isSelected) && (
+        <button
+          onClick={handleDelete}
+          className="flex-shrink-0 p-1 rounded hover:bg-red-100 dark:hover:bg-red-900/30 transition-colors"
+          aria-label={`Delete ${node.name}`}
+        >
+          <Trash2 className="h-4 w-4 text-red-500 dark:text-red-400" />
+        </button>
+      )}
     </div>
   );
 
@@ -197,6 +221,7 @@ export const FileTreeItem: React.FC<FileTreeItemProps> = ({
             onToggle={onToggle}
             onSelect={onSelect}
             selectedPath={selectedPath}
+            onDelete={onDelete}
           />
         ))}
       </CollapsibleContent>

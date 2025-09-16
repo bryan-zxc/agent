@@ -100,6 +100,31 @@ class FileSystemService {
   }
 
   /**
+   * Delete a file from the system
+   */
+  async deleteFile(filePath: string): Promise<void> {
+    try {
+      const response = await fetch(
+        `${this.apiUrl}/api/files/delete?file_path=${encodeURIComponent(filePath)}`,
+        {
+          method: 'DELETE',
+        }
+      );
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.detail || `Failed to delete file: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+      console.log('File deleted:', result.message);
+    } catch (error) {
+      console.error('Error deleting file:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Format file size for display
    */
   formatFileSize(bytes: number): string {
