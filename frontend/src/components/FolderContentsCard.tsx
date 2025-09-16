@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Card,
   CardContent,
@@ -13,10 +13,51 @@ import { fileSystemService, FileNode } from '@/lib/fileSystemService';
 import { Folder, RefreshCw } from 'lucide-react';
 import { Button } from './ui/button';
 import { cn } from '@/lib/utils';
+import { useDynamicTruncate } from '@/hooks/useDynamicTruncate';
 
 interface FolderContentsCardProps {
   className?: string;
 }
+
+// Component for selected file with dynamic truncation
+const SelectedFileInfo: React.FC<{ selectedFile: FileNode }> = ({ selectedFile }) => {
+  // Calculate reserved width for "Selected:" label and file size
+  const reservedWidth = useMemo(() => {
+    let width = 60; // "Selected:" label
+    width += 16; // Gap between elements
+    if (selectedFile.type === 'file' && selectedFile.size !== undefined) {
+      width += 60; // File size display
+    }
+    return width;
+  }, [selectedFile]);
+
+  const { ref, truncatedText, isTruncated } = useDynamicTruncate(selectedFile.name, {
+    reservedWidth,
+    minChars: 3,
+    fontSize: 12, // text-xs
+    debounceMs: 50
+  });
+
+  return (
+    <div className="border-t border-gray-300 dark:border-gray-600 p-2 bg-gray-100 dark:bg-gray-800">
+      <div className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-2">
+        <span className="font-medium flex-shrink-0">Selected:</span>
+        <span
+          ref={ref as React.RefObject<HTMLSpanElement>}
+          className="flex-1 min-w-0"
+          title={isTruncated ? selectedFile.name : undefined}
+        >
+          {truncatedText}
+        </span>
+        {selectedFile.type === 'file' && selectedFile.size !== undefined && (
+          <span className="text-[10px] opacity-75 flex-shrink-0">
+            {fileSystemService.formatFileSize(selectedFile.size)}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+};
 
 export const FolderContentsCard: React.FC<FolderContentsCardProps> = ({ className }) => {
   const [fileTree, setFileTree] = useState<FileNode | null>(null);
@@ -220,17 +261,9 @@ export const FolderContentsCard: React.FC<FolderContentsCardProps> = ({ classNam
 
         {/* Selected file info - compact version */}
         {selectedFile && (
-          <div className="border-t border-gray-300 dark:border-gray-600 p-2 bg-gray-100 dark:bg-gray-800">
-            <div className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-2">
-              <span className="font-medium">Selected:</span>
-              <span className="truncate flex-1">{selectedFile.name}</span>
-              {selectedFile.type === 'file' && selectedFile.size !== undefined && (
-                <span className="text-[10px] opacity-75">
-                  {fileSystemService.formatFileSize(selectedFile.size)}
-                </span>
-              )}
-            </div>
-          </div>
+          <SelectedFileInfo
+            selectedFile={selectedFile}
+          />
         )}
       </CardContent>
     </Card>

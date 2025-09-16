@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import {
   ChevronRight,
   ChevronDown,
@@ -20,6 +20,7 @@ import { cn } from '@/lib/utils';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible';
 import { FileNode } from '@/lib/fileSystemService';
 import { fileSystemService } from '@/lib/fileSystemService';
+import { useDynamicTruncate } from '@/hooks/useDynamicTruncate';
 
 interface FileTreeItemProps {
   node: FileNode;
@@ -29,6 +30,41 @@ interface FileTreeItemProps {
   onSelect?: (node: FileNode) => void;
   selectedPath?: string;
 }
+
+// Separate component for name with dynamic truncation
+const NameWithDynamicTruncation: React.FC<{
+  name: string;
+  level: number;
+  isFolder: boolean;
+  hasFileSize: boolean;
+}> = ({ name, level, isFolder, hasFileSize }) => {
+  // Calculate reserved width for icons, chevron, padding, and file size
+  const reservedWidth = useMemo(() => {
+    let width = 16; // Icon width
+    width += level * 16 + 8; // Indentation
+    width += 16; // Padding
+    if (isFolder) width += 20; // Chevron
+    if (hasFileSize) width += 80; // File size display
+    return width;
+  }, [level, isFolder, hasFileSize]);
+
+  const { ref, truncatedText, isTruncated } = useDynamicTruncate(name, {
+    reservedWidth,
+    minChars: 3,
+    fontSize: 14, // text-sm
+    debounceMs: 50
+  });
+
+  return (
+    <span
+      ref={ref as React.RefObject<HTMLSpanElement>}
+      className="flex-1 text-sm text-gray-700 dark:text-gray-300 min-w-0"
+      title={isTruncated ? name : undefined}
+    >
+      {truncatedText}
+    </span>
+  );
+};
 
 export const FileTreeItem: React.FC<FileTreeItemProps> = ({
   node,
@@ -121,9 +157,12 @@ export const FileTreeItem: React.FC<FileTreeItemProps> = ({
       </div>
 
       {/* Name */}
-      <span className="flex-1 text-sm truncate text-gray-700 dark:text-gray-300">
-        {node.name}
-      </span>
+      <NameWithDynamicTruncation
+        name={node.name}
+        level={level}
+        isFolder={isFolder}
+        hasFileSize={!isFolder && node.size !== undefined}
+      />
 
       {/* File size for files */}
       {!isFolder && node.size !== undefined && (
