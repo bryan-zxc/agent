@@ -198,10 +198,38 @@ export class FileUploadService {
   }
 
   /**
+   * Upload files directly without duplicate checking (for pre-validated files)
+   */
+  async uploadFilesDirectly(files: File[]): Promise<string[]> {
+    const filePaths: string[] = [];
+
+    for (const file of files) {
+      try {
+        const uploadResult = await this.uploadFile(file);
+
+        // Since these files are pre-validated, we expect them to upload successfully
+        // If a duplicate is found at this stage, just use the existing file
+        if (uploadResult.duplicate_found && uploadResult.existing_file) {
+          // Use the existing file path
+          filePaths.push(uploadResult.existing_file.file_id);
+        } else if (uploadResult.path) {
+          // Use the newly uploaded file path
+          filePaths.push(uploadResult.path);
+        }
+      } catch (error) {
+        console.error(`Failed to upload file ${file.name}:`, error);
+        // Continue with other files even if one fails
+      }
+    }
+
+    return filePaths;
+  }
+
+  /**
    * Upload multiple files and handle duplicates
    */
   async uploadFiles(
-    files: File[], 
+    files: File[],
     onDuplicateFound: (duplicateInfo: DuplicateFileInfo, file: File) => Promise<string>
   ): Promise<string[]> {
     const filePaths: string[] = [];

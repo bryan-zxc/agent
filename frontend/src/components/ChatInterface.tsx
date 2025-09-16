@@ -97,12 +97,11 @@ export const ChatInterface: React.FC = () => {
       console.log('Starting new conversation...');
       setConversationStarted(true);
       
-      // Upload files using the optimised method that handles resolved duplicates
+      // Upload files directly - they've already been validated during attachment
       const filePaths: string[] = [];
       if (files.length > 0) {
         try {
-          const resolvedFiles = await fileUploadService.checkFilesForDuplicates(files, handleDuplicateFound);
-          const uploadedPaths = await fileUploadService.uploadResolvedFiles(resolvedFiles);
+          const uploadedPaths = await fileUploadService.uploadFilesDirectly(files);
           filePaths.push(...uploadedPaths);
         } catch (error) {
           console.error('Error handling files:', error);
@@ -131,12 +130,11 @@ export const ChatInterface: React.FC = () => {
   const handleMessageSubmit = async (message: string, files: File[]) => {
     if (!message.trim() || !isWebSocketOpen()) return;
 
-    // Upload files using the optimised method that handles resolved duplicates
+    // Upload files directly - they've already been validated during attachment
     const filePaths: string[] = [];
     if (files.length > 0) {
       try {
-        const resolvedFiles = await fileUploadService.checkFilesForDuplicates(files, handleDuplicateFound);
-        const uploadedPaths = await fileUploadService.uploadResolvedFiles(resolvedFiles);
+        const uploadedPaths = await fileUploadService.uploadFilesDirectly(files);
         filePaths.push(...uploadedPaths);
       } catch (error) {
         console.error('Error handling files:', error);
@@ -191,15 +189,20 @@ export const ChatInterface: React.FC = () => {
             refreshTrigger={refreshTrigger}
           />
           <SidebarInset className="h-screen">
-            <ChatHeader isConnected={wsConnected} />
             <ResizablePanelGroup direction="horizontal" className="h-full">
               {/* Landing Page Panel */}
               <ResizablePanel defaultSize={80} minSize={50}>
-                <LandingPage 
-                  onFirstMessage={handleFirstMessage}
-                  onDuplicateFound={handleDuplicateFound}
-                  isConnected={wsConnected}
-                />
+                <div className="flex flex-col h-full">
+                  {/* Chat Header - Now inside the main panel only */}
+                  <ChatHeader isConnected={wsConnected} />
+                  <div className="flex-1 overflow-hidden">
+                    <LandingPage
+                      onFirstMessage={handleFirstMessage}
+                      onDuplicateFound={handleDuplicateFound}
+                      isConnected={wsConnected}
+                    />
+                  </div>
+                </div>
               </ResizablePanel>
               
               {/* Resizable Handle */}
@@ -261,25 +264,27 @@ export const ChatInterface: React.FC = () => {
           refreshTrigger={refreshTrigger}
         />
         <SidebarInset className="h-screen w-full overflow-hidden">
-          <ChatHeader isConnected={wsConnected} />
           <ResizablePanelGroup direction="horizontal" className="h-full w-full">
             {/* Main Chat Panel */}
             <ResizablePanel defaultSize={80} minSize={50}>
-              <div 
+              <div
                 className="flex flex-col h-full min-w-0 overflow-hidden"
                 role="application"
                 aria-label="Chat Interface"
               >
+                {/* Chat Header - Now inside the main chat panel only */}
+                <ChatHeader isConnected={wsConnected} />
+
                 <div className="flex-1 min-h-0 overflow-hidden">
-                  <MessageList 
-                    messages={messages} 
+                  <MessageList
+                    messages={messages}
                     status={status}
                     className="h-full"
                   />
                 </div>
 
                 <div className="flex-shrink-0 bg-muted/30 backdrop-blur-sm">
-                  <MessageInput 
+                  <MessageInput
                     onSubmit={handleMessageSubmit}
                     onDuplicateFound={handleDuplicateFound}
                     disabled={!wsConnected || isConversationLocked(currentRouterId)}

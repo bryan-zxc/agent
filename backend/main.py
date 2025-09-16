@@ -4,6 +4,7 @@ import logging
 import os
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -576,6 +577,126 @@ async def resolve_duplicate(
 
     except Exception as e:
         logger.error(f"Error resolving duplicate: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/files/list")
+async def list_files(path: Optional[str] = None):
+    """
+    List files and folders in the uploads directory.
+    Returns a tree structure of files and folders.
+    """
+    try:
+        # Always use uploads as the base directory
+        base_path = Path("/app/files/uploads")
+
+        # If a subpath is provided, append it to the base uploads path
+        if path:
+            base_path = base_path / path
+
+        # Security check - ensure path is within uploads directory
+        if not str(base_path.resolve()).startswith("/app/files/uploads"):
+            raise HTTPException(status_code=403, detail="Access denied to this path")
+
+        if not base_path.exists():
+            # Create uploads directory if it doesn't exist
+            base_path.mkdir(parents=True, exist_ok=True)
+            return {
+                "name": "uploads",
+                "type": "folder",
+                "path": str(base_path),
+                "children": []
+            }
+
+        def build_tree(dir_path: Path, max_depth: int = 5, current_depth: int = 0) -> Dict[str, Any]:
+            """Recursively build file tree structure with depth limit"""
+            result = {
+                "name": dir_path.name if dir_path != Path("/app/files/uploads") else "uploads",
+                "type": "folder",
+                "path": str(dir_path).replace("/app/files/uploads", ""),  # Relative path
+                "children": []
+            }
+
+            # Prevent infinite recursion with depth limit
+            if current_depth >= max_depth:
+                return result
+
+            try:
+                # List directory contents
+                for item in sorted(dir_path.iterdir()):
+                    if item.is_file():
+                        # Get file info
+                        stat = item.stat()
+                        file_info = {
+                            "name": item.name,
+                            "type": "file",
+                            "path": str(item).replace("/app/files/uploads", ""),  # Relative path
+                            "size": stat.st_size,
+                            "extension": item.suffix[1:] if item.suffix else "",
+                            "modified": datetime.fromtimestamp(stat.st_mtime).isoformat()
+                        }
+                        result["children"].append(file_info)
+                    elif item.is_dir() and not item.name.startswith('.'):  # Skip hidden directories
+                        # Recursively process subdirectory
+                        result["children"].append(build_tree(item, max_depth, current_depth + 1))
+            except PermissionError:
+                logger.warning(f"Permission denied accessing: {dir_path}")
+
+            return result
+
+        return build_tree(base_path)
+
+    except Exception as e:
+        logger.error(f"Error listing files: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/files/metadata/{file_path:path}")
+async def get_file_metadata(file_path: str):
+    """Get detailed metadata for a specific file in the uploads directory"""
+    try:
+        # Ensure the file is within uploads directory
+        full_path = Path(f"/app/files/uploads/{file_path}")
+
+        # Security check
+        if not str(full_path.resolve()).startswith("/app/files/uploads"):
+            raise HTTPException(status_code=403, detail="Access denied to this path")
+
+        if not full_path.exists():
+            raise HTTPException(status_code=404, detail="File not found")
+
+        if not full_path.is_file():
+            raise HTTPException(status_code=400, detail="Path is not a file")
+
+        stat = full_path.stat()
+
+        # Get file type based on extension
+        extension = full_path.suffix[1:].lower() if full_path.suffix else ""
+        file_type = "file"
+        if extension in ["png", "jpg", "jpeg", "gif", "webp"]:
+            file_type = "image"
+        elif extension in ["pdf", "doc", "docx", "txt"]:
+            file_type = "document"
+        elif extension in ["mp4", "avi", "mov", "webm"]:
+            file_type = "video"
+        elif extension in ["mp3", "wav", "ogg"]:
+            file_type = "audio"
+
+        return {
+            "name": full_path.name,
+            "path": str(full_path).replace("/app/files/uploads", ""),  # Relative path
+            "size": stat.st_size,
+            "extension": extension,
+            "type": file_type,
+            "created": datetime.fromtimestamp(stat.st_ctime).isoformat(),
+            "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            "accessed": datetime.fromtimestamp(stat.st_atime).isoformat(),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting file metadata: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

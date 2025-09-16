@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { cn } from '@/lib/utils';
 import {
   Card,
   CardContent,
@@ -15,7 +16,11 @@ interface UsageStats {
   total: number;
 }
 
-export const CostCard: React.FC = () => {
+interface CostCardProps {
+  className?: string;
+}
+
+export const CostCard: React.FC<CostCardProps> = ({ className }) => {
   const [stats, setStats] = useState<UsageStats>({
     today: 0,
     week: 0,
@@ -109,7 +114,7 @@ export const CostCard: React.FC = () => {
   }
 
   return (
-    <Card className="w-full min-w-0 bg-gray-200 dark:bg-gray-700 border-0 shadow-lg rounded-2xl overflow-hidden">
+    <Card className={cn("w-full min-w-0 bg-gray-200 dark:bg-gray-700 border-0 shadow-lg rounded-2xl overflow-hidden", className)}>
       <CardHeader className="rounded-t-2xl">
         <CardTitle className="text-lg font-semibold">Usage Costs</CardTitle>
       </CardHeader>
