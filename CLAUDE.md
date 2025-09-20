@@ -68,10 +68,83 @@ mutation {
 }'
 ```
 
+## Git Operations Model
+
+### Feature Branch Development
+
+#### 1. Create Feature Branch
+```bash
+git checkout -b feature/descriptive-name
+# First meaningful commit
+git push -u origin feature/descriptive-name
+```
+
+#### 2. Create Draft PR Immediately
+- Create Draft PR after first commit for visibility
+- Title format: `feat: Description [WIP]`
+- Link all related tickets in PR description
+- Convert to Ready only when all tickets complete
+
+#### 3. Commit Message Standards
+```bash
+# Work in progress on ticket
+git commit -m "feat: Add component X (addresses #123)"
+git commit -m "fix: Resolve issue Y (part of #123)"
+
+# Completing a ticket
+git commit -m "feat: Complete feature Z (closes #123)"
+git commit -m "fix: Final fix for bug (fixes #123)"
+```
+
+#### 4. PR Description Template
+```markdown
+## Overview
+Brief description of the feature/change
+
+## Related Issues
+- [ ] #XXX - Ticket description
+- [ ] #YYY - Another ticket
+
+## Changes
+- List of key changes
+- Architecture modifications
+- API updates
+
+## Testing
+- [ ] Unit tests pass
+- [ ] Integration tests pass
+- [ ] Manual testing complete
+
+## Notes
+Any migration or deployment notes
+```
+
+#### 5. Development Workflow
+```bash
+# Keep feature branch updated
+git checkout main
+git pull origin main
+git checkout feature/your-branch
+git rebase main  # Or merge if conflicts complex
+
+# Make atomic commits
+git add -p  # Selective staging
+git commit -m "feat: Specific change (#123)"
+
+# Push regularly (triggers CI)
+git push origin feature/your-branch
+```
+
+#### 6. Review Milestones
+- Request architecture review after core changes
+- Request implementation review after functionality complete
+- Final review when all tests pass
+
 ## Workflow
 - **Always read READMEs first**: `/agent/README.md` → module README → code files
 - **Backend testing**: Use Docker with uv
 - **Documentation updates**: MANDATORY after code changes
+- **Git operations**: Follow the model above for all feature development
 
 ## Commands
 ```bash
