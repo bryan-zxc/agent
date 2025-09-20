@@ -70,17 +70,26 @@ mutation {
 
 ## Git Operations Model
 
+### Branch Strategy (Git Flow)
+- **main**: Production-ready code only
+- **develop**: Integration branch for features
+- **feature/\***: Feature branches (merge to develop)
+- **release/\***: Release preparation (merge to main and develop)
+- **hotfix/\***: Emergency fixes (merge to main and develop)
+
 ### Feature Branch Development
 
 #### 1. Create Feature Branch
 ```bash
+git checkout develop
+git pull origin develop
 git checkout -b feature/descriptive-name
 # First meaningful commit
 git push -u origin feature/descriptive-name
 ```
 
 #### 2. Create Draft PR Immediately
-- Create Draft PR after first commit for visibility
+- Create Draft PR to **develop** branch after first commit for visibility
 - Title format: `feat: Description [WIP]`
 - Link all related tickets in PR description
 - Convert to Ready only when all tickets complete
@@ -122,10 +131,10 @@ Any migration or deployment notes
 #### 5. Development Workflow
 ```bash
 # Keep feature branch updated
-git checkout main
-git pull origin main
+git checkout develop
+git pull origin develop
 git checkout feature/your-branch
-git rebase main  # Or merge if conflicts complex
+git rebase develop  # Or merge if conflicts complex
 
 # Make atomic commits
 git add -p  # Selective staging
