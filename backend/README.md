@@ -283,6 +283,66 @@ The `handle_message` function routes based on **status first**, then mode and ph
 }
 ```
 
+#### Execution Flow Messages
+
+##### Start Execution (After Approval)
+```json
+{
+  "type": "start_execution",
+  "next_action": "task_creation",
+  "router_id": "uuid"
+}
+```
+
+##### Execution Complete
+```json
+{
+  "type": "execution_complete",
+  "router_id": "uuid",
+  "final_answer": "Completed answer content..."
+}
+```
+
+### Agent Execution Flow
+
+The agent system follows a strict phase-based execution model with user approval boundaries:
+
+#### 1. Plamarination Phase
+- **Activation**: User switches to agent mode
+- **Phase**: `agent_phase = "plamarination"`
+- **Process**: System researches and creates execution plan
+- **Completion**: Calls `set_plan_and_answer` tool
+- **Status**: `plamarinating_awaiting_user`
+
+#### 2. Approval Boundary (Critical)
+- **User Action**: Sends `approval_response` message
+- **Decision**:
+  - `approved: true` → Phase transition to execution
+  - `approved: false` → Continue plamarination with feedback
+
+#### 3. Execution Phase
+- **Transition**: System updates `agent_phase = "execution"`
+- **Start Signal**: Frontend receives `start_execution` with `next_action: "task_creation"`
+- **Frontend Loop**:
+  ```
+  while (action != "complete") {
+    response = await execute_function(action)
+    action = response.next_action or response.status
+  }
+  ```
+- **Functions Called**:
+  - `task_creation` → Creates workers
+  - `worker_init` → Initialises worker
+  - `worker_execute` → Runs worker task
+  - `synthesis` → Merges results
+
+#### 4. Completion
+- **Signal**: `synthesis` returns `{"status": "complete", "final_answer": "..."}`
+- **Transition**: System returns to `mode: "auto"`, `agent_phase: null`
+- **Frontend**: Receives `execution_complete` message with final answer
+
+**Important**: The system respects user control - execution NEVER starts without explicit approval.
+
 ### Database Schema
 The Router table includes:
 - `mode`: String(10) - "auto", "rapid", or "agent"

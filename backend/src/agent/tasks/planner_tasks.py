@@ -1202,7 +1202,7 @@ async def execute_synthesis(task_data: dict):
                         execution_status="complete"
                     )
                     return {
-                        "next_action": "execution_complete",
+                        "status": "complete",
                         "router_id": router_id,
                         "final_answer": updated_wip_template
                     }

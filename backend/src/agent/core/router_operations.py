@@ -494,22 +494,40 @@ async def handle_message(
                 approved = message_data.get("approved", False)
 
                 if approved:
-                    # Move to execution
+                    # Phase transition: plamarination → execution
                     logger.info(
-                        f"Plan approved for router {router_id}, starting execution"
+                        f"Plan approved for router {router_id}, transitioning to execution phase"
                     )
+
+                    # Update database with phase transition
                     await agent_db.update_router(
-                        router_id=router_id, status="executing"
+                        router_id=router_id,
+                        status="executing",
+                        agent_phase="execution"  # Critical phase transition
                     )
+
+                    # Send status update
                     await send_status(
-                        status="Executing approved plan",
+                        status="Starting execution phase",
                         router_id=router_id,
                         websocket=websocket,
                     )
-                    # Execute the approved plan
-                    await handle_complex_request(
-                        router_state=router_state, websocket=websocket, files=files
-                    )
+
+                    # Send phase transition notification
+                    await websocket.send_json({
+                        "type": "phase_updated",
+                        "agent_phase": "execution",
+                        "router_id": router_id
+                    })
+
+                    # Send start execution signal with first action
+                    await websocket.send_json({
+                        "type": "start_execution",
+                        "next_action": "task_creation",
+                        "router_id": router_id
+                    })
+
+                    logger.info(f"Sent start_execution signal for router {router_id}")
                 else:
                     # User wants revision
                     feedback = message_data.get("feedback", "")
@@ -897,7 +915,41 @@ async def execution_response(
 
         elif function_name == "synthesis":
             logger.info(f"Executing synthesis for router {router_id}")
-            return await planner_tasks.execute_synthesis(task_data)
+            result = await planner_tasks.execute_synthesis(task_data)
+
+            # Check if execution is complete
+            if isinstance(result, dict) and result.get("status") == "complete":
+                # Transition back to auto mode
+                await agent_db.update_router(
+                    router_id=router_id,
+                    status="active",
+                    mode="auto",
+                    agent_phase=None  # Clear phase when returning to auto mode
+                )
+
+                # Send completion signal with final answer
+                await websocket.send_json({
+                    "type": "execution_complete",
+                    "router_id": router_id,
+                    "final_answer": result.get("final_answer")
+                })
+
+                # Send mode/phase updates
+                await websocket.send_json({
+                    "type": "mode_updated",
+                    "mode": "auto",
+                    "router_id": router_id
+                })
+
+                await websocket.send_json({
+                    "type": "phase_updated",
+                    "agent_phase": None,
+                    "router_id": router_id
+                })
+
+                logger.info(f"Execution complete for router {router_id}, transitioned to auto mode")
+
+            return result
 
         else:
             logger.error(f"Unknown function requested: {function_name}")
