@@ -15,12 +15,15 @@ from sqlalchemy import (
     delete,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.pool import StaticPool
+from sqlalchemy.exc import OperationalError, IntegrityError
 from datetime import datetime, timezone
 import json
 import logging
+import os
 from typing import Dict, List, Any, Optional, Literal
 from pathlib import Path
 from ..config.settings import settings
@@ -30,6 +33,18 @@ Base = declarative_base()
 AgentType = Literal["planner", "worker", "router"]
 
 logger = logging.getLogger(__name__)
+
+# Detect database type from environment or settings
+def get_database_type() -> str:
+    """Detect whether we're using PostgreSQL or SQLite."""
+    # Check if we have PostgreSQL configuration
+    if hasattr(settings, 'postgres_host') and settings.postgres_host:
+        return 'postgresql'
+    return 'sqlite'
+
+# Select appropriate JSON type based on database
+DB_TYPE = get_database_type()
+json_column_type = JSONB if DB_TYPE == 'postgresql' else JSON
 
 
 class PlannerMessage(Base):
@@ -81,7 +96,7 @@ class PlannerMessageContent(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     message_id = Column(Integer, ForeignKey("planner_messages.id"), nullable=False)
-    content = Column(JSON, nullable=False)  # Single dictionary expected
+    content = Column(json_column_type, nullable=False)  # Single dictionary expected
     display_text = Column(Text, nullable=False)  # For frontend rendering
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
@@ -93,7 +108,7 @@ class WorkerMessageContent(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     message_id = Column(Integer, ForeignKey("worker_messages.id"), nullable=False)
-    content = Column(JSON, nullable=False)  # Single dictionary expected
+    content = Column(json_column_type, nullable=False)  # Single dictionary expected
     display_text = Column(Text, nullable=False)  # For frontend rendering
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
@@ -105,7 +120,7 @@ class RouterMessageContent(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     message_id = Column(Integer, ForeignKey("router_messages.id"), nullable=False)
-    content = Column(JSON, nullable=False)  # Single dictionary expected
+    content = Column(json_column_type, nullable=False)  # Single dictionary expected
     display_text = Column(Text, nullable=False)  # For frontend rendering
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
@@ -135,7 +150,7 @@ class Router(Base):
     )
     title = Column(String(255), nullable=False, default="New conversation")
     preview = Column(String(255), nullable=False, default="")
-    agent_metadata = Column(JSON, default=lambda: {})  # Future extensibility
+    agent_metadata = Column(json_column_type, default=lambda: {})  # Future extensibility
     schema_version = Column(Integer, default=1)  # Schema evolution tracking
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(
@@ -164,13 +179,13 @@ class Planner(Base):
     # New fields for function-based task queue system
     next_task = Column(String(100))  # Next function name to execute for resumability
     variable_file_paths = Column(
-        JSON, default=lambda: {}
+        json_column_type, default=lambda: {}
     )  # File paths for variables {key: file_path}
     image_file_paths = Column(
-        JSON, default=lambda: {}
+        json_column_type, default=lambda: {}
     )  # File paths for images {key: file_path}
 
-    agent_metadata = Column(JSON, default=lambda: {})  # Future extensibility
+    agent_metadata = Column(json_column_type, default=lambda: {})  # Future extensibility
     schema_version = Column(Integer, default=1)  # Schema evolution tracking
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(
@@ -195,32 +210,32 @@ class Worker(Base):
     )  # pending, in_progress, completed, failed_validation, recorded
     next_task = Column(String(100))  # Next async function to execute
     task_description = Column(Text)  # Detailed task description
-    acceptance_criteria = Column(JSON)  # List of success criteria
+    acceptance_criteria = Column(json_column_type)  # List of success criteria
     user_request = Column(Text)  # Original user request or question
     wip_answer_template = Column(Text)  # Work-in-progress answer template
     task_result = Column(Text)  # Execution outcome
     querying_structured_data = Column(
         Boolean, default=False
     )  # Whether task queries data files
-    image_keys = Column(JSON)  # List of relevant image identifiers
-    variable_keys = Column(JSON)  # List of relevant variable identifiers
-    tools = Column(JSON)  # List of required tools
+    image_keys = Column(json_column_type)  # List of relevant image identifiers
+    variable_keys = Column(json_column_type)  # List of relevant variable identifiers
+    tools = Column(json_column_type)  # List of required tools
     input_variable_filepaths = Column(
-        JSON, default=lambda: {}
+        json_column_type, default=lambda: {}
     )  # File paths for input variables {key: file_path}
     input_image_filepaths = Column(
-        JSON, default=lambda: {}
+        json_column_type, default=lambda: {}
     )  # File paths for input images {key: file_path}
     output_variable_filepaths = Column(
-        JSON, default=lambda: {}
+        json_column_type, default=lambda: {}
     )  # File paths for output variables {key: file_path}
     output_image_filepaths = Column(
-        JSON, default=lambda: {}
+        json_column_type, default=lambda: {}
     )  # File paths for output images {key: file_path}
     current_attempt = Column(Integer, default=0)  # Current retry attempt number
-    tables = Column(JSON)  # TableMeta objects
-    filepaths = Column(JSON)  # List of PDF file paths available for use
-    agent_metadata = Column(JSON, default=lambda: {})  # Future extensibility
+    tables = Column(json_column_type)  # TableMeta objects
+    filepaths = Column(json_column_type)  # List of PDF file paths available for use
+    agent_metadata = Column(json_column_type, default=lambda: {})  # Future extensibility
     schema_version = Column(Integer, default=1)  # Schema evolution tracking
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(
@@ -368,7 +383,7 @@ class TaskQueue(Base):
     started_at = Column(DateTime)
     completed_at = Column(DateTime)
     error_message = Column(Text)  # Store error details for failed tasks
-    payload = Column(JSON, nullable=True)  # JSON payload for additional task parameters
+    payload = Column(json_column_type, nullable=True)  # JSON payload for additional task parameters
 
     __table_args__ = (
         Index("idx_entity_status", "entity_id", "status"),
