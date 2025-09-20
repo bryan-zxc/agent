@@ -834,6 +834,80 @@ async def plamarination_response(router_state: Dict[str, Any], websocket: WebSoc
         await agent_db.update_router(router_id=router_id, status="active")
 
 
+# ========== EXECUTION RESPONSE FUNCTIONS ==========
+
+
+async def execution_response(
+    router_state: Dict[str, Any],
+    function_name: str,
+    websocket: WebSocket,
+    **kwargs
+) -> Dict[str, Any]:
+    """
+    Thin orchestration layer for executing planner/worker functions.
+    Calls requested function and returns result for frontend orchestration.
+
+    Args:
+        router_state: Router state dictionary
+        function_name: Name of function to execute
+        websocket: WebSocket connection
+        **kwargs: Additional parameters for the function
+
+    Returns:
+        Dict containing next action information for frontend
+    """
+    router_id = router_state["id"]
+    agent_db = router_state["agent_db"]
+
+    # Import task functions
+    from ..tasks import planner_tasks, worker_tasks
+
+    try:
+        # Build task_data expected by existing functions
+        task_data = {
+            "entity_id": kwargs.get("worker_id", router_id),  # worker_id for workers, router_id for planner
+            "payload": kwargs  # Pass all kwargs as payload
+        }
+
+        # Call the requested function and return its result directly
+        if function_name == "task_creation":
+            logger.info(f"Executing task creation for router {router_id}")
+            return await planner_tasks.execute_task_creation(task_data)
+
+        elif function_name == "worker_init":
+            worker_id = kwargs.get("worker_id")
+            logger.info(f"Initialising worker {worker_id}")
+            return await worker_tasks.worker_initialisation(task_data)
+
+        elif function_name == "worker_execute":
+            worker_id = kwargs.get("worker_id")
+            logger.info(f"Executing worker {worker_id}")
+
+            # Get worker to determine type
+            worker = await agent_db.get_worker(worker_id)
+            if not worker:
+                return {"error": f"Worker {worker_id} not found"}
+
+            next_task = worker.get("next_task")
+
+            if next_task == "execute_sql_worker":
+                return await worker_tasks.execute_sql_worker(task_data)
+            else:
+                return await worker_tasks.execute_standard_worker(task_data)
+
+        elif function_name == "synthesis":
+            logger.info(f"Executing synthesis for router {router_id}")
+            return await planner_tasks.execute_synthesis(task_data)
+
+        else:
+            logger.error(f"Unknown function requested: {function_name}")
+            return {"error": f"Unknown function: {function_name}"}
+
+    except Exception as e:
+        logger.error(f"Error in execution_response: {e}")
+        return {"error": str(e)}
+
+
 # ========== WEBSOCKET COMMUNICATION FUNCTIONS ==========
 
 

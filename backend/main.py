@@ -369,6 +369,43 @@ async def handle_websocket_message(websocket: WebSocket, data: dict):
             )
             # Router state automatically discarded after handling
 
+        elif message_type == "execute_function":
+            # Handle frontend-orchestrated function execution
+            router_id = data.get("router_id")
+            function_name = data.get("function_name")
+            payload = data.get("payload", {})
+
+            if not router_id or not function_name:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Missing router_id or function_name for execute_function",
+                    "router_id": router_id
+                })
+                return
+
+            logger.info(f"Executing function {function_name} for router {router_id}")
+
+            # Create ephemeral router state for execution
+            router_state = await router_operations.create_router(router_id=router_id)
+
+            # Use execution_response to route to the appropriate function
+            result = await router_operations.execution_response(
+                router_state=router_state,
+                function_name=function_name,
+                websocket=websocket,
+                **payload
+            )
+
+            # Send result back to frontend
+            await websocket.send_json({
+                "type": "function_result",
+                "router_id": router_id,
+                "function_name": function_name,
+                "result": result
+            })
+
+            logger.info(f"Function {function_name} executed for router {router_id}")
+
     except Exception as e:
         # Log detailed error information for WebSocket message handling
         error_logger = AsyncErrorLogger("websocket_message_handler")

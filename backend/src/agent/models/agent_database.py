@@ -135,6 +135,26 @@ class Router(Base):
     )
     title = Column(String(255), nullable=False, default="New conversation")
     preview = Column(String(255), nullable=False, default="")
+
+    # Execution-related fields for merged planner-router architecture
+    execution_plan = Column(Text)  # Markdown formatted plan from plamarination
+    execution_plan_model = Column(JSON, default=lambda: {})  # ExecutionPlanModel structure
+    current_task = Column(JSON, default=lambda: {})  # Active task being executed
+    execution_status = Column(
+        String(50), default="idle"
+    )  # idle, creating_task, executing_worker, synthesising, complete
+    worker_metadata = Column(
+        JSON, default=lambda: {}
+    )  # {task_id: {description, tools, status, result}}
+    variable_file_paths = Column(
+        JSON, default=lambda: {}
+    )  # File paths for variables {key: file_path}
+    image_file_paths = Column(
+        JSON, default=lambda: {}
+    )  # File paths for images {key: file_path}
+    answer_template = Column(Text)  # Template for final answer from plamarination
+    wip_answer = Column(Text)  # Work-in-progress answer being filled during execution
+
     agent_metadata = Column(JSON, default=lambda: {})  # Future extensibility
     schema_version = Column(Integer, default=1)  # Schema evolution tracking
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
@@ -187,9 +207,9 @@ class Worker(Base):
         String(32), primary_key=True
     )  # UUID hex string (links to worker_messages)
     worker_name = Column(String(255))  # Human readable worker name
-    planner_id = Column(
-        String(32), ForeignKey("planners.planner_id"), nullable=False, index=True
-    )  # Direct relationship to planner
+    router_id = Column(
+        String(32), ForeignKey("routers.router_id"), nullable=False, index=True
+    )  # Direct relationship to router
     task_status = Column(
         String(50), nullable=False, index=True
     )  # pending, in_progress, completed, failed_validation, recorded
@@ -1004,7 +1024,7 @@ class AgentDatabase:
     async def create_worker(
         self,
         worker_id: str,
-        planner_id: str,
+        router_id: str,
         worker_name: str,
         task_status: str,
         task_description: str,
@@ -1026,7 +1046,7 @@ class AgentDatabase:
             worker = Worker(
                 worker_id=worker_id,
                 worker_name=worker_name,
-                planner_id=planner_id,
+                router_id=router_id,
                 task_status=task_status,
                 task_description=task_description,
                 acceptance_criteria=acceptance_criteria,
@@ -1091,7 +1111,7 @@ class AgentDatabase:
                 return {
                     "worker_id": worker.worker_id,
                     "worker_name": worker.worker_name,
-                    "planner_id": worker.planner_id,
+                    "router_id": worker.router_id,
                     "task_status": worker.task_status,
                     "task_description": worker.task_description,
                     "acceptance_criteria": worker.acceptance_criteria,
@@ -1114,12 +1134,12 @@ class AgentDatabase:
                 }
             return None
 
-    async def get_workers_by_planner(self, planner_id: str) -> List[Dict[str, Any]]:
-        """Get all workers for a planner"""
+    async def get_workers_by_router(self, router_id: str) -> List[Dict[str, Any]]:
+        """Get all workers for a router"""
         async with self.AsyncSessionLocal() as session:
             result = await session.execute(
                 select(Worker)
-                .where(Worker.planner_id == planner_id)
+                .where(Worker.router_id == router_id)
                 .order_by(Worker.created_at)
             )
             workers = result.scalars().all()
@@ -1127,7 +1147,7 @@ class AgentDatabase:
                 {
                     "worker_id": worker.worker_id,
                     "worker_name": worker.worker_name,
-                    "planner_id": worker.planner_id,
+                    "router_id": worker.router_id,
                     "task_status": worker.task_status,
                     "task_description": worker.task_description,
                     "acceptance_criteria": worker.acceptance_criteria,

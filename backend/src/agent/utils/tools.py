@@ -646,10 +646,13 @@ async def set_plan_and_answer(
     todos: List[str] = None,
     router_id: Optional[str] = None,
 ) -> str:
-    # Import models locally to avoid circular import
-    from ..models.tasks import InitialExecutionPlan, ExecutionPlanModel
-    from ..utils.execution_plan_converter import initial_plan_to_execution_plan_model
-    
+    # Import models and functions locally to avoid circular import
+    from ..models.tasks import InitialExecutionPlan
+    from ..utils.execution_plan_converter import (
+        initial_plan_to_execution_plan_model,
+        execution_plan_model_to_markdown
+    )
+
     # Validate router_id was injected by hook
     if not router_id:
         return "Error: router_id not provided. This tool requires proper context."
@@ -666,21 +669,17 @@ async def set_plan_and_answer(
             InitialExecutionPlan(objective=objective, todos=todos)
         )
 
-        # Get current router metadata
-        router = await db.get_router(router_id)
-        if not router:
-            return f"Error: Router {router_id} not found"
+        # Generate markdown version of execution plan using existing converter
+        execution_plan_markdown = execution_plan_model_to_markdown(execution_plan_model)
 
-        # Prepare metadata with plamarination plan
-        # Store directly at root level as per design decision
-        metadata = {
-            "execution_plan_model": execution_plan_model.model_dump(),
-            "answer_template": answer_template,
-            "plan_description": plan_description  # Store for reference
-        }
-
-        # Update router with new metadata
-        success = await db.update_router(router_id, agent_metadata=metadata)
+        # Update router with execution plan and answer template in dedicated columns
+        success = await db.update_router(
+            router_id,
+            execution_plan=execution_plan_markdown,
+            execution_plan_model=execution_plan_model.model_dump(),
+            answer_template=answer_template,
+            execution_status="idle" if todos else "complete"  # No tasks means complete
+        )
 
         if not success:
             return f"Error: Failed to update router {router_id}"
