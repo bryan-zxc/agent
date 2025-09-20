@@ -220,18 +220,18 @@ class TestRouterOperationsSimple(unittest.IsolatedAsyncioTestCase):
         """Test sending message history via WebSocket."""
         mock_websocket = AsyncMock()
 
-        # Configure message manager
-        mock_message_manager = AsyncMock()
-        mock_message_manager.get_messages.return_value = [
+        # Configure agent_db mock
+        mock_db = AsyncMock()
+        mock_db.get_messages_for_display.return_value = [
             {"role": "user", "content": "Message 1"},
             {"role": "assistant", "content": "Response 1"},
             {"role": "user", "content": "Message 2"},
         ]
 
-        # Create router state with message_manager
+        # Create router state with agent_db
         router_state = {
             "id": "test_router_history",
-            "message_manager": mock_message_manager,
+            "agent_db": mock_db,
         }
 
         # Send message history
@@ -239,8 +239,10 @@ class TestRouterOperationsSimple(unittest.IsolatedAsyncioTestCase):
             router_state=router_state, websocket=mock_websocket
         )
 
-        # Verify messages were retrieved
-        mock_message_manager.get_messages.assert_called_once()
+        # Verify messages were retrieved from database
+        mock_db.get_messages_for_display.assert_called_once_with(
+            agent_type="router", agent_id="test_router_history"
+        )
 
         # Verify message history was sent in one call
         mock_websocket.send_json.assert_called_once()

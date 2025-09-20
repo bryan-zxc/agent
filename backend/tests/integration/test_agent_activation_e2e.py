@@ -372,7 +372,7 @@ class TestCompleteAgentActivationFlow(AgentActivationE2ETestCase):
 class TestMultiAgentCoordination(AgentActivationE2ETestCase):
     """Test coordination between multiple agents during activation."""
 
-    @unittest.skip("Skipped due to intermittent SQLite concurrency issues - may encounter 'database is locked' errors")
+    # Now enabled with PostgreSQL which supports true concurrent operations
     async def test_concurrent_multi_agent_activation(self):
         """Test multiple agents activating and coordinating concurrently."""
 
