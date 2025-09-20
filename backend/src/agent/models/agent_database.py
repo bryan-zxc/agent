@@ -418,12 +418,12 @@ class AgentDatabase:
     """
 
     def __init__(
-        self, database_path: str = settings.database_path, _internal_init: bool = False
+        self, database_url: str = None, _internal_init: bool = False
     ):
         """Private initialiser - use AgentDatabase.create() instead.
 
         Args:
-            database_path: Path to the SQLite database file
+            database_url: Database connection URL (PostgreSQL or SQLite)
             _internal_init: Internal flag to prevent direct instantiation
 
         Raises:
@@ -436,38 +436,57 @@ class AgentDatabase:
                 "Not: db = AgentDatabase()"
             )
 
-        # Store database path for schema operations
-        self.database_path = database_path
+        # Build database URL from settings if not provided
+        if database_url is None:
+            # Build PostgreSQL connection string from settings
+            database_url = (
+                f"postgresql+asyncpg://{settings.postgres_user}:"
+                f"{settings.postgres_password}@{settings.postgres_host}:"
+                f"{settings.postgres_port}/{settings.postgres_db}"
+            )
 
-        # Async engine for all database operations with improved concurrency settings
-        async_database_url = f"sqlite+aiosqlite:///{database_path}"
+        # Store database URL for schema operations
+        self.database_url = database_url
+
+        # Set the async database URL
+        async_database_url = database_url
         
-        # Different configuration for in-memory vs file-based databases
-        if database_path == ":memory:":
-            # In-memory databases use StaticPool, which doesn't support pool_size/max_overflow
+        # Different configuration for PostgreSQL vs SQLite
+        if "postgresql" in async_database_url:
+            # PostgreSQL configuration
+            self.async_engine = create_async_engine(
+                async_database_url,
+                echo=False,
+                pool_size=20,  # Connection pool size
+                max_overflow=10,  # Additional connections allowed
+                pool_pre_ping=True,  # Verify connections before use
+                pool_recycle=3600,  # Recycle connections every hour
+            )
+        elif ":memory:" in async_database_url:
+            # In-memory SQLite databases use StaticPool
             self.async_engine = create_async_engine(
                 async_database_url,
                 echo=False,
                 connect_args={
                     "timeout": 30,  # Connection timeout
-                    "check_same_thread": False,  # Allow cross-thread access for better concurrency
+                    "check_same_thread": False,  # Allow cross-thread access
                 },
-                pool_pre_ping=True,  # Verify connections before use to avoid stale connections
+                pool_pre_ping=True,
                 poolclass=StaticPool,  # Use StaticPool for in-memory databases
             )
         else:
-            # File-based databases can use normal pooling
+            # File-based SQLite databases
             self.async_engine = create_async_engine(
                 async_database_url,
                 echo=False,
                 connect_args={
                     "timeout": 30,  # Connection timeout
-                    "check_same_thread": False,  # Allow cross-thread access for better concurrency
+                    "check_same_thread": False,  # Allow cross-thread access
                 },
                 pool_size=20,  # Increase from default 5 to handle concurrent requests
                 max_overflow=10,  # Allow 10 additional connections beyond pool_size
-                pool_pre_ping=True,  # Verify connections before use to avoid stale connections
-                pool_recycle=3600,  # Recycle connections every hour to prevent issues
+                pool_pre_ping=True,  # Verify connections before use
+                pool_recycle=3600,  # Recycle connections every hour
             )
 
         # Async session factory with optimised settings
@@ -481,7 +500,7 @@ class AgentDatabase:
 
     @classmethod
     async def create(
-        cls, database_path: str = settings.database_path
+        cls, database_url: str = None
     ) -> "AgentDatabase":
         """Factory method to create and properly initialise an AgentDatabase instance.
 
@@ -489,7 +508,7 @@ class AgentDatabase:
         the database instance, preventing issues with uninitialised connections.
 
         Args:
-            database_path: Path to the SQLite database file
+            database_url: Database connection URL (PostgreSQL or SQLite)
 
         Returns:
             Fully initialised AgentDatabase instance
@@ -497,15 +516,15 @@ class AgentDatabase:
         Example:
             db = await AgentDatabase.create()
         """
-        # Ensure directory exists
-        Path(database_path).parent.mkdir(parents=True, exist_ok=True)
-
         # Create instance using internal flag
-        instance = cls(database_path=database_path, _internal_init=True)
+        instance = cls(database_url=database_url, _internal_init=True)
 
         # Perform all async initialisation
         await instance._initialise_database_async()
-        await instance._configure_async_sqlite_optimisations()
+
+        # Only configure SQLite optimisations for SQLite databases
+        if instance.database_url and "sqlite" in instance.database_url:
+            await instance._configure_async_sqlite_optimisations()
 
         return instance
 
@@ -522,7 +541,7 @@ class AgentDatabase:
             logger.info(f"Database initialised. Auto-migration disabled.")
 
     async def _configure_async_sqlite_optimisations(self):
-        """Configure SQLite pragmas for async connections"""
+        """Configure SQLite pragmas for async connections (SQLite only)"""
         async with self.async_engine.begin() as conn:
             from sqlalchemy import text
 
