@@ -12,7 +12,6 @@ import unittest
 import asyncio
 import json
 import time
-import tempfile
 import shutil
 import uuid
 import os
@@ -22,6 +21,7 @@ from pathlib import Path
 # Import the modules under test
 from agent.core import router_operations
 from agent.models.agent_database import AgentDatabase
+from agent.database.connection import DatabaseConfig
 from agent.config.settings import settings
 
 
@@ -68,19 +68,16 @@ class TestWebSocketUpdatesExecution(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         """Set up test environment before each test."""
         # Create temporary directory for testing
-        self.test_dir = tempfile.mkdtemp()
         self.original_base_path = settings.collaterals_base_path
 
         # Mock settings to use test directory
         settings.collaterals_base_path = self.test_dir
 
         # Set up in-memory database for testing
-        # Create temporary database file for testing
-        db_fd, self.test_db_path = tempfile.mkstemp(suffix=".db")
-        os.close(db_fd)  # Close file descriptor, AgentDatabase will open it
-
-        # Create AgentDatabase with test database path
-        self.db = await AgentDatabase.create(database_path=self.test_db_path)
+        # Use PostgreSQL test database
+        config = DatabaseConfig()
+        test_db_url = config.get_database_url(database_name="test")
+        self.db = await AgentDatabase.create(database_url=test_db_url)
 
         # Test data
         self.router_id = f"test_router_{uuid.uuid4().hex[:8]}"

@@ -17,7 +17,6 @@ Key Focus Areas:
 
 import unittest
 import asyncio
-import tempfile
 import uuid
 import time
 from pathlib import Path
@@ -34,6 +33,7 @@ from async_test_utils import AsyncWarningCaptureMixin
 
 # Import system components
 from src.agent.models.agent_database import AgentDatabase
+from src.agent.database.connection import DatabaseConfig
 from src.agent.core import router_operations
 from src.agent.tasks.planner_tasks import (
     execute_initial_planning,
@@ -55,9 +55,8 @@ class ConcurrentAsyncOperationsTestCase(
     async def asyncSetUp(self):
         """Set up test environment for concurrent operations testing."""
         # Create temporary database for concurrent access testing
-        self.temp_db_file = tempfile.NamedTemporaryFile(delete=False, suffix=".db")
         self.temp_db_file.close()
-        self.db = await AgentDatabase.create(self.temp_db_file.name)
+        self.db = await AgentDatabase.create(database_url=config.get_database_url(database_name="test"))
 
         # Test identifiers for concurrent scenarios
         self.router_id = f"concurrent_router_{uuid.uuid4().hex[:8]}"

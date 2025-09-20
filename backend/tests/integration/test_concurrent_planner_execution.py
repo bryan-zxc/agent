@@ -7,7 +7,6 @@ and database consistency.
 """
 
 import unittest
-import tempfile
 import uuid
 import shutil
 import asyncio
@@ -19,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Import the modules under test
 from agent.models.agent_database import AgentDatabase
+from agent.database.connection import DatabaseConfig
 from agent.tasks.planner_tasks import (
     execute_initial_planning,
     execute_task_creation,
@@ -36,15 +36,13 @@ class TestConcurrentPlannerExecution(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         """Set up test environment before each test."""
         # Create temporary directory for testing
-        self.test_dir = tempfile.mkdtemp()
         self.original_base_path = settings.collaterals_base_path
 
         # Mock settings to use test directory
         settings.collaterals_base_path = self.test_dir
 
         # Set up temporary database for testing
-        self.temp_db_file = tempfile.NamedTemporaryFile(delete=False)
-        self.db = await AgentDatabase.create(self.temp_db_file.name)
+        self.db = await AgentDatabase.create(database_url=config.get_database_url(database_name="test"))
 
         # Test data
         self.test_planners = []

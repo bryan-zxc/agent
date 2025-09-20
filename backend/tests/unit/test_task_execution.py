@@ -8,7 +8,6 @@ Enhanced with async/await correctness checking to detect missing awaits and runt
 """
 
 import unittest
-import tempfile
 import uuid
 import os
 import warnings
@@ -21,6 +20,7 @@ from tests.async_test_utils import AsyncWarningCaptureMixin
 
 from src.agent.tasks.task_utils import update_planner_next_task_and_queue
 from src.agent.models.agent_database import AgentDatabase
+from src.agent.database.connection import DatabaseConfig
 from src.agent.config.settings import settings
 from src.agent.tasks.planner_tasks import (
     clean_table_name,
@@ -77,6 +77,7 @@ class TestTaskExecutionSimple(
         """Test that MessageManager can be imported and instantiated (smoke test)."""
         from src.agent.tasks.message_manager import MessageManager
         from src.agent.models.agent_database import AgentDatabase
+        from src.agent.database.connection import DatabaseConfig
 
         # Simple instantiation test - verifies imports and basic structure
         with patch.object(AgentDatabase, "__init__", return_value=None):
@@ -91,13 +92,11 @@ class TestTaskExecutionSimple(
     async def test_update_planner_next_task_and_queue_async_correctness(self):
         """Test that update_planner_next_task_and_queue properly handles async operations."""
         # Use temp file for database to avoid initialization issues
-        with tempfile.NamedTemporaryFile(delete=False) as temp_db:
-            db_path = temp_db.name
 
         try:
             async with self.capture_async_warnings() as warning_list:
                 # Use temp database instead of in-memory to catch real async issues
-                db = await AgentDatabase.create(db_path)
+                db = await AgentDatabase.create(database_url=config.get_database_url(database_name="test"))
 
                 # Create test planner
                 await db.create_planner(
@@ -129,11 +128,9 @@ class TestTaskExecutionSimple(
     async def test_update_planner_negative_missing_await(self):
         """Test that missing await produces warnings (negative test)."""
         # Use temp file for database to avoid initialization issues
-        with tempfile.NamedTemporaryFile(delete=False) as temp_db:
-            db_path = temp_db.name
 
         try:
-            db = await AgentDatabase.create(db_path)
+            db = await AgentDatabase.create(database_url=config.get_database_url(database_name="test"))
 
             # Create test planner
             await db.create_planner(

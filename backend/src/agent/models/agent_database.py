@@ -56,7 +56,7 @@ class PlannerMessage(Base):
         String(20), nullable=False
     )  # 'user', 'assistant'
     # content column REMOVED - now stored in PlannerMessageContent
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
 class WorkerMessage(Base):
@@ -70,7 +70,7 @@ class WorkerMessage(Base):
         String(20), nullable=False
     )  # 'user', 'assistant'
     # content column REMOVED - now stored in WorkerMessageContent
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
 class RouterMessage(Base):
@@ -82,7 +82,7 @@ class RouterMessage(Base):
     )
     role = Column(String(20), nullable=False)  # 'user', 'assistant'
     # content column REMOVED - now stored in RouterMessageContent
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     # Add composite index for message history queries
     __table_args__ = (Index("idx_router_created", "router_id", "created_at"),)
@@ -98,7 +98,7 @@ class PlannerMessageContent(Base):
     message_id = Column(Integer, ForeignKey("planner_messages.id"), nullable=False)
     content = Column(json_column_type, nullable=False)  # Single dictionary expected
     display_text = Column(Text, nullable=False)  # For frontend rendering
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (Index("idx_planner_content_lookup", "message_id"),)
 
@@ -110,7 +110,7 @@ class WorkerMessageContent(Base):
     message_id = Column(Integer, ForeignKey("worker_messages.id"), nullable=False)
     content = Column(json_column_type, nullable=False)  # Single dictionary expected
     display_text = Column(Text, nullable=False)  # For frontend rendering
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (Index("idx_worker_content_lookup", "message_id"),)
 
@@ -122,7 +122,7 @@ class RouterMessageContent(Base):
     message_id = Column(Integer, ForeignKey("router_messages.id"), nullable=False)
     content = Column(json_column_type, nullable=False)  # Single dictionary expected
     display_text = Column(Text, nullable=False)  # For frontend rendering
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (Index("idx_router_content_lookup", "message_id"),)
 
@@ -152,9 +152,9 @@ class Router(Base):
     preview = Column(String(255), nullable=False, default="")
     agent_metadata = Column(json_column_type, default=lambda: {})  # Future extensibility
     schema_version = Column(Integer, default=1)  # Schema evolution tracking
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(
-        DateTime,
+        DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
@@ -187,9 +187,9 @@ class Planner(Base):
 
     agent_metadata = Column(json_column_type, default=lambda: {})  # Future extensibility
     schema_version = Column(Integer, default=1)  # Schema evolution tracking
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(
-        DateTime,
+        DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
@@ -237,9 +237,9 @@ class Worker(Base):
     filepaths = Column(json_column_type)  # List of PDF file paths available for use
     agent_metadata = Column(json_column_type, default=lambda: {})  # Future extensibility
     schema_version = Column(Integer, default=1)  # Schema evolution tracking
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(
-        DateTime,
+        DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
@@ -258,9 +258,9 @@ class RouterSystemInstructions(Base):
         String(50), nullable=False, default="default"
     )  # default, custom, etc.
     system_instruction = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(
-        DateTime,
+        DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
@@ -284,9 +284,9 @@ class PlannerSystemInstructions(Base):
         String(50), nullable=False, default="default"
     )  # default, custom, etc.
     system_instruction = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(
-        DateTime,
+        DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
@@ -310,9 +310,9 @@ class WorkerSystemInstructions(Base):
         String(50), nullable=False, default="default"
     )  # default, custom, etc.
     system_instruction = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(
-        DateTime,
+        DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
@@ -334,7 +334,7 @@ class RouterPlannerLink(Base):
     relationship_type = Column(
         String(50), nullable=False
     )  # initiated, continued, forked
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (UniqueConstraint("router_id", "planner_id"),)
 
@@ -355,7 +355,7 @@ class RouterMessagePlannerLink(Base):
     relationship_type = Column(
         String(50), nullable=False
     )  # initiated, continued, forked
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
         UniqueConstraint("message_id", "planner_id"),  # One planner per message
@@ -379,9 +379,9 @@ class TaskQueue(Base):
     status = Column(
         String(20), nullable=False, default="PENDING", index=True
     )  # PENDING, IN_PROGRESS, COMPLETED, FAILED
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    started_at = Column(DateTime)
-    completed_at = Column(DateTime)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    started_at = Column(DateTime(timezone=True))
+    completed_at = Column(DateTime(timezone=True))
     error_message = Column(Text)  # Store error details for failed tasks
     payload = Column(json_column_type, nullable=True)  # JSON payload for additional task parameters
 
@@ -402,7 +402,7 @@ class FileMetadata(Base):
     file_path = Column(String(1024), nullable=False)  # Actual storage path
     file_size = Column(Integer, nullable=False)  # File size in bytes
     mime_type = Column(String(255))  # MIME type
-    upload_timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    upload_timestamp = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     reference_count = Column(Integer, default=1)  # Number of times referenced
 
 
@@ -411,7 +411,7 @@ class LLMUsage(Base):
     __tablename__ = "llm_usage"
     
     id = Column(Integer, primary_key=True, autoincrement=True)
-    timestamp = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
+    timestamp = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
     model = Column(String(100), nullable=False)
     input_tokens = Column(Integer, nullable=False)
     output_tokens = Column(Integer, nullable=False)

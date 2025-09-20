@@ -9,7 +9,6 @@ under various load conditions.
 import unittest
 import asyncio
 import time
-import tempfile
 import shutil
 import uuid
 from unittest.mock import patch, MagicMock, AsyncMock
@@ -20,6 +19,7 @@ import threading
 # Import the modules under test
 from agent.services.background_processor import BackgroundTaskProcessor
 from agent.models.agent_database import AgentDatabase
+from agent.database.connection import DatabaseConfig
 from agent.config.settings import settings
 
 
@@ -29,14 +29,13 @@ class TestBackgroundProcessorEfficiency(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         """Set up test environment before each test."""
         # Create temporary directory for testing
-        self.test_dir = tempfile.mkdtemp()
         self.original_base_path = settings.collaterals_base_path
 
         # Mock settings to use test directory
         settings.collaterals_base_path = self.test_dir
 
         # Set up in-memory database for testing using async factory method
-        self.db = await AgentDatabase.create(":memory:")
+        self.db = await AgentDatabase.create(database_url=config.get_database_url(database_name="test"))
 
         # Test data
         self.execution_times = []

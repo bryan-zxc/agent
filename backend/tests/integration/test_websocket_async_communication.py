@@ -17,7 +17,6 @@ Key Focus Areas:
 
 import unittest
 import asyncio
-import tempfile
 import uuid
 import time
 import json
@@ -35,6 +34,7 @@ from async_test_utils import AsyncWarningCaptureMixin
 
 # Import system components
 from src.agent.models.agent_database import AgentDatabase
+from src.agent.database.connection import DatabaseConfig
 from src.agent.core import router_operations
 from src.agent.tasks.planner_tasks import execute_initial_planning
 from src.agent.tasks.task_utils import update_planner_next_task_and_queue
@@ -192,9 +192,8 @@ class WebSocketAsyncCommunicationTestCase(
     async def asyncSetUp(self):
         """Set up WebSocket communication test environment."""
         # Create temporary database
-        self.temp_db_file = tempfile.NamedTemporaryFile(delete=False, suffix=".db")
         self.temp_db_file.close()
-        self.db = await AgentDatabase.create(self.temp_db_file.name)
+        self.db = await AgentDatabase.create(database_url=config.get_database_url(database_name="test"))
 
         # Test identifiers
         self.router_id = f"ws_router_{uuid.uuid4().hex[:8]}"

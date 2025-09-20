@@ -9,7 +9,6 @@ router state management, and cross-conversation independence.
 """
 
 import unittest
-import tempfile
 import uuid
 import shutil
 import asyncio
@@ -22,6 +21,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Import the modules under test
 from agent.models.agent_database import AgentDatabase
+from agent.database.connection import DatabaseConfig
 from agent.core import router_operations
 from agent.tasks.task_utils import get_router_id_for_planner, is_router_busy
 from agent.config.settings import settings
@@ -33,16 +33,13 @@ class TestMultipleConversationsConcurrent(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         """Set up test environment before each test."""
         # Create temporary directory for testing
-        self.test_dir = tempfile.mkdtemp()
         self.original_base_path = settings.collaterals_base_path
 
         # Mock settings to use test directory
         settings.collaterals_base_path = self.test_dir
 
         # Set up temporary database file for testing
-        self.temp_db_file = tempfile.NamedTemporaryFile(delete=False, suffix=".db")
-        self.temp_db_file.close()
-        self.db = await AgentDatabase.create(self.temp_db_file.name)
+        self.db = await AgentDatabase.create(database_url=config.get_database_url(database_name="test"))
 
         # Test data
         self.test_routers = []

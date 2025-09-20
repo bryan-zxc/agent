@@ -9,7 +9,6 @@ with quick response times.
 import unittest
 import asyncio
 import time
-import tempfile
 import shutil
 from unittest.mock import patch, MagicMock, AsyncMock
 from pathlib import Path
@@ -20,6 +19,7 @@ from fastapi import FastAPI
 
 # Import the modules under test
 from agent.models.agent_database import AgentDatabase
+from agent.database.connection import DatabaseConfig
 from agent.config.settings import settings
 
 
@@ -29,6 +29,7 @@ class TestFastAPIImmediateResponse(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         """Set up test environment before each test."""
         # Create temporary directory for testing
+        import tempfile
         self.test_dir = tempfile.mkdtemp()
         self.original_base_path = settings.collaterals_base_path
 
@@ -36,7 +37,8 @@ class TestFastAPIImmediateResponse(unittest.IsolatedAsyncioTestCase):
         settings.collaterals_base_path = self.test_dir
 
         # Set up in-memory database for testing
-        self.db = await AgentDatabase.create(":memory:")
+        config = DatabaseConfig()
+        self.db = await AgentDatabase.create(database_url=config.get_database_url(database_name="test"))
 
         # Response time tracking
         self.response_times = []

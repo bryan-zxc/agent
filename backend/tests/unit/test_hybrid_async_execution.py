@@ -14,7 +14,6 @@ maintaining test reliability and speed.
 import unittest
 import asyncio
 import warnings
-import tempfile
 import uuid
 import os
 import time
@@ -30,6 +29,7 @@ from src.agent.tasks.task_utils import (
     queue_worker_task,
 )
 from src.agent.models.agent_database import AgentDatabase
+from src.agent.database.connection import DatabaseConfig
 from src.agent.tasks.planner_tasks import (
     execute_initial_planning,
     execute_task_creation,
@@ -51,11 +51,8 @@ class HybridAsyncTestCase(unittest.IsolatedAsyncioTestCase, AsyncWarningCaptureM
     async def asyncSetUp(self):
         """Set up hybrid test environment with real database and mocked external services."""
         # Create temporary database for testing
-        self.temp_db = tempfile.NamedTemporaryFile(delete=False)
-        self.db_path = self.temp_db.name
-        self.temp_db.close()
 
-        self.db = await AgentDatabase.create(self.db_path)
+        self.db = await AgentDatabase.create(database_url=config.get_database_url(database_name="test"))
 
         # Test IDs
         self.planner_id = f"hybrid_planner_{uuid.uuid4().hex[:8]}"
