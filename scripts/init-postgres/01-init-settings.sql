@@ -14,19 +14,14 @@ CREATE EXTENSION IF NOT EXISTS "pg_stat_statements";  -- For query performance m
 -- Create a function to automatically create project databases
 CREATE OR REPLACE FUNCTION create_project_database(project_name TEXT)
 RETURNS VOID AS $$
-DECLARE
-    db_name TEXT;
 BEGIN
-    -- Generate database name from project name
-    db_name := 'project_' || regexp_replace(lower(project_name), '[^a-z0-9]', '_', 'g');
-
     -- Check if database already exists
-    IF NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = db_name) THEN
+    IF NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = project_name) THEN
         -- Create the database using the template
-        EXECUTE format('CREATE DATABASE %I WITH TEMPLATE = template_agent', db_name);
-        RAISE NOTICE 'Database % created successfully', db_name;
+        EXECUTE format('CREATE DATABASE %I WITH TEMPLATE = template_agent', project_name);
+        RAISE NOTICE 'Database % created successfully', project_name;
     ELSE
-        RAISE NOTICE 'Database % already exists', db_name;
+        RAISE NOTICE 'Database % already exists', project_name;
     END IF;
 END;
 $$ LANGUAGE plpgsql;
@@ -37,19 +32,14 @@ $$ LANGUAGE plpgsql;
 -- Create the same function in the main database
 CREATE OR REPLACE FUNCTION create_project_database(project_name TEXT)
 RETURNS VOID AS $$
-DECLARE
-    db_name TEXT;
 BEGIN
-    -- Generate database name from project name
-    db_name := 'project_' || regexp_replace(lower(project_name), '[^a-z0-9]', '_', 'g');
-
     -- Check if database already exists
-    IF NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = db_name) THEN
+    IF NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = project_name) THEN
         -- Create the database using the template
-        EXECUTE format('CREATE DATABASE %I WITH TEMPLATE = template_agent', db_name);
-        RAISE NOTICE 'Database % created successfully', db_name;
+        EXECUTE format('CREATE DATABASE %I WITH TEMPLATE = template_agent', project_name);
+        RAISE NOTICE 'Database % created successfully', project_name;
     ELSE
-        RAISE NOTICE 'Database % already exists', db_name;
+        RAISE NOTICE 'Database % already exists', project_name;
     END IF;
 END;
 $$ LANGUAGE plpgsql;
@@ -57,8 +47,8 @@ $$ LANGUAGE plpgsql;
 -- Grant execute permission to the agent user
 GRANT EXECUTE ON FUNCTION create_project_database(TEXT) TO agent_user;
 
--- Create default project database
-SELECT create_project_database('default');
+-- Project databases will be created on-demand by the application
+-- using the project_name from settings
 
 -- Optimised settings for small, low-latency workloads
 ALTER SYSTEM SET random_page_cost = 1.1;
