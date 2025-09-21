@@ -12,7 +12,6 @@ import unittest
 import asyncio
 import json
 import time
-import tempfile
 import shutil
 import uuid
 import os
@@ -22,6 +21,7 @@ from pathlib import Path
 # Import the modules under test
 from agent.core import router_operations
 from agent.models.agent_database import AgentDatabase
+from agent.database.connection import DatabaseConfig
 from agent.config.settings import settings
 
 
@@ -68,19 +68,20 @@ class TestWebSocketUpdatesExecution(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         """Set up test environment before each test."""
         # Create temporary directory for testing
-        self.test_dir = tempfile.mkdtemp()
         self.original_base_path = settings.collaterals_base_path
 
         # Mock settings to use test directory
+        import tempfile
+
+        self.test_dir = tempfile.mkdtemp()
+
         settings.collaterals_base_path = self.test_dir
 
         # Set up in-memory database for testing
-        # Create temporary database file for testing
-        db_fd, self.test_db_path = tempfile.mkstemp(suffix=".db")
-        os.close(db_fd)  # Close file descriptor, AgentDatabase will open it
-
-        # Create AgentDatabase with test database path
-        self.db = await AgentDatabase.create(database_path=self.test_db_path)
+        # Use PostgreSQL test database
+        config = DatabaseConfig()
+        test_db_url = config.get_database_url(database_name="test")
+        self.db = await AgentDatabase.create(database_url=test_db_url)
 
         # Test data
         self.router_id = f"test_router_{uuid.uuid4().hex[:8]}"
@@ -299,10 +300,7 @@ class TestWebSocketUpdatesExecution(unittest.IsolatedAsyncioTestCase):
         all_messages = mock_websocket.sent_messages
         self.assertGreater(len(all_messages), 0)
 
-        # Check for input lock
-        lock_messages = mock_websocket.get_messages_by_type("input_lock")
-        self.assertEqual(len(lock_messages), 1)
-
+        # Input locks have been removed from the system
         # Check for status updates
         status_messages = mock_websocket.get_messages_by_type("status")
         self.assertGreater(len(status_messages), 0)
@@ -314,14 +312,11 @@ class TestWebSocketUpdatesExecution(unittest.IsolatedAsyncioTestCase):
             response_messages[0]["data"]["message"], "Simple chat response"
         )
 
-        # Check for input unlock
-        unlock_messages = mock_websocket.get_messages_by_type("input_unlock")
-        self.assertEqual(len(unlock_messages), 1)
-
+    @patch("agent.core.router_operations.plamarination_response", new_callable=AsyncMock)
     @patch("agent.tasks.task_utils.update_planner_next_task_and_queue")
     @patch("agent.core.router_operations.assess_agent_requirements")
     async def test_websocket_updates_during_complex_request(
-        self, mock_assess, mock_queue_task
+        self, mock_assess, mock_queue_task, mock_plamarination_response
     ):
         """Test WebSocket updates during complex request processing."""
         router_state, mock_websocket = await self.create_router_with_websocket()
@@ -348,6 +343,10 @@ class TestWebSocketUpdatesExecution(unittest.IsolatedAsyncioTestCase):
         # Mock task queueing
         mock_queue_task.return_value = True
 
+        # Mock plamarination_response to avoid real API calls
+        # Just return None since the actual return value isn't used in this test
+        mock_plamarination_response.return_value = None
+
         # Handle complex message
         message_data = {"message": "Search for Python programming information"}
         await router_operations.handle_message(
@@ -358,31 +357,27 @@ class TestWebSocketUpdatesExecution(unittest.IsolatedAsyncioTestCase):
         all_messages = mock_websocket.sent_messages
         self.assertGreater(len(all_messages), 0)
 
-        # Check for input lock
-        lock_messages = mock_websocket.get_messages_by_type("input_lock")
-        self.assertEqual(len(lock_messages), 1)
+        # Input locks have been removed from the system
+        # No longer checking for input lock messages
 
         # Check for status updates
         status_messages = mock_websocket.get_messages_by_type("status")
         self.assertGreater(len(status_messages), 0)
 
-        # Check for "Agents assemble!" message
-        response_messages = mock_websocket.get_messages_by_type("response")
-        self.assertEqual(len(response_messages), 1)
-        self.assertEqual(response_messages[0]["data"]["message"], "Agents assemble!")
+        # Verify mode and phase updates for agent mode
+        mode_messages = mock_websocket.get_messages_by_type("mode_updated")
+        self.assertEqual(len(mode_messages), 1)
+        self.assertEqual(mode_messages[0]["data"]["mode"], "agent")
 
-        # Check for input unlock
-        unlock_messages = mock_websocket.get_messages_by_type("input_unlock")
-        self.assertEqual(len(unlock_messages), 1)
+        phase_messages = mock_websocket.get_messages_by_type("phase_updated")
+        self.assertEqual(len(phase_messages), 1)
+        self.assertEqual(phase_messages[0]["data"]["agent_phase"], "plamarination")
 
     async def test_websocket_message_ordering(self):
         """Test that WebSocket messages are sent in correct order."""
         router_state, mock_websocket = await self.create_router_with_websocket()
 
-        # Send sequence of messages
-        await router_operations.send_input_lock(
-            router_state["id"], router_state["agent_db"], mock_websocket
-        )
+        # Send sequence of messages (input locks have been removed)
         await router_operations.send_status(
             status="Processing", router_id=router_state["id"], websocket=mock_websocket
         )
@@ -395,25 +390,20 @@ class TestWebSocketUpdatesExecution(unittest.IsolatedAsyncioTestCase):
         await router_operations.send_assistant_message(
             content="Complete!", router_id=router_state["id"], websocket=mock_websocket
         )
-        await router_operations.send_input_unlock(
-            router_state["id"], router_state["agent_db"], mock_websocket
-        )
 
         # Verify message order
         all_messages = mock_websocket.sent_messages
-        self.assertEqual(len(all_messages), 6)
+        self.assertEqual(len(all_messages), 4)  # No input lock/unlock messages
 
         # Check sequence
-        self.assertEqual(all_messages[0]["data"]["type"], "input_lock")
-        self.assertEqual(all_messages[1]["data"]["type"], "status")
-        self.assertEqual(all_messages[1]["data"]["message"], "Processing")
-        self.assertEqual(all_messages[2]["data"]["type"], "response")
-        self.assertEqual(all_messages[2]["data"]["message"], "Working on it...")
-        self.assertEqual(all_messages[3]["data"]["type"], "status")
-        self.assertEqual(all_messages[3]["data"]["message"], "Almost done")
-        self.assertEqual(all_messages[4]["data"]["type"], "response")
-        self.assertEqual(all_messages[4]["data"]["message"], "Complete!")
-        self.assertEqual(all_messages[5]["data"]["type"], "input_unlock")
+        self.assertEqual(all_messages[0]["data"]["type"], "status")
+        self.assertEqual(all_messages[0]["data"]["message"], "Processing")
+        self.assertEqual(all_messages[1]["data"]["type"], "response")
+        self.assertEqual(all_messages[1]["data"]["message"], "Working on it...")
+        self.assertEqual(all_messages[2]["data"]["type"], "status")
+        self.assertEqual(all_messages[2]["data"]["message"], "Almost done")
+        self.assertEqual(all_messages[3]["data"]["type"], "response")
+        self.assertEqual(all_messages[3]["data"]["message"], "Complete!")
 
     async def test_websocket_connection_resilience(self):
         """Test WebSocket resilience when connection fails."""

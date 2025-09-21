@@ -16,26 +16,40 @@ import sys
 backend_root = Path(__file__).parent.parent
 sys.path.insert(0, str(backend_root / "src"))
 
-from sqlalchemy import select, func, and_
+from sqlalchemy import select, func, and_, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from agent.models.agent_database import LLMUsage
+from agent.models.agent_database import LLMUsage, AgentDatabase, Base
 from agent.config.settings import settings
+from agent.database.connection import DatabaseConfig
+import subprocess
 
 logger = logging.getLogger(__name__)
 
 
 @pytest.fixture(scope="session", autouse=True)
-def test_cost_report():
+def setup_test_database():
     """
-    Session fixture that reports LLM API costs after all tests complete.
-    
-    This fixture runs automatically at the end of the test session and
-    generates a comprehensive cost report for the current test run.
+    Session fixture that sets up the PostgreSQL test database.
+    Recreates the test database for each test session.
     """
+    # Create fresh test database
+    logger.info("Setting up PostgreSQL test database...")
+    result = subprocess.run(
+        ["python", "scripts/manage_databases.py", "create", "test", "--drop"],
+        cwd="/app",
+        capture_output=True,
+        text=True
+    )
+    if result.returncode != 0:
+        logger.error(f"Failed to create test database: {result.stderr}")
+        raise RuntimeError("Could not create test database")
+
+    logger.info("Test database created successfully")
+
     # Setup happens before tests
     start_time = datetime.now(timezone.utc)
     yield  # Tests run here
-    
+
     # Teardown: Generate cost report after all tests
     asyncio.run(_generate_cost_report(start_time))
 
@@ -47,12 +61,13 @@ async def _generate_cost_report(start_time: datetime):
     Args:
         start_time: When the test session started
     """
-    # Create database session
-    database_url = f"sqlite+aiosqlite:///{settings.database_path}"
+    # Always use PostgreSQL test database for consistency
+    config = DatabaseConfig()
+    database_url = config.get_database_url(database_name="test")
+
     engine = create_async_engine(
         database_url,
-        echo=False,
-        connect_args={"check_same_thread": False}
+        echo=False
     )
     
     async_session = async_sessionmaker(
@@ -150,11 +165,12 @@ async def verify_cost_tracking():
     Returns a function that checks if usage was tracked for a given caller.
     Tests can use this to verify tracking without making extra API calls.
     """
-    database_url = f"sqlite+aiosqlite:///{settings.database_path}"
+    # Use PostgreSQL test database
+    config = DatabaseConfig()
+    database_url = config.get_database_url(database_name="test")
     engine = create_async_engine(
         database_url,
-        echo=False,
-        connect_args={"check_same_thread": False}
+        echo=False
     )
     
     async_session = async_sessionmaker(

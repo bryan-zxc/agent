@@ -59,9 +59,9 @@ class TestMCPConnection(unittest.IsolatedAsyncioTestCase):
         
         # Check that configuration has expected structure
         self.assertTrue(hasattr(config, 'servers'))
-        self.assertTrue(hasattr(config, 'router_enabled'))
-        self.assertTrue(hasattr(config, 'planner_enabled'))
-        self.assertTrue(hasattr(config, 'worker_enabled'))
+        self.assertTrue(hasattr(config, 'router_servers'))
+        self.assertTrue(hasattr(config, 'planner_servers'))
+        self.assertTrue(hasattr(config, 'worker_servers'))
     
     @unittest.skipUnless(
         os.getenv("GITHUB_PERSONAL_ACCESS_TOKEN"),

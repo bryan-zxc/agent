@@ -48,8 +48,27 @@ class AgentSettings(BaseSettings):
     database_auto_migrate: bool = Field(
         default=True, description="Enable automatic database migrations"
     )
-    database_path: str = Field(
-        default="./db/agent_database.db", description="Path to SQLite database file"
+
+    # PostgreSQL Configuration
+    postgres_host: str = Field(
+        default="postgres", description="PostgreSQL host (docker service name or hostname)"
+    )
+    postgres_port: int = Field(
+        default=5432, description="PostgreSQL port"
+    )
+    postgres_user: str = Field(
+        default="agent_user", description="PostgreSQL username"
+    )
+    postgres_password: str = Field(
+        description="PostgreSQL password - REQUIRED"
+    )
+    postgres_db: str = Field(
+        default="agent_main", description="Main PostgreSQL database name"
+    )
+
+    # Project Configuration
+    project_name: str = Field(
+        default="general", description="Project name for database isolation"
     )
 
     # File Storage Configuration

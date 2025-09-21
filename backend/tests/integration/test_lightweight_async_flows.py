@@ -1,5 +1,3 @@
-import unittest
-
 """
 Lightweight Integration Tests for Critical Async Execution Flows
 
@@ -16,7 +14,6 @@ Key Focus Areas:
 
 import unittest
 import asyncio
-import tempfile
 import uuid
 import time
 import warnings
@@ -32,6 +29,7 @@ from async_test_utils import AsyncWarningCaptureMixin
 
 # Import system components
 from src.agent.models.agent_database import AgentDatabase
+from src.agent.database.connection import DatabaseConfig
 from src.agent.core import router_operations
 from src.agent.tasks.planner_tasks import (
     execute_initial_planning,
@@ -53,10 +51,10 @@ class LightweightAsyncFlowsTestCase(
 
     async def asyncSetUp(self):
         """Set up test environment with real database for async testing."""
-        # Create temporary database file for real async operations
-        self.temp_db_file = tempfile.NamedTemporaryFile(delete=False, suffix=".db")
-        self.temp_db_file.close()
-        self.db = await AgentDatabase.create(self.temp_db_file.name)
+        # Use PostgreSQL test database
+        config = DatabaseConfig()
+        test_db_url = config.get_database_url(database_name="test")
+        self.db = await AgentDatabase.create(database_url=test_db_url)
 
         # Generate unique test identifiers
         self.router_id = f"router_{uuid.uuid4().hex[:8]}"
@@ -79,10 +77,8 @@ class LightweightAsyncFlowsTestCase(
             pass
 
         # Clean up temporary database file
-        try:
-            Path(self.temp_db_file.name).unlink()
-        except:
-            pass
+        # No cleanup needed for PostgreSQL
+        pass
 
     async def measure_async_performance(self, async_func, *args, **kwargs):
         """Measure performance of async function execution."""

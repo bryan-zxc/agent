@@ -137,13 +137,28 @@ No execution needed."""
     
     # Result should pass through unchanged
     assert processed_result == result
-    
-    # WebSocket should have been called with 'active' status
-    websocket.send_json.assert_called_once()
-    call_args = websocket.send_json.call_args[0][0]
-    assert call_args["type"] == "status"
-    assert call_args["router_id"] == "test_router_456"
-    assert call_args["status"] == "active"  # Back to conversation mode
+
+    # WebSocket should have been called 3 times (status, mode, phase)
+    assert websocket.send_json.call_count == 3
+    calls = websocket.send_json.call_args_list
+
+    # Check status update
+    status_call = calls[0][0][0]
+    assert status_call["type"] == "status"
+    assert status_call["router_id"] == "test_router_456"
+    assert status_call["status"] == "active"  # Back to conversation mode
+
+    # Check mode update
+    mode_call = calls[1][0][0]
+    assert mode_call["type"] == "mode_updated"
+    assert mode_call["router_id"] == "test_router_456"
+    assert mode_call["mode"] == "auto"
+
+    # Check phase update
+    phase_call = calls[2][0][0]
+    assert phase_call["type"] == "phase_updated"
+    assert phase_call["router_id"] == "test_router_456"
+    assert phase_call["agent_phase"] is None
 
 
 @pytest.mark.asyncio

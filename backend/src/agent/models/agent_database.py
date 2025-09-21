@@ -15,12 +15,15 @@ from sqlalchemy import (
     delete,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.pool import StaticPool
+from sqlalchemy.exc import OperationalError, IntegrityError
 from datetime import datetime, timezone
 import json
 import logging
+import os
 from typing import Dict, List, Any, Optional, Literal
 from pathlib import Path
 from ..config.settings import settings
@@ -30,6 +33,18 @@ Base = declarative_base()
 AgentType = Literal["planner", "worker", "router"]
 
 logger = logging.getLogger(__name__)
+
+# Detect database type from environment or settings
+def get_database_type() -> str:
+    """Detect whether we're using PostgreSQL or SQLite."""
+    # Check if we have PostgreSQL configuration
+    if hasattr(settings, 'postgres_host') and settings.postgres_host:
+        return 'postgresql'
+    return 'sqlite'
+
+# Select appropriate JSON type based on database
+DB_TYPE = get_database_type()
+json_column_type = JSONB if DB_TYPE == 'postgresql' else JSON
 
 
 class PlannerMessage(Base):
@@ -41,7 +56,7 @@ class PlannerMessage(Base):
         String(20), nullable=False
     )  # 'user', 'assistant'
     # content column REMOVED - now stored in PlannerMessageContent
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
 class WorkerMessage(Base):
@@ -55,7 +70,7 @@ class WorkerMessage(Base):
         String(20), nullable=False
     )  # 'user', 'assistant'
     # content column REMOVED - now stored in WorkerMessageContent
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
 class RouterMessage(Base):
@@ -67,7 +82,7 @@ class RouterMessage(Base):
     )
     role = Column(String(20), nullable=False)  # 'user', 'assistant'
     # content column REMOVED - now stored in RouterMessageContent
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     # Add composite index for message history queries
     __table_args__ = (Index("idx_router_created", "router_id", "created_at"),)
@@ -81,9 +96,9 @@ class PlannerMessageContent(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     message_id = Column(Integer, ForeignKey("planner_messages.id"), nullable=False)
-    content = Column(JSON, nullable=False)  # Single dictionary expected
+    content = Column(json_column_type, nullable=False)  # Single dictionary expected
     display_text = Column(Text, nullable=False)  # For frontend rendering
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (Index("idx_planner_content_lookup", "message_id"),)
 
@@ -93,9 +108,9 @@ class WorkerMessageContent(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     message_id = Column(Integer, ForeignKey("worker_messages.id"), nullable=False)
-    content = Column(JSON, nullable=False)  # Single dictionary expected
+    content = Column(json_column_type, nullable=False)  # Single dictionary expected
     display_text = Column(Text, nullable=False)  # For frontend rendering
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (Index("idx_worker_content_lookup", "message_id"),)
 
@@ -105,9 +120,9 @@ class RouterMessageContent(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     message_id = Column(Integer, ForeignKey("router_messages.id"), nullable=False)
-    content = Column(JSON, nullable=False)  # Single dictionary expected
+    content = Column(json_column_type, nullable=False)  # Single dictionary expected
     display_text = Column(Text, nullable=False)  # For frontend rendering
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (Index("idx_router_content_lookup", "message_id"),)
 
@@ -135,11 +150,11 @@ class Router(Base):
     )
     title = Column(String(255), nullable=False, default="New conversation")
     preview = Column(String(255), nullable=False, default="")
-    agent_metadata = Column(JSON, default=lambda: {})  # Future extensibility
+    agent_metadata = Column(json_column_type, default=lambda: {})  # Future extensibility
     schema_version = Column(Integer, default=1)  # Schema evolution tracking
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(
-        DateTime,
+        DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
@@ -164,17 +179,17 @@ class Planner(Base):
     # New fields for function-based task queue system
     next_task = Column(String(100))  # Next function name to execute for resumability
     variable_file_paths = Column(
-        JSON, default=lambda: {}
+        json_column_type, default=lambda: {}
     )  # File paths for variables {key: file_path}
     image_file_paths = Column(
-        JSON, default=lambda: {}
+        json_column_type, default=lambda: {}
     )  # File paths for images {key: file_path}
 
-    agent_metadata = Column(JSON, default=lambda: {})  # Future extensibility
+    agent_metadata = Column(json_column_type, default=lambda: {})  # Future extensibility
     schema_version = Column(Integer, default=1)  # Schema evolution tracking
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(
-        DateTime,
+        DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
@@ -195,36 +210,36 @@ class Worker(Base):
     )  # pending, in_progress, completed, failed_validation, recorded
     next_task = Column(String(100))  # Next async function to execute
     task_description = Column(Text)  # Detailed task description
-    acceptance_criteria = Column(JSON)  # List of success criteria
+    acceptance_criteria = Column(json_column_type)  # List of success criteria
     user_request = Column(Text)  # Original user request or question
     wip_answer_template = Column(Text)  # Work-in-progress answer template
     task_result = Column(Text)  # Execution outcome
     querying_structured_data = Column(
         Boolean, default=False
     )  # Whether task queries data files
-    image_keys = Column(JSON)  # List of relevant image identifiers
-    variable_keys = Column(JSON)  # List of relevant variable identifiers
-    tools = Column(JSON)  # List of required tools
+    image_keys = Column(json_column_type)  # List of relevant image identifiers
+    variable_keys = Column(json_column_type)  # List of relevant variable identifiers
+    tools = Column(json_column_type)  # List of required tools
     input_variable_filepaths = Column(
-        JSON, default=lambda: {}
+        json_column_type, default=lambda: {}
     )  # File paths for input variables {key: file_path}
     input_image_filepaths = Column(
-        JSON, default=lambda: {}
+        json_column_type, default=lambda: {}
     )  # File paths for input images {key: file_path}
     output_variable_filepaths = Column(
-        JSON, default=lambda: {}
+        json_column_type, default=lambda: {}
     )  # File paths for output variables {key: file_path}
     output_image_filepaths = Column(
-        JSON, default=lambda: {}
+        json_column_type, default=lambda: {}
     )  # File paths for output images {key: file_path}
     current_attempt = Column(Integer, default=0)  # Current retry attempt number
-    tables = Column(JSON)  # TableMeta objects
-    filepaths = Column(JSON)  # List of PDF file paths available for use
-    agent_metadata = Column(JSON, default=lambda: {})  # Future extensibility
+    tables = Column(json_column_type)  # TableMeta objects
+    filepaths = Column(json_column_type)  # List of PDF file paths available for use
+    agent_metadata = Column(json_column_type, default=lambda: {})  # Future extensibility
     schema_version = Column(Integer, default=1)  # Schema evolution tracking
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(
-        DateTime,
+        DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
@@ -243,9 +258,9 @@ class RouterSystemInstructions(Base):
         String(50), nullable=False, default="default"
     )  # default, custom, etc.
     system_instruction = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(
-        DateTime,
+        DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
@@ -269,9 +284,9 @@ class PlannerSystemInstructions(Base):
         String(50), nullable=False, default="default"
     )  # default, custom, etc.
     system_instruction = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(
-        DateTime,
+        DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
@@ -295,9 +310,9 @@ class WorkerSystemInstructions(Base):
         String(50), nullable=False, default="default"
     )  # default, custom, etc.
     system_instruction = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(
-        DateTime,
+        DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
@@ -319,7 +334,7 @@ class RouterPlannerLink(Base):
     relationship_type = Column(
         String(50), nullable=False
     )  # initiated, continued, forked
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (UniqueConstraint("router_id", "planner_id"),)
 
@@ -340,7 +355,7 @@ class RouterMessagePlannerLink(Base):
     relationship_type = Column(
         String(50), nullable=False
     )  # initiated, continued, forked
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
         UniqueConstraint("message_id", "planner_id"),  # One planner per message
@@ -364,11 +379,11 @@ class TaskQueue(Base):
     status = Column(
         String(20), nullable=False, default="PENDING", index=True
     )  # PENDING, IN_PROGRESS, COMPLETED, FAILED
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    started_at = Column(DateTime)
-    completed_at = Column(DateTime)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    started_at = Column(DateTime(timezone=True))
+    completed_at = Column(DateTime(timezone=True))
     error_message = Column(Text)  # Store error details for failed tasks
-    payload = Column(JSON, nullable=True)  # JSON payload for additional task parameters
+    payload = Column(json_column_type, nullable=True)  # JSON payload for additional task parameters
 
     __table_args__ = (
         Index("idx_entity_status", "entity_id", "status"),
@@ -387,7 +402,7 @@ class FileMetadata(Base):
     file_path = Column(String(1024), nullable=False)  # Actual storage path
     file_size = Column(Integer, nullable=False)  # File size in bytes
     mime_type = Column(String(255))  # MIME type
-    upload_timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    upload_timestamp = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     reference_count = Column(Integer, default=1)  # Number of times referenced
 
 
@@ -396,7 +411,7 @@ class LLMUsage(Base):
     __tablename__ = "llm_usage"
     
     id = Column(Integer, primary_key=True, autoincrement=True)
-    timestamp = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
+    timestamp = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
     model = Column(String(100), nullable=False)
     input_tokens = Column(Integer, nullable=False)
     output_tokens = Column(Integer, nullable=False)
@@ -418,12 +433,12 @@ class AgentDatabase:
     """
 
     def __init__(
-        self, database_path: str = settings.database_path, _internal_init: bool = False
+        self, database_url: str = None, _internal_init: bool = False
     ):
         """Private initialiser - use AgentDatabase.create() instead.
 
         Args:
-            database_path: Path to the SQLite database file
+            database_url: Database connection URL (PostgreSQL or SQLite)
             _internal_init: Internal flag to prevent direct instantiation
 
         Raises:
@@ -436,38 +451,57 @@ class AgentDatabase:
                 "Not: db = AgentDatabase()"
             )
 
-        # Store database path for schema operations
-        self.database_path = database_path
+        # Build database URL from settings if not provided
+        if database_url is None:
+            # Build PostgreSQL connection string from settings
+            database_url = (
+                f"postgresql+asyncpg://{settings.postgres_user}:"
+                f"{settings.postgres_password}@{settings.postgres_host}:"
+                f"{settings.postgres_port}/{settings.postgres_db}"
+            )
 
-        # Async engine for all database operations with improved concurrency settings
-        async_database_url = f"sqlite+aiosqlite:///{database_path}"
+        # Store database URL for schema operations
+        self.database_url = database_url
+
+        # Set the async database URL
+        async_database_url = database_url
         
-        # Different configuration for in-memory vs file-based databases
-        if database_path == ":memory:":
-            # In-memory databases use StaticPool, which doesn't support pool_size/max_overflow
+        # Different configuration for PostgreSQL vs SQLite
+        if "postgresql" in async_database_url:
+            # PostgreSQL configuration
+            self.async_engine = create_async_engine(
+                async_database_url,
+                echo=False,
+                pool_size=20,  # Connection pool size
+                max_overflow=10,  # Additional connections allowed
+                pool_pre_ping=True,  # Verify connections before use
+                pool_recycle=3600,  # Recycle connections every hour
+            )
+        elif ":memory:" in async_database_url:
+            # In-memory SQLite databases use StaticPool
             self.async_engine = create_async_engine(
                 async_database_url,
                 echo=False,
                 connect_args={
                     "timeout": 30,  # Connection timeout
-                    "check_same_thread": False,  # Allow cross-thread access for better concurrency
+                    "check_same_thread": False,  # Allow cross-thread access
                 },
-                pool_pre_ping=True,  # Verify connections before use to avoid stale connections
+                pool_pre_ping=True,
                 poolclass=StaticPool,  # Use StaticPool for in-memory databases
             )
         else:
-            # File-based databases can use normal pooling
+            # File-based SQLite databases
             self.async_engine = create_async_engine(
                 async_database_url,
                 echo=False,
                 connect_args={
                     "timeout": 30,  # Connection timeout
-                    "check_same_thread": False,  # Allow cross-thread access for better concurrency
+                    "check_same_thread": False,  # Allow cross-thread access
                 },
                 pool_size=20,  # Increase from default 5 to handle concurrent requests
                 max_overflow=10,  # Allow 10 additional connections beyond pool_size
-                pool_pre_ping=True,  # Verify connections before use to avoid stale connections
-                pool_recycle=3600,  # Recycle connections every hour to prevent issues
+                pool_pre_ping=True,  # Verify connections before use
+                pool_recycle=3600,  # Recycle connections every hour
             )
 
         # Async session factory with optimised settings
@@ -481,7 +515,7 @@ class AgentDatabase:
 
     @classmethod
     async def create(
-        cls, database_path: str = settings.database_path
+        cls, database_url: str = None
     ) -> "AgentDatabase":
         """Factory method to create and properly initialise an AgentDatabase instance.
 
@@ -489,7 +523,7 @@ class AgentDatabase:
         the database instance, preventing issues with uninitialised connections.
 
         Args:
-            database_path: Path to the SQLite database file
+            database_url: Database connection URL (PostgreSQL or SQLite)
 
         Returns:
             Fully initialised AgentDatabase instance
@@ -497,15 +531,15 @@ class AgentDatabase:
         Example:
             db = await AgentDatabase.create()
         """
-        # Ensure directory exists
-        Path(database_path).parent.mkdir(parents=True, exist_ok=True)
-
         # Create instance using internal flag
-        instance = cls(database_path=database_path, _internal_init=True)
+        instance = cls(database_url=database_url, _internal_init=True)
 
         # Perform all async initialisation
         await instance._initialise_database_async()
-        await instance._configure_async_sqlite_optimisations()
+
+        # Only configure SQLite optimisations for SQLite databases
+        if instance.database_url and "sqlite" in instance.database_url:
+            await instance._configure_async_sqlite_optimisations()
 
         return instance
 
@@ -522,7 +556,7 @@ class AgentDatabase:
             logger.info(f"Database initialised. Auto-migration disabled.")
 
     async def _configure_async_sqlite_optimisations(self):
-        """Configure SQLite pragmas for async connections"""
+        """Configure SQLite pragmas for async connections (SQLite only)"""
         async with self.async_engine.begin() as conn:
             from sqlalchemy import text
 

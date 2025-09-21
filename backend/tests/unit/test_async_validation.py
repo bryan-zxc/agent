@@ -14,7 +14,6 @@ These tests use real async execution (not mocks) to detect:
 import unittest
 import asyncio
 import warnings
-import tempfile
 import uuid
 import os
 from unittest.mock import patch, AsyncMock
@@ -26,6 +25,7 @@ from src.agent.tasks.task_utils import (
     queue_worker_task,
 )
 from src.agent.models.agent_database import AgentDatabase
+from src.agent.database.connection import DatabaseConfig
 from src.agent.tasks.planner_tasks import (
     execute_initial_planning,
     execute_task_creation,
@@ -39,12 +39,10 @@ class AsyncValidationTestCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         """Set up async test environment."""
         # Create temporary database for testing (in-memory doesn't work with separate engines)
-        self.temp_db = tempfile.NamedTemporaryFile(delete=False)
-        self.db_path = self.temp_db.name
-        self.temp_db.close()
 
         # Use factory method to create database
-        self.db = await AgentDatabase.create(self.db_path)
+        config = DatabaseConfig()
+        self.db = await AgentDatabase.create(database_url=config.get_database_url(database_name="test"))
 
         # Test IDs
         self.planner_id = f"test_planner_{uuid.uuid4().hex[:8]}"
