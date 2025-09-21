@@ -96,6 +96,7 @@ class TestTaskExecutionSimple(
         try:
             async with self.capture_async_warnings() as warning_list:
                 # Use temp database instead of in-memory to catch real async issues
+                config = DatabaseConfig()
                 db = await AgentDatabase.create(database_url=config.get_database_url(database_name="test"))
 
                 # Create test planner
@@ -121,15 +122,15 @@ class TestTaskExecutionSimple(
             # Verify no async warnings were produced
             self.assert_no_unawaited_coroutines(warning_list)
         finally:
-            # Clean up temp database file
-            if os.path.exists(db_path):
-                os.unlink(db_path)
+            # No cleanup needed for PostgreSQL test database
+            pass
 
     async def test_update_planner_negative_missing_await(self):
         """Test that missing await produces warnings (negative test)."""
         # Use temp file for database to avoid initialization issues
 
         try:
+            config = DatabaseConfig()
             db = await AgentDatabase.create(database_url=config.get_database_url(database_name="test"))
 
             # Create test planner
@@ -161,9 +162,8 @@ class TestTaskExecutionSimple(
             # Should have captured unawaited coroutine warnings
             self.assert_has_unawaited_coroutines(warning_list)
         finally:
-            # Clean up temp database file
-            if os.path.exists(db_path):
-                os.unlink(db_path)
+            # No cleanup needed for PostgreSQL test database
+            pass
 
 
 class TestPlannerTasksExecution(
@@ -278,6 +278,11 @@ class TestPlannerTasksExecution(
                 mock_db_instance.create_planner.return_value = None
                 mock_db_instance.update_planner.return_value = True
                 mock_db_instance.link_message_planner.return_value = True
+                # Router returns a dict, not an AsyncMock
+                mock_db_instance.get_router.return_value = {
+                    "id": "test_router",
+                    "status": "active"
+                }
 
                 # Configure MessageManager mock
                 mock_mm_instance = AsyncMock()

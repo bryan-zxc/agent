@@ -1,5 +1,3 @@
-import unittest
-
 """
 Lightweight Integration Tests for Critical Async Execution Flows
 
@@ -79,10 +77,8 @@ class LightweightAsyncFlowsTestCase(
             pass
 
         # Clean up temporary database file
-        try:
-            Path(self.temp_db_file.name).unlink()
-        except:
-            pass
+        # No cleanup needed for PostgreSQL
+        pass
 
     async def measure_async_performance(self, async_func, *args, **kwargs):
         """Measure performance of async function execution."""

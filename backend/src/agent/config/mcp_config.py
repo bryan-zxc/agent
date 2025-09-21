@@ -132,6 +132,12 @@ class MCPConfig(BaseModel):
                     "GEMINI_API_KEY": settings.gemini_api_key or "",
                     "OPENAI_API_KEY": settings.openai_api_key or "",
                     "ANTHROPIC_API_KEY": settings.anthropic_api_key or "",
+                    # Pass database credentials for agent module import
+                    "POSTGRES_PASSWORD": settings.postgres_password or "",
+                    "POSTGRES_HOST": settings.postgres_host or "",
+                    "POSTGRES_PORT": str(settings.postgres_port) if settings.postgres_port else "",
+                    "POSTGRES_DB": settings.postgres_db or "",
+                    "POSTGRES_USER": settings.postgres_user or "",
                 },
                 description="Native agent tools for web search and PDF processing",
                 enabled=True

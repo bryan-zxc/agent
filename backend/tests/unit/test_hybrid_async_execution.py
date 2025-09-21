@@ -18,6 +18,7 @@ import uuid
 import os
 import time
 import logging
+import tempfile
 from pathlib import Path
 from unittest.mock import patch, AsyncMock, MagicMock
 from contextlib import asynccontextmanager
@@ -51,7 +52,7 @@ class HybridAsyncTestCase(unittest.IsolatedAsyncioTestCase, AsyncWarningCaptureM
     async def asyncSetUp(self):
         """Set up hybrid test environment with real database and mocked external services."""
         # Create temporary database for testing
-
+        config = DatabaseConfig()
         self.db = await AgentDatabase.create(database_url=config.get_database_url(database_name="test"))
 
         # Test IDs
@@ -157,12 +158,13 @@ class TestHybridPlannerAsyncExecution(HybridAsyncTestCase):
             router_id=self.router_id, model="gpt-4", temperature=0.0, status="active"
         )
         # Add a message to the router and get its ID
-        actual_message_id = await self.db.add_message(
+        message_result = await self.db.add_message(
             agent_type="router",
             agent_id=self.router_id,
             content="Test message",
             role="user",
         )
+        actual_message_id = message_result["message_id"]
 
         # Test data
         task_data = {

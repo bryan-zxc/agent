@@ -189,9 +189,11 @@ class TestRouterOperations(unittest.IsolatedAsyncioTestCase):
         ) as mock_send_status, patch(
             "src.agent.core.router_operations.send_input_lock"
         ) as mock_lock, patch(
-            "src.agent.core.router_operations.assess_agent_requirements"
+            "src.agent.core.router_operations.assess_agent_requirements",
+            new_callable=AsyncMock
         ) as mock_assess, patch(
-            "src.agent.core.router_operations.handle_simple_chat"
+            "src.agent.core.router_operations.handle_simple_chat",
+            new_callable=AsyncMock
         ) as mock_simple_chat, patch(
             "src.agent.core.router_operations.send_assistant_message"
         ) as mock_send_assistant, patch(
@@ -246,7 +248,7 @@ class TestRouterOperations(unittest.IsolatedAsyncioTestCase):
             # mock_lock.assert_called_once_with(
             #     router_id=self.router_id, agent_db=mock_db, websocket=mock_websocket
             # )
-            mock_assess.assert_called_once_with(router_state=router_state)
+            mock_assess.assert_called_once_with(router_state)
             mock_simple_chat.assert_called_once_with(router_state=router_state)
             mock_send_assistant.assert_called_once_with(
                 content="Hello! How can I help you today?",
@@ -265,10 +267,12 @@ class TestRouterOperations(unittest.IsolatedAsyncioTestCase):
         ) as mock_send_status, patch(
             "src.agent.core.router_operations.send_input_lock"
         ) as mock_lock, patch(
-            "src.agent.core.router_operations.assess_agent_requirements"
-        ) as mock_assess, patch(
-            "src.agent.core.router_operations.handle_complex_request"
-        ) as mock_complex, patch(
+            "src.agent.core.router_operations.should_activate_agent_mode",
+            new_callable=AsyncMock
+        ) as mock_should_activate, patch(
+            "src.agent.core.router_operations.plamarination_response",
+            new_callable=AsyncMock
+        ) as mock_plamarination, patch(
             "src.agent.core.router_operations.send_input_unlock"
         ) as mock_unlock:
 
@@ -287,35 +291,26 @@ class TestRouterOperations(unittest.IsolatedAsyncioTestCase):
                 "message_manager": mock_message_manager,
             }
 
-            # Configure assessment to indicate complex request
-            mock_requirements = RequireAgent(
-                calculation_required=True,
-                web_search_required=True,
-                complex_question=True,
-                chilli_request=False,
-                context_rich_agent_request="Analyse this complex data",
-            )
-            mock_assess.return_value = mock_requirements
+            # Configure should_activate to indicate complex request
+            mock_should_activate.return_value = True
 
             # Create WebSocket mock
             mock_websocket = AsyncMock()
 
-            # Test message handling
+            # Test message handling for complex request
             await router_operations.handle_message(
                 router_state=router_state,
                 message_data={
-                    "message": "Analyse this data",
-                    "files": ["/path/to/data.csv"],
+                    "message": "Analyse this complex data and perform calculations",
                 },
                 websocket=mock_websocket,
             )
 
-            # Verify complex request was called with fully qualified parameters
-            mock_complex.assert_called_once_with(
-                router_state=router_state,
-                files=["/path/to/data.csv"],
-                websocket=mock_websocket,
-            )
+            # Verify should_activate was called to determine complexity
+            mock_should_activate.assert_called_once_with(router_state)
+
+            # Verify that plamarination was triggered for complex request
+            mock_plamarination.assert_called_once_with(router_state, mock_websocket)
 
     async def test_handle_simple_chat_success(self):
         """Test handle_simple_chat returns response successfully."""

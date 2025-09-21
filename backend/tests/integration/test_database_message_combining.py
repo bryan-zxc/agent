@@ -37,10 +37,8 @@ class TestDatabaseMessageCombining(unittest.IsolatedAsyncioTestCase):
         except:
             pass
         
-        try:
-            os.unlink(self.temp_db_file.name)
-        except:
-            pass
+        # No cleanup needed for PostgreSQL test database
+        pass
 
     async def test_combine_consecutive_same_role_messages_planner(self):
         """Test that consecutive same-role messages are combined for planner."""

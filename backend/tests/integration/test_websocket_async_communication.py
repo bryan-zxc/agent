@@ -192,7 +192,7 @@ class WebSocketAsyncCommunicationTestCase(
     async def asyncSetUp(self):
         """Set up WebSocket communication test environment."""
         # Create temporary database
-        self.temp_db_file.close()
+        config = DatabaseConfig()
         self.db = await AgentDatabase.create(database_url=config.get_database_url(database_name="test"))
 
         # Test identifiers
@@ -218,10 +218,8 @@ class WebSocketAsyncCommunicationTestCase(
         except:
             pass
 
-        try:
-            Path(self.temp_db_file.name).unlink()
-        except:
-            pass
+        # No cleanup needed for PostgreSQL
+        pass
 
     async def measure_websocket_performance(
         self, test_name, async_func, *args, **kwargs

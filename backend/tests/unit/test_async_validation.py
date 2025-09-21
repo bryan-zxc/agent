@@ -41,6 +41,7 @@ class AsyncValidationTestCase(unittest.IsolatedAsyncioTestCase):
         # Create temporary database for testing (in-memory doesn't work with separate engines)
 
         # Use factory method to create database
+        config = DatabaseConfig()
         self.db = await AgentDatabase.create(database_url=config.get_database_url(database_name="test"))
 
         # Test IDs
