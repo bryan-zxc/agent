@@ -7,12 +7,12 @@ in the database to maintain alternating user/assistant message patterns.
 
 import unittest
 import asyncio
-import tempfile
 import uuid
 import os
 from pathlib import Path
 
 from src.agent.models.agent_database import AgentDatabase
+from src.agent.database.connection import DatabaseConfig
 
 
 class TestDatabaseMessageCombining(unittest.IsolatedAsyncioTestCase):
@@ -20,10 +20,10 @@ class TestDatabaseMessageCombining(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
         """Set up test environment with temporary database."""
-        # Create temporary database file
-        self.temp_db_file = tempfile.NamedTemporaryFile(delete=False, suffix=".db")
-        self.temp_db_file.close()
-        self.db = await AgentDatabase.create(self.temp_db_file.name)
+        # Use PostgreSQL test database
+        config = DatabaseConfig()
+        test_db_url = config.get_database_url(database_name="test")
+        self.db = await AgentDatabase.create(database_url=test_db_url)
         
         # Generate unique test identifiers
         self.planner_id = f"planner_{uuid.uuid4().hex[:8]}"
@@ -37,10 +37,8 @@ class TestDatabaseMessageCombining(unittest.IsolatedAsyncioTestCase):
         except:
             pass
         
-        try:
-            os.unlink(self.temp_db_file.name)
-        except:
-            pass
+        # No cleanup needed for PostgreSQL test database
+        pass
 
     async def test_combine_consecutive_same_role_messages_planner(self):
         """Test that consecutive same-role messages are combined for planner."""

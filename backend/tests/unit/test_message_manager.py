@@ -7,7 +7,6 @@ with database synchronisation for efficient message handling.
 
 import unittest
 import asyncio
-import tempfile
 import uuid
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -15,6 +14,7 @@ from pathlib import Path
 
 from src.agent.tasks.message_manager import MessageManager
 from src.agent.models.agent_database import AgentDatabase
+from src.agent.database.connection import DatabaseConfig
 
 
 class TestMessageManager(unittest.IsolatedAsyncioTestCase):
@@ -23,20 +23,17 @@ class TestMessageManager(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         """Set up test environment with temporary database."""
         # Set up temporary database
-        self.db_fd, self.test_db_path = tempfile.mkstemp(suffix=".db")
-        os.close(self.db_fd)
-        self.db = await AgentDatabase.create(database_path=self.test_db_path)
+        config = DatabaseConfig()
+        self.db = await AgentDatabase.create(database_url=config.get_database_url(database_name="test"))
 
         # Test data
         self.agent_id = f"test_agent_{uuid.uuid4().hex[:8]}"
         self.agent_type = "planner"
 
     async def asyncTearDown(self):
-        """Clean up test database."""
-        try:
-            os.unlink(self.test_db_path)
-        except (OSError, FileNotFoundError):
-            pass
+        """Clean up test resources."""
+        # PostgreSQL test database is reused, no cleanup needed
+        pass
 
     async def test_message_manager_initialisation(self):
         """Test MessageManager initialisation with correct parameters."""
@@ -58,7 +55,7 @@ class TestMessageManager(unittest.IsolatedAsyncioTestCase):
         ) as mock_get:
 
             # Mock database responses
-            mock_add.return_value = "msg_123"  # Message ID
+            mock_add.return_value = {"message_id": "msg_123", "display_texts": ["Test message"]}
             mock_get.return_value = [
                 {"role": "system", "content": "System message"},
                 {"role": "user", "content": "User message"},
@@ -66,7 +63,7 @@ class TestMessageManager(unittest.IsolatedAsyncioTestCase):
 
             message_manager = MessageManager(self.db, self.agent_type, self.agent_id)
 
-            # Add a message
+            # Add a message with the same role as last message (user)
             messages = await message_manager.add_message("user", "Test message")
 
             # Verify message was added to database
@@ -74,13 +71,23 @@ class TestMessageManager(unittest.IsolatedAsyncioTestCase):
                 self.agent_type, self.agent_id, "user", "Test message"
             )
 
-            # Verify updated message list is returned (2 existing + 1 new = 3)
-            self.assertEqual(len(messages), 3)
-            self.assertEqual(messages[2]["role"], "user")
-            self.assertEqual(messages[2]["content"], "Test message")
+            # Since last message is also "user", content should be combined
+            # So we still have 2 messages, but last one has combined content
+            self.assertEqual(len(messages), 2)
+            self.assertEqual(messages[1]["role"], "user")
 
-            # Verify message count updated
-            self.assertEqual(message_manager.message_count(), 3)
+            # The content should be combined - check it contains both parts
+            last_content = messages[1]["content"]
+            if isinstance(last_content, list):
+                # Combined format
+                self.assertTrue(len(last_content) >= 2)
+            else:
+                # Should be in combined format
+                self.assertIn("User message", str(last_content))
+                self.assertIn("Test message", str(last_content))
+
+            # Message count should reflect actual message count
+            self.assertEqual(message_manager.message_count(), 2)
 
     async def test_get_messages_syncs_on_first_call(self):
         """Test get_messages syncs from database on first call."""
@@ -171,7 +178,7 @@ class TestMessageManager(unittest.IsolatedAsyncioTestCase):
         ) as mock_get:
 
             # Mock database responses
-            mock_add.return_value = "msg_id"
+            mock_add.return_value = {"message_id": "msg_id", "display_texts": []}
             mock_get.return_value = []  # Start with empty
 
             message_manager = MessageManager(self.db, self.agent_type, self.agent_id)
@@ -238,7 +245,7 @@ class TestMessageManager(unittest.IsolatedAsyncioTestCase):
         ) as mock_get:
 
             # Mock database write failure
-            mock_add.return_value = None  # Indicates failure
+            mock_add.return_value = {"message_id": None, "display_texts": []}  # Indicates failure
             mock_get.return_value = []
 
             message_manager = MessageManager(self.db, self.agent_type, self.agent_id)

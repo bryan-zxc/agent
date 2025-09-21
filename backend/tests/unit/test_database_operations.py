@@ -7,11 +7,11 @@ Tests focus on basic CRUD operations that actually work, avoiding complex integr
 
 import unittest
 import asyncio
-import tempfile
 import uuid
 import os
 
 from src.agent.models.agent_database import AgentDatabase
+from src.agent.database.connection import DatabaseConfig
 
 
 class TestDatabaseOperationsSimple(unittest.IsolatedAsyncioTestCase):
@@ -19,11 +19,10 @@ class TestDatabaseOperationsSimple(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
         """Set up test database for each test."""
-        # Create temporary database file
-        self.db_fd, self.test_db_path = tempfile.mkstemp(suffix=".db")
-        os.close(self.db_fd)  # Close file descriptor
-
-        self.db = await AgentDatabase.create(database_path=self.test_db_path)
+        # Use PostgreSQL test database
+        config = DatabaseConfig()
+        test_db_url = config.get_database_url(database_name="test")
+        self.db = await AgentDatabase.create(database_url=test_db_url)
 
         # Test data
         self.router_id = f"test_router_{uuid.uuid4().hex[:8]}"
@@ -31,11 +30,9 @@ class TestDatabaseOperationsSimple(unittest.IsolatedAsyncioTestCase):
         self.worker_id = f"test_worker_{uuid.uuid4().hex[:8]}"
 
     async def asyncTearDown(self):
-        """Clean up test database."""
-        try:
-            os.unlink(self.test_db_path)
-        except (OSError, FileNotFoundError):
-            pass
+        """Clean up test resources."""
+        # PostgreSQL test database is reused, no cleanup needed
+        pass
 
     async def test_database_connection_establishment(self):
         """Test async database connection works correctly."""
@@ -67,7 +64,8 @@ class TestDatabaseOperationsSimple(unittest.IsolatedAsyncioTestCase):
 
         # Should have our message
         self.assertEqual(len(messages), 1)
-        self.assertEqual(messages[0]["content"], "Test message")
+        # Content is returned as a list of dictionaries in Anthropic format
+        self.assertEqual(messages[0]["content"], [{"type": "text", "text": "Test message"}])
 
     async def test_planner_operations(self):
         """Test planner Create, Read, Update operations."""

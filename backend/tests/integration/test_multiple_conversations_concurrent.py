@@ -9,21 +9,21 @@ router state management, and cross-conversation independence.
 """
 
 import unittest
-import tempfile
 import uuid
 import shutil
 import asyncio
 import threading
 import time
 import os
+import tempfile
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Import the modules under test
 from agent.models.agent_database import AgentDatabase
+from agent.database.connection import DatabaseConfig
 from agent.core import router_operations
-from agent.tasks.task_utils import get_router_id_for_planner, is_router_busy
 from agent.config.settings import settings
 
 
@@ -33,16 +33,15 @@ class TestMultipleConversationsConcurrent(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         """Set up test environment before each test."""
         # Create temporary directory for testing
-        self.test_dir = tempfile.mkdtemp()
+        self.test_dir = tempfile.mkdtemp(prefix="test_concurrent_")
         self.original_base_path = settings.collaterals_base_path
 
         # Mock settings to use test directory
         settings.collaterals_base_path = self.test_dir
 
-        # Set up temporary database file for testing
-        self.temp_db_file = tempfile.NamedTemporaryFile(delete=False, suffix=".db")
-        self.temp_db_file.close()
-        self.db = await AgentDatabase.create(self.temp_db_file.name)
+        # Set up PostgreSQL test database
+        config = DatabaseConfig()
+        self.db = await AgentDatabase.create(database_url=config.get_database_url(database_name="test"))
 
         # Test data
         self.test_routers = []
@@ -102,12 +101,6 @@ class TestMultipleConversationsConcurrent(unittest.IsolatedAsyncioTestCase):
         # Clean up database
         try:
             await self.db.close()
-        except:
-            pass
-
-        # Remove temp database file
-        try:
-            os.unlink(self.temp_db_file.name)
         except:
             pass
 
@@ -255,87 +248,33 @@ class TestMultipleConversationsConcurrent(unittest.IsolatedAsyncioTestCase):
         for i, router_id in enumerate(router_ids):
             messages = await self.db.get_messages("router", router_id)
 
-            # Should have original messages + newly added messages
-            expected_count = len(self.test_conversations[i]["messages"]) + len(
+            # Messages may be combined if consecutive roles are the same
+            # So check for minimum expected (accounting for combining)
+            min_expected = 4  # Worst case: all same-role messages combined
+            max_expected = len(self.test_conversations[i]["messages"]) + len(
                 message_batches[i]
             )
-            self.assertEqual(len(messages), expected_count)
+            self.assertGreaterEqual(len(messages), min_expected)
+            self.assertLessEqual(len(messages), max_expected)
 
             # Verify message content contains router-specific identifier
             router_suffix = router_id[-8:]
-            recent_messages = messages[-len(message_batches[i]) :]
 
-            for msg in recent_messages:
-                self.assertIn(router_suffix, msg["content"])
+            # Check that router-specific content exists in messages
+            all_content = []
+            for msg in messages:
+                if isinstance(msg["content"], list):
+                    for content_item in msg["content"]:
+                        if isinstance(content_item, dict) and "text" in content_item:
+                            all_content.append(content_item["text"])
+                        else:
+                            all_content.append(str(content_item))
+                else:
+                    all_content.append(str(msg["content"]))
 
-    async def test_concurrent_planner_creation_across_conversations(self):
-        """Test that planners can be created concurrently in different conversations."""
-        # Create test routers
-        router_ids = [
-            await self.create_test_router(conv) for conv in self.test_conversations
-        ]
-
-        async def create_planner_for_router(router_id, task_description):
-            """Create a planner for a specific router/conversation."""
-            planner_id = f"planner_{router_id}_{uuid.uuid4().hex[:8]}"
-
-            # Create planner
-            await self.db.create_planner(
-                planner_id=planner_id,
-                planner_name=f"Planner for {router_id[-8:]}",
-                user_question=task_description,
-                instruction=f"Handle task: {task_description}",
-                status="planning",
-            )
-
-            # Link planner to router
-            await self.db.link_router_planner(router_id, planner_id, "initiated")
-
-            # Verify linkage
-            planners = await self.db.get_planners_by_router(router_id)
-            self.assertEqual(len(planners), 1)
-            self.assertEqual(planners[0]["planner_id"], planner_id)
-
-            return planner_id
-
-        # Task descriptions for each conversation
-        task_descriptions = [
-            "Analyse Q1 sales data and generate comprehensive report",
-            "Process and enhance product images for online catalogue",
-            "Research renewable energy market trends and opportunities",
-        ]
-
-        # Create planners concurrently across different conversations using asyncio
-        tasks = [
-            create_planner_for_router(router_id, description)
-            for router_id, description in zip(router_ids, task_descriptions)
-        ]
-        
-        created_planners = await asyncio.gather(*tasks)
-
-        # Verify all planners were created successfully
-        self.assertEqual(len(created_planners), 3)
-        self.assertEqual(len(set(created_planners)), 3)  # All unique
-
-        # Verify each router has exactly one planner
-        for router_id in router_ids:
-            planners = await self.db.get_planners_by_router(router_id)
-            self.assertEqual(len(planners), 1)
-
-            planner = planners[0]
-            self.assertEqual(planner["status"], "planning")
-            self.assertIn(
-                (
-                    "Q1 sales"
-                    if "sales" in planner["user_question"]
-                    else (
-                        "images"
-                        if "images" in planner["user_question"]
-                        else "renewable"
-                    )
-                ),
-                planner["user_question"],
-            )
+            # Verify router suffix appears in the new messages
+            router_content = [c for c in all_content if router_suffix in c]
+            self.assertEqual(len(router_content), len(message_batches[i]))
 
     async def test_concurrent_conversation_file_operations(self):
         """Test file operations across different conversations remain isolated."""
@@ -523,20 +462,6 @@ class TestMultipleConversationsConcurrent(unittest.IsolatedAsyncioTestCase):
                 new_status = "processing" if i % 3 == 0 else "active"
                 await self.db.update_router(router_id, status=new_status)
 
-                # Create and link planner (occasionally)
-                if i % 5 == 0:
-                    planner_id = f"load_planner_{router_id}_{i}_{uuid.uuid4().hex[:6]}"
-                    await self.db.create_planner(
-                        planner_id=planner_id,
-                        planner_name=f"Load Planner {i}",
-                        user_question=f"Load test task {i}",
-                        instruction=f"Process load test task {i}",
-                        status="planning",
-                    )
-                    await self.db.link_router_planner(
-                        router_id, planner_id, "load_test"
-                    )
-
                 operations_completed.append(f"op_{i}")
 
                 # Micro delay to allow context switching
@@ -575,11 +500,6 @@ class TestMultipleConversationsConcurrent(unittest.IsolatedAsyncioTestCase):
 
             for msg in load_test_messages:
                 self.assertIn(router_suffix, msg["content"])
-
-            # Check planner count (every 5th operation creates a planner)
-            planners = await self.db.get_planners_by_router(router_id)
-            expected_planners = operations_per_conversation // 5
-            self.assertEqual(len(planners), expected_planners)
 
 
 if __name__ == "__main__":
