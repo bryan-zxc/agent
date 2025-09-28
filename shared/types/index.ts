@@ -36,15 +36,6 @@ export interface ConversationHistory {
   updatedAt: Date;
 }
 
-export interface PlannerInfo {
-  has_planner: boolean;
-  execution_plan: string | null;
-  status: string | null;
-  planner_id: string | null;
-  planner_name?: string | null;
-  user_question?: string | null;
-}
-
 export interface ApprovalRequest {
   request_id: string;
   plan: string;

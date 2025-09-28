@@ -58,7 +58,6 @@ from .file_manager import (
     generate_image_path,
     save_image_to_file,
 )
-from .task_utils import update_planner_next_task_and_queue, queue_worker_task
 from .message_manager import MessageManager
 
 logger = logging.getLogger(__name__)
@@ -264,420 +263,418 @@ def get_table_metadata(duck_conn, table_name: str) -> TableMeta:
     )
 
 
-async def execute_initial_planning(task_data: dict):
-    """
-    Execute initial planning phase - create planner and execution plan from user question.
-    This creates a new planner and generates the initial execution plan.
-
-    Args:
-        task_data: Dict containing task information and payload with parameters:
-            - entity_id: planner_id
-            - payload: dict with user_question, instruction, files, planner_name, message_id, router_id
-
-    """
-    logger.info("Starting initial planning with new planner creation")
-
-    # Extract parameters from task_data
-    planner_id = task_data["entity_id"]
-    payload = task_data.get("payload", {})
-
-    # Check if this is a resume scenario (planner already exists)
-    db = await AgentDatabase.create()
-    existing_planner = await db.get_planner(planner_id) if planner_id else None
-
-    if existing_planner:
-        logger.info(
-            f"Planner {planner_id} already exists - resuming execution, skipping initialisation"
-        )
-        # Queue next task: task creation (planner already initialised)
-        await update_planner_next_task_and_queue(planner_id, "execute_task_creation")
-        return
-
-    # New planner scenario - create new planner
-    user_question = payload["user_question"]
-    instruction = payload.get("instruction")
-    files = payload.get("files", [])
-    # Convert dictionary files back to File objects, filtering None values to allow Pydantic defaults
-    cleaned_files = []
-    for f in files:
-        if isinstance(f, dict):
-            # Remove None values so Pydantic can use default values (e.g., image_context = [])
-            cleaned_f = {k: v for k, v in f.items() if v is not None}
-            cleaned_files.append(File.model_validate(cleaned_f))
-        else:
-            cleaned_files.append(f)
-    files = cleaned_files
-    planner_name = payload.get("planner_name")
-    message_id = payload.get("message_id")
-    router_id = payload.get("router_id")
-
-    # Create new planner ID if not provided
-    if not planner_id:
-        planner_id = uuid.uuid4().hex
-
-    # Load settings
-    model = settings.planner_model
-    temperature = 0.0
-    failed_task_limit = settings.failed_task_limit
-
-    # Use random name if none provided
-    if planner_name is None:
-        planner_name = get_random_planner_name()
-
-    try:
-        # Create planner database record FIRST (to satisfy foreign key constraints)
-        await db.create_planner(
-            planner_id=planner_id,
-            planner_name=planner_name,
-            user_question=user_question,
-            instruction=instruction or "",
-            model=model,
-            temperature=temperature,
-            failed_task_limit=failed_task_limit,
-            status="planning",
-            next_task="execute_initial_planning",  # Current task for restart/resumability
-        )
-
-        # Create message-planner link AFTER planner exists
-        if message_id and router_id:
-            await db.link_message_planner(
-                router_id=router_id,
-                message_id=message_id,
-                planner_id=planner_id,
-                relationship_type="initiated",
-            )
-            logger.info(
-                f"Created message-planner link: message {message_id} -> planner {planner_id}"
-            )
-
-        # Create message manager for this planner (now that planner exists)
-        message_manager = MessageManager(db, "planner", planner_id)
-
-        # Initialize messages variable for consistent state tracking
-        messages = await message_manager.get_messages()
-
-        # Initialize planner collections (following PlannerAgent.__init__ pattern)
-        tables = []
-        duck_conn = None
-
-        # Create DuckDB database file path for persistence
-        planner_dir = Path(settings.collaterals_base_path) / planner_id
-        planner_dir.mkdir(parents=True, exist_ok=True)
-        db_path = planner_dir / "database.db"
-
-        # Store system instruction in satellite table instead of message chain
-        system_instruction = (
-            "You are an expert planner. "
-            "Your objective is to break down the user's instruction into a list of tasks that can be individually executed."
-            "Keep in mind that quite often the first step(s) are to extra facts which commonly comes in the form of question and answer pairs. "
-            "Even if there are no further unanswered questions, it only means you have all the facts required to answer the user's question, it doesn't always mean the process is complete. "
-            "If there still are analysis especially calculations that is required to be applied to the facts, then you need to create further tasks to complete. "
-            "Typically facts are pre-extracted and likely to be in the form of question and answer pairs, "
-            "if the questions don't seem to be fully aligned to what is required for analysis, you can activate relevant tools to re-extract facts. "
-        )
-        await db.set_planner_system_instruction(
-            planner_id=planner_id,
-            system_instruction=system_instruction,
-            instruction_type="default",
-        )
-        logger.info(f"Stored system instruction for planner {planner_id}")
-
-        # Add user question to planner message history so it has user context for answer template creation
-        messages = await message_manager.add_message(
-            role="user",
-            content=user_question,
-        )
-
-        # Process files following the exact pattern from PlannerAgent.__init__
-        if files:
-            for f in files:
-                if f.file_type == "image":
-                    # Load image using encode_image function
-                    encoded_image = encode_image(f.filepath)
-
-                    # Save image with cleaned name (using collision avoidance)
-                    raw_image_name = Path(f.filepath).stem
-                    _, image_name = save_planner_image(
-                        planner_id, raw_image_name, encoded_image, check_existing=True
-                    )
-
-                    # Update file object with cleaned name for message
-                    f.filename = image_name
-
-                    # Add message about image processing (exact copy from PlannerAgent)
-                    messages = await message_manager.add_message(
-                        role="user",
-                        content=f.model_dump_json(indent=2, include={"image_context"}),
-                    )
-                    logger.info(f"Processed image: {f.filepath} -> {image_name}")
-
-                elif f.file_type == "data" and f.data_context == "csv":
-                    # Create DuckDB file connection if needed
-                    if duck_conn is None:
-                        duck_conn = duckdb.connect(database=str(db_path))
-
-                    # Create table from CSV with fallback to all_varchar on failure
-                    table_name = clean_table_name(Path(f.filepath).stem)
-                    try:
-                        # First attempt: normal CSV reading
-                        duck_conn.sql(
-                            f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM read_csv('{f.filepath}',strict_mode=false)"
-                        )
-                        logger.info(
-                            f"Created table {table_name} from CSV: {f.filepath}"
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            f"Failed to create table {table_name} with normal CSV read, trying all_varchar: {e}"
-                        )
-                        try:
-                            # Fallback: try with all_varchar=true
-                            duck_conn.sql(
-                                f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM read_csv('{f.filepath}',strict_mode=false,all_varchar=true)"
-                            )
-                            logger.info(
-                                f"Created table {table_name} from CSV using all_varchar fallback: {f.filepath}"
-                            )
-                        except Exception as e2:
-                            logger.error(
-                                f"Failed to create table {table_name} even with all_varchar: {e2}"
-                            )
-                            # Add error message instead of table creation message
-                            await message_manager.add_message(
-                                role="user",
-                                content=f"CSV file `{f.filepath}` could not be processed into a database table. Error: {str(e2)}",
-                            )
-                            continue  # Skip metadata processing for failed CSV
-
-                    # Get table metadata
-                    table_meta = get_table_metadata(duck_conn, table_name)
-                    tables.append(table_meta)
-
-                    # Add message about table creation (exact copy from PlannerAgent)
-                    await message_manager.add_message(
-                        role="user",
-                        content=f"Data file `{f.filepath}` converted to table `{table_name}` in database. Below is table metadata:\n\n{table_meta.model_dump_json(indent=2)}",
-                    )
-
-                elif (
-                    f.file_type == "document" and f.document_context.file_type == "text"
-                ):
-                    # Read the text file content using the stored encoding
-                    try:
-                        text_content = Path(f.filepath).read_text(
-                            encoding=f.document_context.encoding
-                        )
-                        # Limit to first 1 million characters
-                        limited_content = text_content[:1000000]
-                        if len(text_content) > 1000000:
-                            limited_content += "...\n\n[Content truncated to first 1 million characters]"
-
-                        await message_manager.add_message(
-                            role="user",
-                            content=f"Text file `{Path(f.filepath).name}` contains the following content:\n\n{limited_content}",
-                        )
-                        logger.info(
-                            f"Processed text file: {f.filepath} with encoding {f.document_context.encoding}"
-                        )
-                    except Exception as e:
-                        await message_manager.add_message(
-                            role="user",
-                            content=f"Text file `{Path(f.filepath).name}` could not be read with encoding `{f.document_context.encoding}`. Error: {str(e)}",
-                        )
-                        logger.error(f"Failed to read text file {f.filepath}: {e}")
-
-                elif (
-                    f.file_type == "document" and f.document_context.file_type == "pdf"
-                ):
-                    # Add message about PDF file being available for processing
-                    await message_manager.add_message(
-                        role="user",
-                        content=f"PDF document `{Path(f.filepath).name}` is available for processing at: {f.filepath}",
-                    )
-                    logger.info(f"Registered PDF file for processing: {f.filepath}")
-
-        # Close DuckDB connection after table creation
-        if duck_conn:
-            duck_conn.close()
-            logger.info(f"Created DuckDB database at: {db_path}")
-
-        # Save tables and files metadata to agent_metadata (not variables)
-        metadata = {}
-        if tables:
-            metadata["tables"] = [table.model_dump() for table in tables]
-        if files:
-            metadata["files"] = [f.model_dump() for f in files]
-
-        # Update planner with metadata
-        if metadata:
-            await db.update_planner(planner_id, agent_metadata=metadata)
-
-        # Check for stored plamarination plan from router
-        stored_plan = None
-        stored_answer_template = None
-        if router_id:
-            router = await db.get_router(router_id)
-            if router and router.get("agent_metadata"):
-                router_metadata = router["agent_metadata"]
-
-                # Check if there's a stored execution plan from plamarination
-                if "execution_plan_model" in router_metadata:
-                    logger.info(
-                        f"Found stored plamarination plan for router {router_id}"
-                    )
-                    stored_plan = router_metadata["execution_plan_model"]
-                    stored_answer_template = router_metadata.get("answer_template", "")
-
-                    # Clear metadata after consumption
-                    await db.update_router(router_id, agent_metadata={})
-                    logger.info(
-                        f"Cleared plamarination metadata from router {router_id}"
-                    )
-
-        # Use stored plan or generate new one
-        if stored_plan:
-            # Use the stored plan from plamarination
-            execution_plan_model = ExecutionPlanModel(**stored_plan)
-            logger.info(
-                f"Using stored execution plan with {len(execution_plan_model.todos)} todos"
-            )
-
-            # Check if there are any tasks to execute
-            if not execution_plan_model.todos:
-                logger.info("No todos in execution plan - answer is already complete")
-                # The answer template is the final answer
-                # Store it and mark planner as completed
-                save_answer_template(planner_id, stored_answer_template)
-                save_wip_answer_template(planner_id, stored_answer_template)
-
-                await db.update_planner(
-                    planner_id,
-                    execution_plan="# No execution needed - answer complete",
-                    status="completed",
-                    next_task="completed",
-                    user_response=stored_answer_template,
-                )
-
-                # Add the answer to router messages
-                if router_id:
-                    await db.add_message(
-                        "router", router_id, "assistant", stored_answer_template
-                    )
-
-                logger.info(f"Planner {planner_id} completed with no execution needed")
-                return  # Exit early - no tasks to execute
-
-            # Generate markdown version
-            execution_plan_markdown = execution_plan_model_to_markdown(
-                execution_plan_model
-            )
-
-            # Update planner with execution plan
-            await db.update_planner(
-                planner_id, execution_plan=execution_plan_markdown, status="executing"
-            )
-
-            # Save execution plan model to dedicated file
-            save_execution_plan_model(planner_id, execution_plan_model)
-
-            # Use the stored answer template
-            save_answer_template(planner_id, stored_answer_template)
-            save_wip_answer_template(planner_id, stored_answer_template)
-
-        else:
-            # No stored plan - generate new one
-            # Create tools text (exact copy from PlannerAgent)
-            tools_text = "\n\n---\n\n".join(
-                [f"# {name}\n{tool.__doc__}" for name, tool in TOOLS.items()]
-            )
-
-            # Generate execution plan using structured format
-            plan_prompt = (
-                f"**Available tools for execution:**\n{tools_text}\n\n"
-                f"**Instructions:**\n{instruction}\n\n"
-                "Please create a detailed execution plan with an overall objective and a list of specific tasks. "
-                "The objective should describe what the tasks are aiming to achieve. "
-                "Each task should be specific enough to be executed independently. "
-            )
-
-            # Get messages for LLM call
-            messages = await message_manager.get_messages()
-
-            # Get initial execution plan from LLM
-            initial_plan = await llm.a_get_response(
-                messages=append_user_content(messages, plan_prompt),
-                model=model,
-                temperature=temperature,
-                response_format=InitialExecutionPlan,
-                system_instruction=system_instruction,  # Use system instruction from satellite table
-            )
-
-            # Convert to full ExecutionPlanModel
-            execution_plan_model = initial_plan_to_execution_plan_model(initial_plan)
-
-            # Generate markdown version
-            execution_plan_markdown = execution_plan_model_to_markdown(
-                execution_plan_model
-            )
-
-            # Update planner with execution plan
-            await db.update_planner(
-                planner_id, execution_plan=execution_plan_markdown, status="executing"
-            )
-
-            # Save execution plan model to dedicated file
-            save_execution_plan_model(planner_id, execution_plan_model)
-
-            # Create initial answer template
-            messages = await message_manager.get_messages()
-            logger.info(
-                f"DEBUG: Retrieved {len(messages)} messages for planner {planner_id}"
-            )
-
-            answer_template_prompt = (
-                "Based on the information so far, produce a first cut template in Markdown format to provide the final answer to the user's question. "
-                "This should include placeholders for facts, analysis outcomes, and any other relevant information. "
-                "Don't fill any answers into this template even if you have the information, just leave placeholders. "
-                "Do not return anything other than the template itself, don't use ```markdown ... ``` block either. "
-                "Keep the template as succinct and concise as possible."
-            )
-
-            answer_template_messages = append_user_content(
-                messages, answer_template_prompt
-            )
-
-            answer_template_response = await llm.a_get_response(
-                messages=answer_template_messages,
-                model=model,
-                temperature=temperature,
-                system_instruction=system_instruction,  # Use system instruction from satellite table
-            )
-
-            initial_answer_template = answer_template_response.content.strip()
-
-            # Save both answer template and WIP template (initially the same)
-            save_answer_template(planner_id, initial_answer_template)
-            save_wip_answer_template(planner_id, initial_answer_template)
-
-        logger.info(
-            f"Created and saved initial answer template for planner {planner_id}"
-        )
-
-        logger.info(f"Initial planning completed for planner {planner_id}")
-        logger.info(f"Planner {planner_id}\nuser question: {user_question}")
-        logger.info(f"Planner {planner_id}\ninstruction: {instruction}")
-        logger.info(f"Planner {planner_id}\nexecution plan: {execution_plan_markdown}")
-
-        # Queue next task: task creation
-        await update_planner_next_task_and_queue(planner_id, "execute_task_creation")
-
-    except Exception as e:
-        logger.error(f"Initial planning failed for planner {planner_id}: {e}")
-        if "planner_id" in locals():
-            await db.update_planner(planner_id, status="failed")
-        raise
-
-
+# async def execute_initial_planning(task_data: dict):
+#     """
+#     Execute initial planning phase - create planner and execution plan from user question.
+#     This creates a new planner and generates the initial execution plan.
+# 
+#     Args:
+#         task_data: Dict containing task information and payload with parameters:
+#             - entity_id: planner_id
+#             - payload: dict with user_question, instruction, files, planner_name, message_id, router_id
+# 
+#     """
+#     logger.info("Starting initial planning with new planner creation")
+# 
+#     # Extract parameters from task_data
+#     planner_id = task_data["entity_id"]
+#     payload = task_data.get("payload", {})
+# 
+#     # Check if this is a resume scenario (planner already exists)
+#     db = await AgentDatabase.create()
+#     existing_planner = await db.get_planner(planner_id) if planner_id else None
+# 
+#     if existing_planner:
+#         logger.info(
+#             f"Planner {planner_id} already exists - resuming execution, skipping initialisation"
+#         )
+#         # Task queueing removed - now handled by frontend orchestration
+#         return
+# 
+#     # New planner scenario - create new planner
+#     user_question = payload["user_question"]
+#     instruction = payload.get("instruction")
+#     files = payload.get("files", [])
+#     # Convert dictionary files back to File objects, filtering None values to allow Pydantic defaults
+#     cleaned_files = []
+#     for f in files:
+#         if isinstance(f, dict):
+#             # Remove None values so Pydantic can use default values (e.g., image_context = [])
+#             cleaned_f = {k: v for k, v in f.items() if v is not None}
+#             cleaned_files.append(File.model_validate(cleaned_f))
+#         else:
+#             cleaned_files.append(f)
+#     files = cleaned_files
+#     planner_name = payload.get("planner_name")
+#     message_id = payload.get("message_id")
+#     router_id = payload.get("router_id")
+# 
+#     # Create new planner ID if not provided
+#     if not planner_id:
+#         planner_id = uuid.uuid4().hex
+# 
+#     # Load settings
+#     model = settings.planner_model
+#     temperature = 0.0
+#     failed_task_limit = settings.failed_task_limit
+# 
+#     # Use random name if none provided
+#     if planner_name is None:
+#         planner_name = get_random_planner_name()
+# 
+#     try:
+#         # Create planner database record FIRST (to satisfy foreign key constraints)
+#         await db.create_planner(
+#             planner_id=planner_id,
+#             planner_name=planner_name,
+#             user_question=user_question,
+#             instruction=instruction or "",
+#             model=model,
+#             temperature=temperature,
+#             failed_task_limit=failed_task_limit,
+#             status="planning",
+#             next_task="execute_initial_planning",  # Current task for restart/resumability
+#         )
+# 
+#         # Create message-planner link AFTER planner exists
+#         if message_id and router_id:
+#             await db.link_message_planner(
+#                 router_id=router_id,
+#                 message_id=message_id,
+#                 planner_id=planner_id,
+#                 relationship_type="initiated",
+#             )
+#             logger.info(
+#                 f"Created message-planner link: message {message_id} -> planner {planner_id}"
+#             )
+# 
+#         # Create message manager for this planner (now that planner exists)
+#         message_manager = MessageManager(db, "planner", planner_id)
+# 
+#         # Initialize messages variable for consistent state tracking
+#         messages = await message_manager.get_messages()
+# 
+#         # Initialize planner collections (following PlannerAgent.__init__ pattern)
+#         tables = []
+#         duck_conn = None
+# 
+#         # Create DuckDB database file path for persistence
+#         planner_dir = Path(settings.collaterals_base_path) / planner_id
+#         planner_dir.mkdir(parents=True, exist_ok=True)
+#         db_path = planner_dir / "database.db"
+# 
+#         # Store system instruction in satellite table instead of message chain
+#         system_instruction = (
+#             "You are an expert planner. "
+#             "Your objective is to break down the user's instruction into a list of tasks that can be individually executed."
+#             "Keep in mind that quite often the first step(s) are to extra facts which commonly comes in the form of question and answer pairs. "
+#             "Even if there are no further unanswered questions, it only means you have all the facts required to answer the user's question, it doesn't always mean the process is complete. "
+#             "If there still are analysis especially calculations that is required to be applied to the facts, then you need to create further tasks to complete. "
+#             "Typically facts are pre-extracted and likely to be in the form of question and answer pairs, "
+#             "if the questions don't seem to be fully aligned to what is required for analysis, you can activate relevant tools to re-extract facts. "
+#         )
+#         await db.set_planner_system_instruction(
+#             planner_id=planner_id,
+#             system_instruction=system_instruction,
+#             instruction_type="default",
+#         )
+#         logger.info(f"Stored system instruction for planner {planner_id}")
+# 
+#         # Add user question to planner message history so it has user context for answer template creation
+#         messages = await message_manager.add_message(
+#             role="user",
+#             content=user_question,
+#         )
+# 
+#         # Process files following the exact pattern from PlannerAgent.__init__
+#         if files:
+#             for f in files:
+#                 if f.file_type == "image":
+#                     # Load image using encode_image function
+#                     encoded_image = encode_image(f.filepath)
+# 
+#                     # Save image with cleaned name (using collision avoidance)
+#                     raw_image_name = Path(f.filepath).stem
+#                     _, image_name = save_planner_image(
+#                         planner_id, raw_image_name, encoded_image, check_existing=True
+#                     )
+# 
+#                     # Update file object with cleaned name for message
+#                     f.filename = image_name
+# 
+#                     # Add message about image processing (exact copy from PlannerAgent)
+#                     messages = await message_manager.add_message(
+#                         role="user",
+#                         content=f.model_dump_json(indent=2, include={"image_context"}),
+#                     )
+#                     logger.info(f"Processed image: {f.filepath} -> {image_name}")
+# 
+#                 elif f.file_type == "data" and f.data_context == "csv":
+#                     # Create DuckDB file connection if needed
+#                     if duck_conn is None:
+#                         duck_conn = duckdb.connect(database=str(db_path))
+# 
+#                     # Create table from CSV with fallback to all_varchar on failure
+#                     table_name = clean_table_name(Path(f.filepath).stem)
+#                     try:
+#                         # First attempt: normal CSV reading
+#                         duck_conn.sql(
+#                             f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM read_csv('{f.filepath}',strict_mode=false)"
+#                         )
+#                         logger.info(
+#                             f"Created table {table_name} from CSV: {f.filepath}"
+#                         )
+#                     except Exception as e:
+#                         logger.warning(
+#                             f"Failed to create table {table_name} with normal CSV read, trying all_varchar: {e}"
+#                         )
+#                         try:
+#                             # Fallback: try with all_varchar=true
+#                             duck_conn.sql(
+#                                 f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM read_csv('{f.filepath}',strict_mode=false,all_varchar=true)"
+#                             )
+#                             logger.info(
+#                                 f"Created table {table_name} from CSV using all_varchar fallback: {f.filepath}"
+#                             )
+#                         except Exception as e2:
+#                             logger.error(
+#                                 f"Failed to create table {table_name} even with all_varchar: {e2}"
+#                             )
+#                             # Add error message instead of table creation message
+#                             await message_manager.add_message(
+#                                 role="user",
+#                                 content=f"CSV file `{f.filepath}` could not be processed into a database table. Error: {str(e2)}",
+#                             )
+#                             continue  # Skip metadata processing for failed CSV
+# 
+#                     # Get table metadata
+#                     table_meta = get_table_metadata(duck_conn, table_name)
+#                     tables.append(table_meta)
+# 
+#                     # Add message about table creation (exact copy from PlannerAgent)
+#                     await message_manager.add_message(
+#                         role="user",
+#                         content=f"Data file `{f.filepath}` converted to table `{table_name}` in database. Below is table metadata:\n\n{table_meta.model_dump_json(indent=2)}",
+#                     )
+# 
+#                 elif (
+#                     f.file_type == "document" and f.document_context.file_type == "text"
+#                 ):
+#                     # Read the text file content using the stored encoding
+#                     try:
+#                         text_content = Path(f.filepath).read_text(
+#                             encoding=f.document_context.encoding
+#                         )
+#                         # Limit to first 1 million characters
+#                         limited_content = text_content[:1000000]
+#                         if len(text_content) > 1000000:
+#                             limited_content += "...\n\n[Content truncated to first 1 million characters]"
+# 
+#                         await message_manager.add_message(
+#                             role="user",
+#                             content=f"Text file `{Path(f.filepath).name}` contains the following content:\n\n{limited_content}",
+#                         )
+#                         logger.info(
+#                             f"Processed text file: {f.filepath} with encoding {f.document_context.encoding}"
+#                         )
+#                     except Exception as e:
+#                         await message_manager.add_message(
+#                             role="user",
+#                             content=f"Text file `{Path(f.filepath).name}` could not be read with encoding `{f.document_context.encoding}`. Error: {str(e)}",
+#                         )
+#                         logger.error(f"Failed to read text file {f.filepath}: {e}")
+# 
+#                 elif (
+#                     f.file_type == "document" and f.document_context.file_type == "pdf"
+#                 ):
+#                     # Add message about PDF file being available for processing
+#                     await message_manager.add_message(
+#                         role="user",
+#                         content=f"PDF document `{Path(f.filepath).name}` is available for processing at: {f.filepath}",
+#                     )
+#                     logger.info(f"Registered PDF file for processing: {f.filepath}")
+# 
+#         # Close DuckDB connection after table creation
+#         if duck_conn:
+#             duck_conn.close()
+#             logger.info(f"Created DuckDB database at: {db_path}")
+# 
+#         # Save tables and files metadata to agent_metadata (not variables)
+#         metadata = {}
+#         if tables:
+#             metadata["tables"] = [table.model_dump() for table in tables]
+#         if files:
+#             metadata["files"] = [f.model_dump() for f in files]
+# 
+#         # Update planner with metadata
+#         if metadata:
+#             await db.update_planner(planner_id, agent_metadata=metadata)
+# 
+#         # Check for stored plamarination plan from router
+#         stored_plan = None
+#         stored_answer_template = None
+#         if router_id:
+#             router = await db.get_router(router_id)
+#             if router and router.get("agent_metadata"):
+#                 router_metadata = router["agent_metadata"]
+# 
+#                 # Check if there's a stored execution plan from plamarination
+#                 if "execution_plan_model" in router_metadata:
+#                     logger.info(
+#                         f"Found stored plamarination plan for router {router_id}"
+#                     )
+#                     stored_plan = router_metadata["execution_plan_model"]
+#                     stored_answer_template = router_metadata.get("answer_template", "")
+# 
+#                     # Clear metadata after consumption
+#                     await db.update_router(router_id, agent_metadata={})
+#                     logger.info(
+#                         f"Cleared plamarination metadata from router {router_id}"
+#                     )
+# 
+#         # Use stored plan or generate new one
+#         if stored_plan:
+#             # Use the stored plan from plamarination
+#             execution_plan_model = ExecutionPlanModel(**stored_plan)
+#             logger.info(
+#                 f"Using stored execution plan with {len(execution_plan_model.todos)} todos"
+#             )
+# 
+#             # Check if there are any tasks to execute
+#             if not execution_plan_model.todos:
+#                 logger.info("No todos in execution plan - answer is already complete")
+#                 # The answer template is the final answer
+#                 # Store it and mark planner as completed
+#                 save_answer_template(planner_id, stored_answer_template)
+#                 save_wip_answer_template(planner_id, stored_answer_template)
+# 
+#                 await db.update_planner(
+#                     planner_id,
+#                     execution_plan="# No execution needed - answer complete",
+#                     status="completed",
+#                     next_task="completed",
+#                     user_response=stored_answer_template,
+#                 )
+# 
+#                 # Add the answer to router messages
+#                 if router_id:
+#                     await db.add_message(
+#                         "router", router_id, "assistant", stored_answer_template
+#                     )
+# 
+#                 logger.info(f"Planner {planner_id} completed with no execution needed")
+#                 return  # Exit early - no tasks to execute
+# 
+#             # Generate markdown version
+#             execution_plan_markdown = execution_plan_model_to_markdown(
+#                 execution_plan_model
+#             )
+# 
+#             # Update planner with execution plan
+#             await db.update_planner(
+#                 planner_id, execution_plan=execution_plan_markdown, status="executing"
+#             )
+# 
+#             # Save execution plan model to dedicated file
+#             save_execution_plan_model(planner_id, execution_plan_model)
+# 
+#             # Use the stored answer template
+#             save_answer_template(planner_id, stored_answer_template)
+#             save_wip_answer_template(planner_id, stored_answer_template)
+# 
+#         else:
+#             # No stored plan - generate new one
+#             # Create tools text (exact copy from PlannerAgent)
+#             tools_text = "\n\n---\n\n".join(
+#                 [f"# {name}\n{tool.__doc__}" for name, tool in TOOLS.items()]
+#             )
+# 
+#             # Generate execution plan using structured format
+#             plan_prompt = (
+#                 f"**Available tools for execution:**\n{tools_text}\n\n"
+#                 f"**Instructions:**\n{instruction}\n\n"
+#                 "Please create a detailed execution plan with an overall objective and a list of specific tasks. "
+#                 "The objective should describe what the tasks are aiming to achieve. "
+#                 "Each task should be specific enough to be executed independently. "
+#             )
+# 
+#             # Get messages for LLM call
+#             messages = await message_manager.get_messages()
+# 
+#             # Get initial execution plan from LLM
+#             initial_plan = await llm.a_get_response(
+#                 messages=append_user_content(messages, plan_prompt),
+#                 model=model,
+#                 temperature=temperature,
+#                 response_format=InitialExecutionPlan,
+#                 system_instruction=system_instruction,  # Use system instruction from satellite table
+#             )
+# 
+#             # Convert to full ExecutionPlanModel
+#             execution_plan_model = initial_plan_to_execution_plan_model(initial_plan)
+# 
+#             # Generate markdown version
+#             execution_plan_markdown = execution_plan_model_to_markdown(
+#                 execution_plan_model
+#             )
+# 
+#             # Update planner with execution plan
+#             await db.update_planner(
+#                 planner_id, execution_plan=execution_plan_markdown, status="executing"
+#             )
+# 
+#             # Save execution plan model to dedicated file
+#             save_execution_plan_model(planner_id, execution_plan_model)
+# 
+#             # Create initial answer template
+#             messages = await message_manager.get_messages()
+#             logger.info(
+#                 f"DEBUG: Retrieved {len(messages)} messages for planner {planner_id}"
+#             )
+# 
+#             answer_template_prompt = (
+#                 "Based on the information so far, produce a first cut template in Markdown format to provide the final answer to the user's question. "
+#                 "This should include placeholders for facts, analysis outcomes, and any other relevant information. "
+#                 "Don't fill any answers into this template even if you have the information, just leave placeholders. "
+#                 "Do not return anything other than the template itself, don't use ```markdown ... ``` block either. "
+#                 "Keep the template as succinct and concise as possible."
+#             )
+# 
+#             answer_template_messages = append_user_content(
+#                 messages, answer_template_prompt
+#             )
+# 
+#             answer_template_response = await llm.a_get_response(
+#                 messages=answer_template_messages,
+#                 model=model,
+#                 temperature=temperature,
+#                 system_instruction=system_instruction,  # Use system instruction from satellite table
+#             )
+# 
+#             initial_answer_template = answer_template_response.content.strip()
+# 
+#             # Save both answer template and WIP template (initially the same)
+#             save_answer_template(planner_id, initial_answer_template)
+#             save_wip_answer_template(planner_id, initial_answer_template)
+# 
+#         logger.info(
+#             f"Created and saved initial answer template for planner {planner_id}"
+#         )
+# 
+#         logger.info(f"Initial planning completed for planner {planner_id}")
+#         logger.info(f"Planner {planner_id}\nuser question: {user_question}")
+#         logger.info(f"Planner {planner_id}\ninstruction: {instruction}")
+#         logger.info(f"Planner {planner_id}\nexecution plan: {execution_plan_markdown}")
+# 
+#         # Task queueing removed - now handled by frontend orchestration
+# 
+#     except Exception as e:
+#         logger.error(f"Initial planning failed for planner {planner_id}: {e}")
+#         if "planner_id" in locals():
+#             await db.update_planner(planner_id, status="failed")
+#         raise
+# 
+# 
 async def execute_task_creation(task_data: dict):
     """
     Create and save new worker task based on execution plan.

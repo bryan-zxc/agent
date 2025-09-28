@@ -30,7 +30,6 @@ from src.agent.utils.file_utils import (
     generate_unique_filename,
     sanitise_filename,
 )
-from src.agent.services.background_processor import start_background_processor
 from src.agent.utils.async_error_utils import AsyncErrorLogger
 
 # Load environment variables
@@ -56,15 +55,6 @@ async def lifespan(app: FastAPI):
     db = await AgentDatabase.create()
     logger.info("Database initialized successfully")
 
-    logger.info("Starting background processor...")
-
-    # Clear task queue on startup to prevent stale tasks from previous runs
-    logger.info("Clearing task queue...")
-    cleared_count = await db.clear_task_queue()
-    logger.info(f"Cleared {cleared_count} tasks from task queue")
-
-    await start_background_processor()
-    logger.info("Background processor started successfully")
 
     yield
 
@@ -811,36 +801,6 @@ async def get_router(router_id: str):
 
 # NOTE: Title generation happens automatically via WebSocket flow
 # No separate HTTP endpoint needed as titles are generated after conversation activation
-
-
-@app.get("/messages/{message_id}/planner-info")
-async def get_message_planner_info(message_id: int):
-    """Get planner information for a specific message"""
-    try:
-        # Get planner associated with this specific message (now async)
-        planner = await db.get_planner_by_message(message_id)
-
-        if not planner:
-            return {
-                "has_planner": False,
-                "execution_plan": None,
-                "status": None,
-                "planner_id": None,
-            }
-
-        return {
-            "has_planner": True,
-            "execution_plan": planner["execution_plan"],
-            "status": planner["status"],
-            "planner_id": planner["planner_id"],
-            "planner_name": planner["planner_name"],
-            "user_question": planner["user_question"],
-            "message_id": planner["message_id"],
-            "router_id": planner["router_id"],
-        }
-    except Exception as e:
-        logger.error(f"Error fetching message planner info: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/usage")
