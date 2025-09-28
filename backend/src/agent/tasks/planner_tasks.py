@@ -9,6 +9,7 @@ its state through the file system and database.
 import uuid
 import logging
 import duckdb
+import json
 from pathlib import Path
 from typing import Optional, List, Union
 from PIL import Image
@@ -52,13 +53,25 @@ from .file_manager import (
     cleanup_planner_files,
     append_to_worker_message_history,
     load_worker_message_history,
+    generate_variable_path,
+    save_variable_to_file,
+    generate_image_path,
+    save_image_to_file,
 )
-from .task_utils import update_planner_next_task_and_queue, queue_worker_task
 from .message_manager import MessageManager
 
 logger = logging.getLogger(__name__)
 
 llm = LLM(caller="planner")
+
+# Static system instruction for planning/execution phase
+PLANNING_SYSTEM_INSTRUCTION = (
+    "You are an expert planner. "
+    "Your objective is to break down the user's instruction into a list of tasks that can be individually executed."
+    "If there still are analysis especially calculations that is required to be applied to the facts, then you need to create further tasks to complete. "
+    "Typically facts are pre-extracted and likely to be in the form of question and answer pairs, "
+    "if the questions don't seem to be fully aligned to what is required for analysis, you can activate relevant tools to re-extract facts. "
+)
 
 
 def clean_table_name(input_string: str):
@@ -250,457 +263,465 @@ def get_table_metadata(duck_conn, table_name: str) -> TableMeta:
     )
 
 
-async def execute_initial_planning(task_data: dict):
-    """
-    Execute initial planning phase - create planner and execution plan from user question.
-    This creates a new planner and generates the initial execution plan.
-
-    Args:
-        task_data: Dict containing task information and payload with parameters:
-            - entity_id: planner_id
-            - payload: dict with user_question, instruction, files, planner_name, message_id, router_id
-
-    """
-    logger.info("Starting initial planning with new planner creation")
-
-    # Extract parameters from task_data
-    planner_id = task_data["entity_id"]
-    payload = task_data.get("payload", {})
-
-    # Check if this is a resume scenario (planner already exists)
-    db = await AgentDatabase.create()
-    existing_planner = await db.get_planner(planner_id) if planner_id else None
-
-    if existing_planner:
-        logger.info(
-            f"Planner {planner_id} already exists - resuming execution, skipping initialisation"
-        )
-        # Queue next task: task creation (planner already initialised)
-        await update_planner_next_task_and_queue(planner_id, "execute_task_creation")
-        return
-
-    # New planner scenario - create new planner
-    user_question = payload["user_question"]
-    instruction = payload.get("instruction")
-    files = payload.get("files", [])
-    # Convert dictionary files back to File objects, filtering None values to allow Pydantic defaults
-    cleaned_files = []
-    for f in files:
-        if isinstance(f, dict):
-            # Remove None values so Pydantic can use default values (e.g., image_context = [])
-            cleaned_f = {k: v for k, v in f.items() if v is not None}
-            cleaned_files.append(File.model_validate(cleaned_f))
-        else:
-            cleaned_files.append(f)
-    files = cleaned_files
-    planner_name = payload.get("planner_name")
-    message_id = payload.get("message_id")
-    router_id = payload.get("router_id")
-
-    # Create new planner ID if not provided
-    if not planner_id:
-        planner_id = uuid.uuid4().hex
-
-    # Load settings
-    model = settings.planner_model
-    temperature = 0.0
-    failed_task_limit = settings.failed_task_limit
-
-    # Use random name if none provided
-    if planner_name is None:
-        planner_name = get_random_planner_name()
-
-    try:
-        # Create planner database record FIRST (to satisfy foreign key constraints)
-        await db.create_planner(
-            planner_id=planner_id,
-            planner_name=planner_name,
-            user_question=user_question,
-            instruction=instruction or "",
-            model=model,
-            temperature=temperature,
-            failed_task_limit=failed_task_limit,
-            status="planning",
-            next_task="execute_initial_planning",  # Current task for restart/resumability
-        )
-
-        # Create message-planner link AFTER planner exists
-        if message_id and router_id:
-            await db.link_message_planner(
-                router_id=router_id,
-                message_id=message_id,
-                planner_id=planner_id,
-                relationship_type="initiated",
-            )
-            logger.info(
-                f"Created message-planner link: message {message_id} -> planner {planner_id}"
-            )
-
-        # Create message manager for this planner (now that planner exists)
-        message_manager = MessageManager(db, "planner", planner_id)
-
-        # Initialize messages variable for consistent state tracking
-        messages = await message_manager.get_messages()
-
-        # Initialize planner collections (following PlannerAgent.__init__ pattern)
-        tables = []
-        duck_conn = None
-
-        # Create DuckDB database file path for persistence
-        planner_dir = Path(settings.collaterals_base_path) / planner_id
-        planner_dir.mkdir(parents=True, exist_ok=True)
-        db_path = planner_dir / "database.db"
-
-        # Store system instruction in satellite table instead of message chain
-        system_instruction = (
-            "You are an expert planner. "
-            "Your objective is to break down the user's instruction into a list of tasks that can be individually executed."
-            "Keep in mind that quite often the first step(s) are to extra facts which commonly comes in the form of question and answer pairs. "
-            "Even if there are no further unanswered questions, it only means you have all the facts required to answer the user's question, it doesn't always mean the process is complete. "
-            "If there still are analysis especially calculations that is required to be applied to the facts, then you need to create further tasks to complete. "
-            "Typically facts are pre-extracted and likely to be in the form of question and answer pairs, "
-            "if the questions don't seem to be fully aligned to what is required for analysis, you can activate relevant tools to re-extract facts. "
-        )
-        await db.set_planner_system_instruction(
-            planner_id=planner_id,
-            system_instruction=system_instruction,
-            instruction_type="default"
-        )
-        logger.info(f"Stored system instruction for planner {planner_id}")
-
-        # Add user question to planner message history so it has user context for answer template creation
-        messages = await message_manager.add_message(
-            role="user",
-            content=user_question,
-        )
-
-        # Process files following the exact pattern from PlannerAgent.__init__
-        if files:
-            for f in files:
-                if f.file_type == "image":
-                    # Load image using encode_image function
-                    encoded_image = encode_image(f.filepath)
-
-                    # Save image with cleaned name (using collision avoidance)
-                    raw_image_name = Path(f.filepath).stem
-                    _, image_name = save_planner_image(
-                        planner_id, raw_image_name, encoded_image, check_existing=True
-                    )
-
-                    # Update file object with cleaned name for message
-                    f.filename = image_name
-
-                    # Add message about image processing (exact copy from PlannerAgent)
-                    messages = await message_manager.add_message(
-                        role="user",
-                        content=f.model_dump_json(indent=2, include={"image_context"}),
-                    )
-                    logger.info(f"Processed image: {f.filepath} -> {image_name}")
-
-                elif f.file_type == "data" and f.data_context == "csv":
-                    # Create DuckDB file connection if needed
-                    if duck_conn is None:
-                        duck_conn = duckdb.connect(database=str(db_path))
-
-                    # Create table from CSV with fallback to all_varchar on failure
-                    table_name = clean_table_name(Path(f.filepath).stem)
-                    try:
-                        # First attempt: normal CSV reading
-                        duck_conn.sql(
-                            f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM read_csv('{f.filepath}',strict_mode=false)"
-                        )
-                        logger.info(
-                            f"Created table {table_name} from CSV: {f.filepath}"
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            f"Failed to create table {table_name} with normal CSV read, trying all_varchar: {e}"
-                        )
-                        try:
-                            # Fallback: try with all_varchar=true
-                            duck_conn.sql(
-                                f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM read_csv('{f.filepath}',strict_mode=false,all_varchar=true)"
-                            )
-                            logger.info(
-                                f"Created table {table_name} from CSV using all_varchar fallback: {f.filepath}"
-                            )
-                        except Exception as e2:
-                            logger.error(
-                                f"Failed to create table {table_name} even with all_varchar: {e2}"
-                            )
-                            # Add error message instead of table creation message
-                            await message_manager.add_message(
-                                role="user",
-                                content=f"CSV file `{f.filepath}` could not be processed into a database table. Error: {str(e2)}",
-                            )
-                            continue  # Skip metadata processing for failed CSV
-
-                    # Get table metadata
-                    table_meta = get_table_metadata(duck_conn, table_name)
-                    tables.append(table_meta)
-
-                    # Add message about table creation (exact copy from PlannerAgent)
-                    await message_manager.add_message(
-                        role="user",
-                        content=f"Data file `{f.filepath}` converted to table `{table_name}` in database. Below is table metadata:\n\n{table_meta.model_dump_json(indent=2)}",
-                    )
-
-                elif (
-                    f.file_type == "document" and f.document_context.file_type == "text"
-                ):
-                    # Read the text file content using the stored encoding
-                    try:
-                        text_content = Path(f.filepath).read_text(
-                            encoding=f.document_context.encoding
-                        )
-                        # Limit to first 1 million characters
-                        limited_content = text_content[:1000000]
-                        if len(text_content) > 1000000:
-                            limited_content += "...\n\n[Content truncated to first 1 million characters]"
-
-                        await message_manager.add_message(
-                            role="user",
-                            content=f"Text file `{Path(f.filepath).name}` contains the following content:\n\n{limited_content}",
-                        )
-                        logger.info(
-                            f"Processed text file: {f.filepath} with encoding {f.document_context.encoding}"
-                        )
-                    except Exception as e:
-                        await message_manager.add_message(
-                            role="user",
-                            content=f"Text file `{Path(f.filepath).name}` could not be read with encoding `{f.document_context.encoding}`. Error: {str(e)}",
-                        )
-                        logger.error(f"Failed to read text file {f.filepath}: {e}")
-
-                elif (
-                    f.file_type == "document" and f.document_context.file_type == "pdf"
-                ):
-                    # Add message about PDF file being available for processing
-                    await message_manager.add_message(
-                        role="user",
-                        content=f"PDF document `{Path(f.filepath).name}` is available for processing at: {f.filepath}",
-                    )
-                    logger.info(f"Registered PDF file for processing: {f.filepath}")
-
-        # Close DuckDB connection after table creation
-        if duck_conn:
-            duck_conn.close()
-            logger.info(f"Created DuckDB database at: {db_path}")
-
-        # Save tables and files metadata to agent_metadata (not variables)
-        metadata = {}
-        if tables:
-            metadata["tables"] = [table.model_dump() for table in tables]
-        if files:
-            metadata["files"] = [f.model_dump() for f in files]
-
-        # Update planner with metadata
-        if metadata:
-            await db.update_planner(planner_id, agent_metadata=metadata)
-
-        # Check for stored plamarination plan from router
-        stored_plan = None
-        stored_answer_template = None
-        if router_id:
-            router = await db.get_router(router_id)
-            if router and router.get("agent_metadata"):
-                router_metadata = router["agent_metadata"]
-                
-                # Check if there's a stored execution plan from plamarination
-                if "execution_plan_model" in router_metadata:
-                    logger.info(f"Found stored plamarination plan for router {router_id}")
-                    stored_plan = router_metadata["execution_plan_model"]
-                    stored_answer_template = router_metadata.get("answer_template", "")
-                    
-                    # Clear metadata after consumption
-                    await db.update_router(router_id, agent_metadata={})
-                    logger.info(f"Cleared plamarination metadata from router {router_id}")
-
-        # Use stored plan or generate new one
-        if stored_plan:
-            # Use the stored plan from plamarination
-            execution_plan_model = ExecutionPlanModel(**stored_plan)
-            logger.info(f"Using stored execution plan with {len(execution_plan_model.todos)} todos")
-            
-            # Check if there are any tasks to execute
-            if not execution_plan_model.todos:
-                logger.info("No todos in execution plan - answer is already complete")
-                # The answer template is the final answer
-                # Store it and mark planner as completed
-                save_answer_template(planner_id, stored_answer_template)
-                save_wip_answer_template(planner_id, stored_answer_template)
-                
-                await db.update_planner(
-                    planner_id,
-                    execution_plan="# No execution needed - answer complete",
-                    status="completed",
-                    next_task="completed",
-                    user_response=stored_answer_template,
-                )
-                
-                # Add the answer to router messages
-                if router_id:
-                    await db.add_message("router", router_id, "assistant", stored_answer_template)
-                
-                logger.info(f"Planner {planner_id} completed with no execution needed")
-                return  # Exit early - no tasks to execute
-            
-            # Generate markdown version
-            execution_plan_markdown = execution_plan_model_to_markdown(execution_plan_model)
-            
-            # Update planner with execution plan
-            await db.update_planner(
-                planner_id, execution_plan=execution_plan_markdown, status="executing"
-            )
-            
-            # Save execution plan model to dedicated file
-            save_execution_plan_model(planner_id, execution_plan_model)
-            
-            # Use the stored answer template
-            save_answer_template(planner_id, stored_answer_template)
-            save_wip_answer_template(planner_id, stored_answer_template)
-            
-        else:
-            # No stored plan - generate new one
-            # Create tools text (exact copy from PlannerAgent)
-            tools_text = "\n\n---\n\n".join(
-                [f"# {name}\n{tool.__doc__}" for name, tool in TOOLS.items()]
-            )
-
-            # Generate execution plan using structured format
-            plan_prompt = (
-                f"**Available tools for execution:**\n{tools_text}\n\n"
-                f"**Instructions:**\n{instruction}\n\n"
-                "Please create a detailed execution plan with an overall objective and a list of specific tasks. "
-                "The objective should describe what the tasks are aiming to achieve. "
-                "Each task should be specific enough to be executed independently. "
-            )
-
-            # Get messages for LLM call
-            messages = await message_manager.get_messages()
-
-            # Get initial execution plan from LLM
-            initial_plan = await llm.a_get_response(
-                messages=append_user_content(messages, plan_prompt),
-                model=model,
-                temperature=temperature,
-                response_format=InitialExecutionPlan,
-                system_instruction=system_instruction,  # Use system instruction from satellite table
-            )
-
-            # Convert to full ExecutionPlanModel
-            execution_plan_model = initial_plan_to_execution_plan_model(initial_plan)
-
-            # Generate markdown version
-            execution_plan_markdown = execution_plan_model_to_markdown(execution_plan_model)
-
-            # Update planner with execution plan
-            await db.update_planner(
-                planner_id, execution_plan=execution_plan_markdown, status="executing"
-            )
-
-            # Save execution plan model to dedicated file
-            save_execution_plan_model(planner_id, execution_plan_model)
-
-            # Create initial answer template
-            messages = await message_manager.get_messages()
-            logger.info(
-                f"DEBUG: Retrieved {len(messages)} messages for planner {planner_id}"
-            )
-
-            answer_template_prompt = (
-                "Based on the information so far, produce a first cut template in Markdown format to provide the final answer to the user's question. "
-                "This should include placeholders for facts, analysis outcomes, and any other relevant information. "
-                "Don't fill any answers into this template even if you have the information, just leave placeholders. "
-                "Do not return anything other than the template itself, don't use ```markdown ... ``` block either. "
-                "Keep the template as succinct and concise as possible."
-            )
-
-            answer_template_messages = append_user_content(messages, answer_template_prompt)
-
-            answer_template_response = await llm.a_get_response(
-                messages=answer_template_messages,
-                model=model,
-                temperature=temperature,
-                system_instruction=system_instruction,  # Use system instruction from satellite table
-            )
-
-            initial_answer_template = answer_template_response.content.strip()
-
-            # Save both answer template and WIP template (initially the same)
-            save_answer_template(planner_id, initial_answer_template)
-            save_wip_answer_template(planner_id, initial_answer_template)
-
-        logger.info(
-            f"Created and saved initial answer template for planner {planner_id}"
-        )
-
-        logger.info(f"Initial planning completed for planner {planner_id}")
-        logger.info(f"Planner {planner_id}\nuser question: {user_question}")
-        logger.info(f"Planner {planner_id}\ninstruction: {instruction}")
-        logger.info(f"Planner {planner_id}\nexecution plan: {execution_plan_markdown}")
-
-        # Queue next task: task creation
-        await update_planner_next_task_and_queue(planner_id, "execute_task_creation")
-
-    except Exception as e:
-        logger.error(f"Initial planning failed for planner {planner_id}: {e}")
-        if "planner_id" in locals():
-            await db.update_planner(planner_id, status="failed")
-        raise
-
-
+# async def execute_initial_planning(task_data: dict):
+#     """
+#     Execute initial planning phase - create planner and execution plan from user question.
+#     This creates a new planner and generates the initial execution plan.
+# 
+#     Args:
+#         task_data: Dict containing task information and payload with parameters:
+#             - entity_id: planner_id
+#             - payload: dict with user_question, instruction, files, planner_name, message_id, router_id
+# 
+#     """
+#     logger.info("Starting initial planning with new planner creation")
+# 
+#     # Extract parameters from task_data
+#     planner_id = task_data["entity_id"]
+#     payload = task_data.get("payload", {})
+# 
+#     # Check if this is a resume scenario (planner already exists)
+#     db = await AgentDatabase.create()
+#     existing_planner = await db.get_planner(planner_id) if planner_id else None
+# 
+#     if existing_planner:
+#         logger.info(
+#             f"Planner {planner_id} already exists - resuming execution, skipping initialisation"
+#         )
+#         # Task queueing removed - now handled by frontend orchestration
+#         return
+# 
+#     # New planner scenario - create new planner
+#     user_question = payload["user_question"]
+#     instruction = payload.get("instruction")
+#     files = payload.get("files", [])
+#     # Convert dictionary files back to File objects, filtering None values to allow Pydantic defaults
+#     cleaned_files = []
+#     for f in files:
+#         if isinstance(f, dict):
+#             # Remove None values so Pydantic can use default values (e.g., image_context = [])
+#             cleaned_f = {k: v for k, v in f.items() if v is not None}
+#             cleaned_files.append(File.model_validate(cleaned_f))
+#         else:
+#             cleaned_files.append(f)
+#     files = cleaned_files
+#     planner_name = payload.get("planner_name")
+#     message_id = payload.get("message_id")
+#     router_id = payload.get("router_id")
+# 
+#     # Create new planner ID if not provided
+#     if not planner_id:
+#         planner_id = uuid.uuid4().hex
+# 
+#     # Load settings
+#     model = settings.planner_model
+#     temperature = 0.0
+#     failed_task_limit = settings.failed_task_limit
+# 
+#     # Use random name if none provided
+#     if planner_name is None:
+#         planner_name = get_random_planner_name()
+# 
+#     try:
+#         # Create planner database record FIRST (to satisfy foreign key constraints)
+#         await db.create_planner(
+#             planner_id=planner_id,
+#             planner_name=planner_name,
+#             user_question=user_question,
+#             instruction=instruction or "",
+#             model=model,
+#             temperature=temperature,
+#             failed_task_limit=failed_task_limit,
+#             status="planning",
+#             next_task="execute_initial_planning",  # Current task for restart/resumability
+#         )
+# 
+#         # Create message-planner link AFTER planner exists
+#         if message_id and router_id:
+#             await db.link_message_planner(
+#                 router_id=router_id,
+#                 message_id=message_id,
+#                 planner_id=planner_id,
+#                 relationship_type="initiated",
+#             )
+#             logger.info(
+#                 f"Created message-planner link: message {message_id} -> planner {planner_id}"
+#             )
+# 
+#         # Create message manager for this planner (now that planner exists)
+#         message_manager = MessageManager(db, "planner", planner_id)
+# 
+#         # Initialize messages variable for consistent state tracking
+#         messages = await message_manager.get_messages()
+# 
+#         # Initialize planner collections (following PlannerAgent.__init__ pattern)
+#         tables = []
+#         duck_conn = None
+# 
+#         # Create DuckDB database file path for persistence
+#         planner_dir = Path(settings.collaterals_base_path) / planner_id
+#         planner_dir.mkdir(parents=True, exist_ok=True)
+#         db_path = planner_dir / "database.db"
+# 
+#         # Store system instruction in satellite table instead of message chain
+#         system_instruction = (
+#             "You are an expert planner. "
+#             "Your objective is to break down the user's instruction into a list of tasks that can be individually executed."
+#             "Keep in mind that quite often the first step(s) are to extra facts which commonly comes in the form of question and answer pairs. "
+#             "Even if there are no further unanswered questions, it only means you have all the facts required to answer the user's question, it doesn't always mean the process is complete. "
+#             "If there still are analysis especially calculations that is required to be applied to the facts, then you need to create further tasks to complete. "
+#             "Typically facts are pre-extracted and likely to be in the form of question and answer pairs, "
+#             "if the questions don't seem to be fully aligned to what is required for analysis, you can activate relevant tools to re-extract facts. "
+#         )
+#         await db.set_planner_system_instruction(
+#             planner_id=planner_id,
+#             system_instruction=system_instruction,
+#             instruction_type="default",
+#         )
+#         logger.info(f"Stored system instruction for planner {planner_id}")
+# 
+#         # Add user question to planner message history so it has user context for answer template creation
+#         messages = await message_manager.add_message(
+#             role="user",
+#             content=user_question,
+#         )
+# 
+#         # Process files following the exact pattern from PlannerAgent.__init__
+#         if files:
+#             for f in files:
+#                 if f.file_type == "image":
+#                     # Load image using encode_image function
+#                     encoded_image = encode_image(f.filepath)
+# 
+#                     # Save image with cleaned name (using collision avoidance)
+#                     raw_image_name = Path(f.filepath).stem
+#                     _, image_name = save_planner_image(
+#                         planner_id, raw_image_name, encoded_image, check_existing=True
+#                     )
+# 
+#                     # Update file object with cleaned name for message
+#                     f.filename = image_name
+# 
+#                     # Add message about image processing (exact copy from PlannerAgent)
+#                     messages = await message_manager.add_message(
+#                         role="user",
+#                         content=f.model_dump_json(indent=2, include={"image_context"}),
+#                     )
+#                     logger.info(f"Processed image: {f.filepath} -> {image_name}")
+# 
+#                 elif f.file_type == "data" and f.data_context == "csv":
+#                     # Create DuckDB file connection if needed
+#                     if duck_conn is None:
+#                         duck_conn = duckdb.connect(database=str(db_path))
+# 
+#                     # Create table from CSV with fallback to all_varchar on failure
+#                     table_name = clean_table_name(Path(f.filepath).stem)
+#                     try:
+#                         # First attempt: normal CSV reading
+#                         duck_conn.sql(
+#                             f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM read_csv('{f.filepath}',strict_mode=false)"
+#                         )
+#                         logger.info(
+#                             f"Created table {table_name} from CSV: {f.filepath}"
+#                         )
+#                     except Exception as e:
+#                         logger.warning(
+#                             f"Failed to create table {table_name} with normal CSV read, trying all_varchar: {e}"
+#                         )
+#                         try:
+#                             # Fallback: try with all_varchar=true
+#                             duck_conn.sql(
+#                                 f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM read_csv('{f.filepath}',strict_mode=false,all_varchar=true)"
+#                             )
+#                             logger.info(
+#                                 f"Created table {table_name} from CSV using all_varchar fallback: {f.filepath}"
+#                             )
+#                         except Exception as e2:
+#                             logger.error(
+#                                 f"Failed to create table {table_name} even with all_varchar: {e2}"
+#                             )
+#                             # Add error message instead of table creation message
+#                             await message_manager.add_message(
+#                                 role="user",
+#                                 content=f"CSV file `{f.filepath}` could not be processed into a database table. Error: {str(e2)}",
+#                             )
+#                             continue  # Skip metadata processing for failed CSV
+# 
+#                     # Get table metadata
+#                     table_meta = get_table_metadata(duck_conn, table_name)
+#                     tables.append(table_meta)
+# 
+#                     # Add message about table creation (exact copy from PlannerAgent)
+#                     await message_manager.add_message(
+#                         role="user",
+#                         content=f"Data file `{f.filepath}` converted to table `{table_name}` in database. Below is table metadata:\n\n{table_meta.model_dump_json(indent=2)}",
+#                     )
+# 
+#                 elif (
+#                     f.file_type == "document" and f.document_context.file_type == "text"
+#                 ):
+#                     # Read the text file content using the stored encoding
+#                     try:
+#                         text_content = Path(f.filepath).read_text(
+#                             encoding=f.document_context.encoding
+#                         )
+#                         # Limit to first 1 million characters
+#                         limited_content = text_content[:1000000]
+#                         if len(text_content) > 1000000:
+#                             limited_content += "...\n\n[Content truncated to first 1 million characters]"
+# 
+#                         await message_manager.add_message(
+#                             role="user",
+#                             content=f"Text file `{Path(f.filepath).name}` contains the following content:\n\n{limited_content}",
+#                         )
+#                         logger.info(
+#                             f"Processed text file: {f.filepath} with encoding {f.document_context.encoding}"
+#                         )
+#                     except Exception as e:
+#                         await message_manager.add_message(
+#                             role="user",
+#                             content=f"Text file `{Path(f.filepath).name}` could not be read with encoding `{f.document_context.encoding}`. Error: {str(e)}",
+#                         )
+#                         logger.error(f"Failed to read text file {f.filepath}: {e}")
+# 
+#                 elif (
+#                     f.file_type == "document" and f.document_context.file_type == "pdf"
+#                 ):
+#                     # Add message about PDF file being available for processing
+#                     await message_manager.add_message(
+#                         role="user",
+#                         content=f"PDF document `{Path(f.filepath).name}` is available for processing at: {f.filepath}",
+#                     )
+#                     logger.info(f"Registered PDF file for processing: {f.filepath}")
+# 
+#         # Close DuckDB connection after table creation
+#         if duck_conn:
+#             duck_conn.close()
+#             logger.info(f"Created DuckDB database at: {db_path}")
+# 
+#         # Save tables and files metadata to agent_metadata (not variables)
+#         metadata = {}
+#         if tables:
+#             metadata["tables"] = [table.model_dump() for table in tables]
+#         if files:
+#             metadata["files"] = [f.model_dump() for f in files]
+# 
+#         # Update planner with metadata
+#         if metadata:
+#             await db.update_planner(planner_id, agent_metadata=metadata)
+# 
+#         # Check for stored plamarination plan from router
+#         stored_plan = None
+#         stored_answer_template = None
+#         if router_id:
+#             router = await db.get_router(router_id)
+#             if router and router.get("agent_metadata"):
+#                 router_metadata = router["agent_metadata"]
+# 
+#                 # Check if there's a stored execution plan from plamarination
+#                 if "execution_plan_model" in router_metadata:
+#                     logger.info(
+#                         f"Found stored plamarination plan for router {router_id}"
+#                     )
+#                     stored_plan = router_metadata["execution_plan_model"]
+#                     stored_answer_template = router_metadata.get("answer_template", "")
+# 
+#                     # Clear metadata after consumption
+#                     await db.update_router(router_id, agent_metadata={})
+#                     logger.info(
+#                         f"Cleared plamarination metadata from router {router_id}"
+#                     )
+# 
+#         # Use stored plan or generate new one
+#         if stored_plan:
+#             # Use the stored plan from plamarination
+#             execution_plan_model = ExecutionPlanModel(**stored_plan)
+#             logger.info(
+#                 f"Using stored execution plan with {len(execution_plan_model.todos)} todos"
+#             )
+# 
+#             # Check if there are any tasks to execute
+#             if not execution_plan_model.todos:
+#                 logger.info("No todos in execution plan - answer is already complete")
+#                 # The answer template is the final answer
+#                 # Store it and mark planner as completed
+#                 save_answer_template(planner_id, stored_answer_template)
+#                 save_wip_answer_template(planner_id, stored_answer_template)
+# 
+#                 await db.update_planner(
+#                     planner_id,
+#                     execution_plan="# No execution needed - answer complete",
+#                     status="completed",
+#                     next_task="completed",
+#                     user_response=stored_answer_template,
+#                 )
+# 
+#                 # Add the answer to router messages
+#                 if router_id:
+#                     await db.add_message(
+#                         "router", router_id, "assistant", stored_answer_template
+#                     )
+# 
+#                 logger.info(f"Planner {planner_id} completed with no execution needed")
+#                 return  # Exit early - no tasks to execute
+# 
+#             # Generate markdown version
+#             execution_plan_markdown = execution_plan_model_to_markdown(
+#                 execution_plan_model
+#             )
+# 
+#             # Update planner with execution plan
+#             await db.update_planner(
+#                 planner_id, execution_plan=execution_plan_markdown, status="executing"
+#             )
+# 
+#             # Save execution plan model to dedicated file
+#             save_execution_plan_model(planner_id, execution_plan_model)
+# 
+#             # Use the stored answer template
+#             save_answer_template(planner_id, stored_answer_template)
+#             save_wip_answer_template(planner_id, stored_answer_template)
+# 
+#         else:
+#             # No stored plan - generate new one
+#             # Create tools text (exact copy from PlannerAgent)
+#             tools_text = "\n\n---\n\n".join(
+#                 [f"# {name}\n{tool.__doc__}" for name, tool in TOOLS.items()]
+#             )
+# 
+#             # Generate execution plan using structured format
+#             plan_prompt = (
+#                 f"**Available tools for execution:**\n{tools_text}\n\n"
+#                 f"**Instructions:**\n{instruction}\n\n"
+#                 "Please create a detailed execution plan with an overall objective and a list of specific tasks. "
+#                 "The objective should describe what the tasks are aiming to achieve. "
+#                 "Each task should be specific enough to be executed independently. "
+#             )
+# 
+#             # Get messages for LLM call
+#             messages = await message_manager.get_messages()
+# 
+#             # Get initial execution plan from LLM
+#             initial_plan = await llm.a_get_response(
+#                 messages=append_user_content(messages, plan_prompt),
+#                 model=model,
+#                 temperature=temperature,
+#                 response_format=InitialExecutionPlan,
+#                 system_instruction=system_instruction,  # Use system instruction from satellite table
+#             )
+# 
+#             # Convert to full ExecutionPlanModel
+#             execution_plan_model = initial_plan_to_execution_plan_model(initial_plan)
+# 
+#             # Generate markdown version
+#             execution_plan_markdown = execution_plan_model_to_markdown(
+#                 execution_plan_model
+#             )
+# 
+#             # Update planner with execution plan
+#             await db.update_planner(
+#                 planner_id, execution_plan=execution_plan_markdown, status="executing"
+#             )
+# 
+#             # Save execution plan model to dedicated file
+#             save_execution_plan_model(planner_id, execution_plan_model)
+# 
+#             # Create initial answer template
+#             messages = await message_manager.get_messages()
+#             logger.info(
+#                 f"DEBUG: Retrieved {len(messages)} messages for planner {planner_id}"
+#             )
+# 
+#             answer_template_prompt = (
+#                 "Based on the information so far, produce a first cut template in Markdown format to provide the final answer to the user's question. "
+#                 "This should include placeholders for facts, analysis outcomes, and any other relevant information. "
+#                 "Don't fill any answers into this template even if you have the information, just leave placeholders. "
+#                 "Do not return anything other than the template itself, don't use ```markdown ... ``` block either. "
+#                 "Keep the template as succinct and concise as possible."
+#             )
+# 
+#             answer_template_messages = append_user_content(
+#                 messages, answer_template_prompt
+#             )
+# 
+#             answer_template_response = await llm.a_get_response(
+#                 messages=answer_template_messages,
+#                 model=model,
+#                 temperature=temperature,
+#                 system_instruction=system_instruction,  # Use system instruction from satellite table
+#             )
+# 
+#             initial_answer_template = answer_template_response.content.strip()
+# 
+#             # Save both answer template and WIP template (initially the same)
+#             save_answer_template(planner_id, initial_answer_template)
+#             save_wip_answer_template(planner_id, initial_answer_template)
+# 
+#         logger.info(
+#             f"Created and saved initial answer template for planner {planner_id}"
+#         )
+# 
+#         logger.info(f"Initial planning completed for planner {planner_id}")
+#         logger.info(f"Planner {planner_id}\nuser question: {user_question}")
+#         logger.info(f"Planner {planner_id}\ninstruction: {instruction}")
+#         logger.info(f"Planner {planner_id}\nexecution plan: {execution_plan_markdown}")
+# 
+#         # Task queueing removed - now handled by frontend orchestration
+# 
+#     except Exception as e:
+#         logger.error(f"Initial planning failed for planner {planner_id}: {e}")
+#         if "planner_id" in locals():
+#             await db.update_planner(planner_id, status="failed")
+#         raise
+# 
+# 
 async def execute_task_creation(task_data: dict):
     """
     Create and save new worker task based on execution plan.
     This phase generates a Task and saves it for worker initialisation.
+    Now uses router_id as the entity_id and returns next action for frontend.
     """
-    planner_id = task_data["entity_id"]
-    logger.info(f"Starting task creation for planner {planner_id}")
+    router_id = task_data["entity_id"]  # Now router_id instead of planner_id
+    logger.info(f"Starting task creation for router {router_id}")
 
     db = await AgentDatabase.create()
-    planner_data = await db.get_planner(planner_id)
+    router_data = await db.get_router(router_id)  # Get router instead of planner
 
-    if not planner_data:
-        logger.error(f"Planner {planner_id} not found")
-        await db.update_planner(planner_id, status="failed")
-        return
+    if not router_data:
+        logger.error(f"Router {router_id} not found")
+        await db.update_router(router_id, execution_status="failed")
+        return {"error": f"Router {router_id} not found"}
 
-    # Create message manager for this planner
-    message_manager = MessageManager(db, "planner", planner_id)
-
-    # Fetch system instruction from satellite table
-    system_instruction = await db.get_planner_system_instruction(
-        planner_id=planner_id,
-        instruction_type="default"
-    )
-    if not system_instruction:
-        logger.error(f"No system instruction found for planner {planner_id} - this should not happen")
-        await db.update_planner(planner_id, status="failed")
-        raise ValueError(f"System instruction not found for planner {planner_id}")
+    # Use router message manager for unified message chain
+    message_manager = MessageManager(db, "router", router_id)
 
     try:
-        # Load execution plan model from dedicated file
-        execution_plan_model = load_execution_plan_model(planner_id)
-        # load_execution_plan_model already handles errors and raises exceptions
+        # Load execution plan model from router data
+        execution_plan_model_data = router_data.get("execution_plan_model")
+        if not execution_plan_model_data:
+            logger.error(f"Router {router_id} has no execution plan model")
+            await db.update_router(router_id, execution_status="failed")
+            return {"error": "No execution plan model found"}
+
+        execution_plan_model = ExecutionPlanModel(**execution_plan_model_data)
 
         # Check if there are pending tasks to create
         if not has_pending_tasks(execution_plan_model):
             logger.error(
-                f"Planner {planner_id} has no pending tasks - this should not happen, marking as failed"
+                f"Router {router_id} has no pending tasks - this should not happen, marking as failed"
             )
-            await db.update_planner(planner_id, status="failed")
-            return
+            await db.update_router(router_id, execution_status="failed")
+            return {"error": "No pending tasks in execution plan"}
 
         # Get next task from execution plan
         next_task = get_next_action_task(execution_plan_model)
         if not next_task:
             # This should not be possible if has_pending_tasks returned True
             raise ValueError(
-                f"No next task available despite having pending tasks for planner {planner_id}"
+                f"No next task available despite having pending tasks for router {router_id}"
             )
 
-        # Get planner messages for context
+        # Get router messages for context
         messages = await message_manager.get_messages()
 
         # Create tools text for context
@@ -710,74 +731,99 @@ async def execute_task_creation(task_data: dict):
 
         # Build context content as list of dictionaries
         content = []
-        
+
         # Add tools information
-        content.append({"type": "text", "text": f"You can use the following tools:\n\n{tools_text}"})
-        
+        content.append(
+            {
+                "type": "text",
+                "text": f"You can use the following tools:\n\n{tools_text}",
+            }
+        )
+
         # Add image keys if available
-        image_file_paths = planner_data.get("image_file_paths", {})
+        image_file_paths = router_data.get("image_file_paths", {})
         if image_file_paths:
-            content.append({"type": "text", "text": f"The following image keys are available for use: {list(image_file_paths.keys())}"})
-        
+            content.append(
+                {
+                    "type": "text",
+                    "text": f"The following image keys are available for use: {list(image_file_paths.keys())}",
+                }
+            )
+
         # Add variable keys if available
-        variable_file_paths = planner_data.get("variable_file_paths", {})
+        variable_file_paths = router_data.get("variable_file_paths", {})
         if variable_file_paths:
-            content.append({"type": "text", "text": f"The following variable keys are available for use: {list(variable_file_paths.keys())}"})
-        
+            content.append(
+                {
+                    "type": "text",
+                    "text": f"The following variable keys are available for use: {list(variable_file_paths.keys())}",
+                }
+            )
+
         # Add today's date
         today_date = datetime.now().strftime("%d %b %Y")
         content.append({"type": "text", "text": f"Today's date is {today_date}."})
-        
+
         # Add latest 10 task responses if available (worker context)
-        task_responses = load_worker_message_history(planner_id)
+        # Load from router's worker_metadata if it exists
+        worker_metadata = router_data.get("worker_metadata", {})
+        task_responses = worker_metadata.get("task_responses", [])
         if task_responses:
             latest_responses = task_responses[-10:]  # Get latest 10 items
             responses_content = "\n\n---\n\n".join(
-                [response.model_dump_json(indent=2) for response in latest_responses]
+                [json.dumps(response, indent=2) for response in latest_responses]
             )
-            content.append({
-                "type": "text", 
-                "text": f"For additional context, the detailed outcomes of the previous {len(latest_responses)} tasks are as follows:\n\n{responses_content}"
-            })
-        
+            content.append(
+                {
+                    "type": "text",
+                    "text": f"For additional context, the detailed outcomes of the previous {len(latest_responses)} tasks are as follows:\n\n{responses_content}",
+                }
+            )
+
         # Add execution plan and next task
-        content.append({
-            "type": "text",
-            "text": f"For context, your complete execution plan is: {planner_data['execution_plan']}\n"
-                   f"The next todo item to be converted to a task is: {next_task.description}"
-        })
-        
+        content.append(
+            {
+                "type": "text",
+                "text": f"For context, your complete execution plan is: {router_data['execution_plan']}\n"
+                f"The next todo item to be converted to a task is: {next_task.description}",
+            }
+        )
+
         # Generate task from LLM
         task = await llm.a_get_response(
             messages=append_user_content(messages, content),
-            model=planner_data["model"],
-            temperature=planner_data["temperature"],
+            model=router_data["model"],
+            temperature=router_data["temperature"],
             response_format=Task,
-            system_instruction=system_instruction,  # Use system instruction from satellite table
+            system_instruction=PLANNING_SYSTEM_INSTRUCTION,
         )
 
         logger.info(f"Task: {task.model_dump_json(indent=2)}")
 
-        # Save task to dedicated file for worker initialisation
-        save_current_task(planner_id, task)
+        # Save task to router's current_task field
+        await db.update_router(
+            router_id, current_task=task.model_dump(), execution_status="task_created"
+        )
 
         # Generate worker_id for this task
         worker_id = uuid.uuid4().hex
 
-        # Set next_task to waiting_for_worker (no queue - planner waits for worker completion)
-        await db.update_planner(planner_id, next_task="waiting_for_worker")
-
-        # Queue worker initialisation (worker will load task and create worker record)
-        await queue_worker_task(worker_id, planner_id, "worker_initialisation")
-
         logger.info(
-            f"Created and queued worker initialisation for worker {worker_id}, planner {planner_id}"
+            f"Created task for router {router_id}, ready for worker {worker_id} initialisation"
         )
 
+        # Return next action for frontend to execute
+        return {
+            "next_action": "worker_initialisation",
+            "worker_id": worker_id,
+            "router_id": router_id,
+            "task": task.model_dump(),
+        }
+
     except Exception as e:
-        logger.error(f"Task creation failed for planner {planner_id}: {e}")
-        # Set planner as failed
-        await db.update_planner(planner_id, status="failed")
+        logger.error(f"Task creation failed for router {router_id}: {e}")
+        # Set router as failed
+        await db.update_router(router_id, execution_status="failed")
         raise
 
 
@@ -800,11 +846,12 @@ async def _complete_planner_execution(
     """
     # Fetch system instruction from satellite table
     system_instruction = await db.get_planner_system_instruction(
-        planner_id=planner_id,
-        instruction_type="default"
+        planner_id=planner_id, instruction_type="default"
     )
     if not system_instruction:
-        logger.error(f"No system instruction found for planner {planner_id} - this should not happen")
+        logger.error(
+            f"No system instruction found for planner {planner_id} - this should not happen"
+        )
         raise ValueError(f"System instruction not found for planner {planner_id}")
 
     # Generate final user response (exactly copying planner.py lines 619-637)
@@ -822,8 +869,10 @@ async def _complete_planner_execution(
         "Citations must not ever use information that is meaningless to the user such as task IDs. "
         "It should be using web links, or file references including page numbers, table/illustration references, or data references. "
     )
-    
-    user_response_messages = append_user_content(planner_messages, answer_template_context)
+
+    user_response_messages = append_user_content(
+        planner_messages, answer_template_context
+    )
 
     # Generate final response using LLM
     response = await llm.a_get_response(
@@ -882,36 +931,34 @@ async def _complete_planner_execution(
 
 async def execute_synthesis(task_data: dict):
     """
-    Process completed workers and merge their outputs back into planner state.
+    Process completed workers and merge their outputs back into router state.
     This phase loads worker outputs, updates execution plan, and merges variables/images.
     Based on task_result_synthesis from original PlannerAgent.
+    Now uses router_id as the entity_id and returns next action for frontend.
     """
-    planner_id = task_data["entity_id"]
-    logger.info(f"Starting synthesis for planner {planner_id}")
+    router_id = task_data["entity_id"]  # Now router_id instead of planner_id
+    worker_id = task_data.get("payload", {}).get("worker_id")
+    logger.info(f"Starting synthesis for router {router_id} with worker {worker_id}")
 
     db = await AgentDatabase.create()
-    planner_data = await db.get_planner(planner_id)
+    router_data = await db.get_router(router_id)
 
-    if not planner_data:
-        logger.error(f"Planner {planner_id} not found")
-        return
+    if not router_data:
+        logger.error(f"Router {router_id} not found")
+        return {"error": f"Router {router_id} not found"}
 
-    # Create message manager for this planner
-    message_manager = MessageManager(db, "planner", planner_id)
-
-    # Fetch system instruction from satellite table
-    system_instruction = await db.get_planner_system_instruction(
-        planner_id=planner_id,
-        instruction_type="default"
-    )
-    if not system_instruction:
-        logger.error(f"No system instruction found for planner {planner_id} - this should not happen")
-        await db.update_planner(planner_id, status="failed")
-        raise ValueError(f"System instruction not found for planner {planner_id}")
+    # Create message manager for unified message chain
+    message_manager = MessageManager(db, "router", router_id)
 
     try:
-        # Get all workers for this planner
-        workers = await db.get_workers_by_planner(planner_id)
+        # Get the specific worker that just completed
+        worker = await db.get_worker(worker_id)
+        if not worker:
+            logger.error(f"Worker {worker_id} not found")
+            return {"error": f"Worker {worker_id} not found"}
+
+        # Process the completed worker
+        workers = [worker]  # Keep as list for compatibility with existing code
 
         # Find completed workers that haven't been processed yet (status = 'completed' or 'failed_validation')
         completed_workers = [
@@ -922,10 +969,10 @@ async def execute_synthesis(task_data: dict):
 
         if not completed_workers:
             logger.error(
-                f"Planner {planner_id} has no completed workers to process - this should not happen, marking as failed"
+                f"Router {router_id} has no completed workers to process - this should not happen, marking as failed"
             )
-            await db.update_planner(planner_id, status="failed")
-            return
+            await db.update_router(router_id, execution_status="failed")
+            return {"error": "No completed workers to process"}
 
         # Process each completed worker (following task_result_synthesis pattern)
         for worker in completed_workers:
@@ -956,21 +1003,25 @@ async def execute_synthesis(task_data: dict):
                 f"**Worker Responses**:\n\n{task_message_combined}",
             )
 
-            # Append to worker message history for future worker context
+            # Append to worker message history in router metadata
             task_response = TaskResponseModel(
                 task_id=worker_id,
                 task_description=task_description,
                 task_status=task_status,
                 assistance_responses=task_message_combined,
             )
-            append_to_worker_message_history(planner_id, task_response)
+            worker_metadata = router_data.get("worker_metadata", {})
+            task_responses = worker_metadata.get("task_responses", [])
+            task_responses.append(task_response.model_dump())
+            worker_metadata["task_responses"] = task_responses
+            await db.update_router(router_id, worker_metadata=worker_metadata)
 
             # Update answer template after completed worker (following planner.py pattern lines 414-438)
             if task_status == "completed":
                 try:
-                    # Load current answer templates
-                    current_answer_template = load_answer_template(planner_id) or ""
-                    current_wip_template = load_wip_answer_template(planner_id) or ""
+                    # Load current answer templates from router
+                    current_answer_template = router_data.get("answer_template", "")
+                    current_wip_template = router_data.get("wip_answer", "")
 
                     # Get planner messages for template update context
                     planner_messages = await message_manager.get_messages()
@@ -989,33 +1040,44 @@ async def execute_synthesis(task_data: dict):
 
                     # Get updated answer template from LLM
                     answer_template_response = await llm.a_get_response(
-                        messages=append_user_content(planner_messages, template_update_content),
-                        model=planner_data["model"],
-                        temperature=planner_data["temperature"],
+                        messages=append_user_content(
+                            planner_messages, template_update_content
+                        ),
+                        model=router_data["model"],
+                        temperature=router_data["temperature"],
                         response_format=AnswerTemplate,
-                        system_instruction=system_instruction,  # Use system instruction from satellite table
+                        system_instruction=PLANNING_SYSTEM_INSTRUCTION,
                     )
 
-                    # Save updated templates
+                    # Save updated templates to router
                     updated_template = answer_template_response.template
                     updated_wip_template = answer_template_response.wip_filled_template
 
-                    save_answer_template(planner_id, updated_template)
-                    save_wip_answer_template(planner_id, updated_wip_template)
+                    await db.update_router(
+                        router_id,
+                        answer_template=updated_template,
+                        wip_answer=updated_wip_template,
+                    )
 
-                    logger.info(f"Updated answer template for planner {planner_id}")
+                    logger.info(f"Updated answer template for router {router_id}")
                     logger.info(f"Updated answer template:\n{updated_template}")
                     logger.info(f"Updated WIP answer template:\n{updated_wip_template}")
 
                 except Exception as e:
                     logger.error(
-                        f"Error updating answer template for planner {planner_id}: {e}"
+                        f"Error updating answer template for router {router_id}: {e}"
                     )
                     # Continue with execution plan processing even if template update fails
 
             # 2. Update execution plan with retry logic (simplified from original)
             try:
-                execution_plan_model = load_execution_plan_model(planner_id)
+                # Load execution plan from router
+                execution_plan_model_data = router_data.get("execution_plan_model")
+                if not execution_plan_model_data:
+                    logger.error(f"Router {router_id} has no execution plan model")
+                    return {"error": "No execution plan model found"}
+
+                execution_plan_model = ExecutionPlanModel(**execution_plan_model_data)
 
                 # Apply task completion logic (mark current next_action task as completed)
                 if task_status == "completed":
@@ -1059,35 +1121,35 @@ async def execute_synthesis(task_data: dict):
                     {
                         "type": "text",
                         "text": f"**Current open tasks from execution plan:**\n\n{open_todos_model.model_dump_json(indent=2)}\n\n"
-                               f"The latest answer template is:\n\n{updated_wip_template}\n\n"
-                               f"Instructions for reference:\n\n{planner_data.get('instruction', '')}"
+                        f"The latest answer template is:\n\n{updated_wip_template}\n\n"
+                        f"Instructions for reference:\n\n{router_data.get('instruction', '')}",
                     },
                     {
                         "type": "text",
                         "text": f"Based on the completed task execution details above for task `{task_description}`, "
-                               f"please update the execution plan as follows:\n"
-                               "1. Update existing task descriptions using updated_description field if needed\n"
-                               "2. Add new tasks if required, marking them with '(new)' in the description field\n"
-                               "3. Leave next_action as False - separate logic will determine next action\n"
-                               "4. Mark unnecessary tasks as obsolete=True\n"
-                               "If the answer template suggests that calculations are required, "
-                               "and you haven't performed the corresponding calculation action, "
-                               "you must create a calculation task, "
-                               "or keep existing calculation task, "
-                               "even if the answer template autofilled the calculation outcome.\n"
-                               "Tasks will be executed strictly in order on the list, if a new task is created please place it in the position of when it is supposed to be executed, don't leave it to the end.\n"
-                               "Do not create tasks to formulate answer, as the answer is already being formulated progressively with the answer template. "
-                               "You can return an empty todo list there is no further work to be done (for example, the answer template is completely populated)."
-                    }
+                        f"please update the execution plan as follows:\n"
+                        "1. Update existing task descriptions using updated_description field if needed\n"
+                        "2. Add new tasks if required, marking them with '(new)' in the description field\n"
+                        "3. Leave next_action as False - separate logic will determine next action\n"
+                        "4. Mark unnecessary tasks as obsolete=True\n"
+                        "If the answer template suggests that calculations are required, "
+                        "and you haven't performed the corresponding calculation action, "
+                        "you must create a calculation task, "
+                        "or keep existing calculation task, "
+                        "even if the answer template autofilled the calculation outcome.\n"
+                        "Tasks will be executed strictly in order on the list, if a new task is created please place it in the position of when it is supposed to be executed, don't leave it to the end.\n"
+                        "Do not create tasks to formulate answer, as the answer is already being formulated progressively with the answer template. "
+                        "You can return an empty todo list there is no further work to be done (for example, the answer template is completely populated).",
+                    },
                 ]
 
                 # Get LLM response
                 llm_updated_model = await llm.a_get_response(
                     messages=append_user_content(messages, update_content),
-                    model=planner_data["model"],
-                    temperature=planner_data["temperature"],
+                    model=router_data["model"],
+                    temperature=router_data["temperature"],
                     response_format=ExecutionPlanModel,
-                    system_instruction=system_instruction,  # Use system instruction from satellite table
+                    system_instruction=PLANNING_SYSTEM_INSTRUCTION,
                 )
 
                 # Merge LLM output with completed/obsolete todos
@@ -1122,28 +1184,41 @@ async def execute_synthesis(task_data: dict):
                         has_next_action = True
                         break
 
-                # Check if planner is complete (no open todos)
+                # Check if execution is complete (no open todos)
                 if not has_next_action:
                     logger.info(
-                        f"No more todos available for planner {planner_id} - generating final user response"
+                        f"No more todos available for router {router_id} - execution complete"
                     )
-                    await _complete_planner_execution(
-                        planner_id, final_model, worker_id, planner_data, db
+                    # Save final execution plan to router
+                    execution_plan_markdown = execution_plan_model_to_markdown(
+                        final_model
                     )
-                    return  # Exit synthesis completely
+                    await db.update_router(
+                        router_id,
+                        execution_plan=execution_plan_markdown,
+                        execution_plan_model=final_model.model_dump(),
+                        execution_status="complete",
+                    )
+                    return {
+                        "status": "complete",
+                        "router_id": router_id,
+                        "final_answer": updated_wip_template,
+                    }
 
                 # Save updated execution plan (only if not completed)
-                save_execution_plan_model(planner_id, final_model)
                 execution_plan_markdown = execution_plan_model_to_markdown(final_model)
-                await db.update_planner(
-                    planner_id, execution_plan=execution_plan_markdown
+                await db.update_router(
+                    router_id,
+                    execution_plan=execution_plan_markdown,
+                    execution_plan_model=final_model.model_dump(),
+                    execution_status="ready_for_task",
                 )
 
-                logger.info(f"Execution plan updated for planner {planner_id}")
+                logger.info(f"Execution plan updated for router {router_id}")
 
             except Exception as e:
                 logger.error(
-                    f"Error updating execution plan for planner {planner_id}: {e}"
+                    f"Error updating execution plan for router {router_id}: {e}"
                 )
                 # Continue with variable/image processing even if plan update fails
 
@@ -1157,13 +1232,23 @@ async def execute_synthesis(task_data: dict):
                             # Load variable from worker's file
                             variable = load_variable_from_file(file_path)
                             if variable is not None:
-                                # Save to planner's variable collection (with collision checking)
-                                save_planner_variable(
-                                    planner_id, key, variable, check_existing=True
+                                # Save to router's variable collection
+                                variable_file_paths = router_data.get(
+                                    "variable_file_paths", {}
                                 )
-                                logger.info(
-                                    f"Merged worker variable '{key}' into planner {planner_id}"
+                                # Generate path and save file
+                                new_path, _ = generate_variable_path(
+                                    router_id, key, check_existing=True
                                 )
+                                if save_variable_to_file(new_path, variable):
+                                    variable_file_paths[key] = new_path
+                                    await db.update_router(
+                                        router_id,
+                                        variable_file_paths=variable_file_paths,
+                                    )
+                                    logger.info(
+                                        f"Merged worker variable '{key}' into router {router_id}"
+                                    )
                             else:
                                 logger.warning(
                                     f"Failed to load worker variable '{key}' from {file_path}"
@@ -1181,13 +1266,22 @@ async def execute_synthesis(task_data: dict):
                             # Load image from worker's file
                             image = load_image_from_file(file_path)
                             if image is not None:
-                                # Save to planner's image collection (with collision checking)
-                                save_planner_image(
-                                    planner_id, key, image, check_existing=True
+                                # Save to router's image collection
+                                image_file_paths = router_data.get(
+                                    "image_file_paths", {}
                                 )
-                                logger.info(
-                                    f"Merged worker image '{key}' into planner {planner_id}"
+                                # Generate path and save file
+                                new_path, final_name = generate_image_path(
+                                    router_id, key, check_existing=True
                                 )
+                                if save_image_to_file(new_path, image):
+                                    image_file_paths[final_name] = new_path
+                                    await db.update_router(
+                                        router_id, image_file_paths=image_file_paths
+                                    )
+                                    logger.info(
+                                        f"Merged worker image '{key}' into router {router_id}"
+                                    )
                             else:
                                 logger.warning(
                                     f"Failed to load worker image '{key}' from {file_path}"
@@ -1204,12 +1298,12 @@ async def execute_synthesis(task_data: dict):
             await db.update_worker(worker_id, task_status="recorded")
             logger.info(f"Marked worker {worker_id} as recorded")
 
-        logger.info(f"Synthesis completed for planner {planner_id}")
+        logger.info(f"Synthesis completed for router {router_id}")
 
-        # Queue next task: task creation (to continue planning cycle)
-        await update_planner_next_task_and_queue(planner_id, "execute_task_creation")
+        # Return next action for frontend to execute
+        return {"next_action": "task_creation", "router_id": router_id}
 
     except Exception as e:
-        logger.error(f"Synthesis failed for planner {planner_id}: {e}")
-        await db.update_planner(planner_id, status="failed")
+        logger.error(f"Synthesis failed for router {router_id}: {e}")
+        await db.update_router(router_id, execution_status="failed")
         raise

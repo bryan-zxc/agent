@@ -16,7 +16,6 @@ from ..models.agent_database import AgentDatabase, AgentType, Router
 from sqlalchemy import select, update
 from ..utils.image_utils import is_image, get_img_breakdown, encode_image
 from ..services.llm_service import LLM
-from ..tasks.task_utils import update_planner_next_task_and_queue
 from ..tasks.message_manager import MessageManager
 from .mcp_client import get_mcp_manager
 
@@ -494,22 +493,40 @@ async def handle_message(
                 approved = message_data.get("approved", False)
 
                 if approved:
-                    # Move to execution
+                    # Phase transition: plamarination → execution
                     logger.info(
-                        f"Plan approved for router {router_id}, starting execution"
+                        f"Plan approved for router {router_id}, transitioning to execution phase"
                     )
+
+                    # Update database with phase transition
                     await agent_db.update_router(
-                        router_id=router_id, status="executing"
+                        router_id=router_id,
+                        status="executing",
+                        agent_phase="execution"  # Critical phase transition
                     )
+
+                    # Send status update
                     await send_status(
-                        status="Executing approved plan",
+                        status="Starting execution phase",
                         router_id=router_id,
                         websocket=websocket,
                     )
-                    # Execute the approved plan
-                    await handle_complex_request(
-                        router_state=router_state, websocket=websocket, files=files
-                    )
+
+                    # Send phase transition notification
+                    await websocket.send_json({
+                        "type": "phase_updated",
+                        "agent_phase": "execution",
+                        "router_id": router_id
+                    })
+
+                    # Send start execution signal with first action
+                    await websocket.send_json({
+                        "type": "start_execution",
+                        "next_action": "task_creation",
+                        "router_id": router_id
+                    })
+
+                    logger.info(f"Sent start_execution signal for router {router_id}")
                 else:
                     # User wants revision
                     feedback = message_data.get("feedback", "")
@@ -834,6 +851,114 @@ async def plamarination_response(router_state: Dict[str, Any], websocket: WebSoc
         await agent_db.update_router(router_id=router_id, status="active")
 
 
+# ========== EXECUTION RESPONSE FUNCTIONS ==========
+
+
+async def execution_response(
+    router_state: Dict[str, Any],
+    function_name: str,
+    websocket: WebSocket,
+    **kwargs
+) -> Dict[str, Any]:
+    """
+    Thin orchestration layer for executing planner/worker functions.
+    Calls requested function and returns result for frontend orchestration.
+
+    Args:
+        router_state: Router state dictionary
+        function_name: Name of function to execute
+        websocket: WebSocket connection
+        **kwargs: Additional parameters for the function
+
+    Returns:
+        Dict containing next action information for frontend
+    """
+    router_id = router_state["id"]
+    agent_db = router_state["agent_db"]
+
+    # Import task functions
+    from ..tasks import planner_tasks, worker_tasks
+
+    try:
+        # Build task_data expected by existing functions
+        task_data = {
+            "entity_id": kwargs.get("worker_id", router_id),  # worker_id for workers, router_id for planner
+            "payload": kwargs  # Pass all kwargs as payload
+        }
+
+        # Call the requested function and return its result directly
+        if function_name == "task_creation":
+            logger.info(f"Executing task creation for router {router_id}")
+            return await planner_tasks.execute_task_creation(task_data)
+
+        elif function_name == "worker_init":
+            worker_id = kwargs.get("worker_id")
+            logger.info(f"Initialising worker {worker_id}")
+            return await worker_tasks.worker_initialisation(task_data)
+
+        elif function_name == "worker_execute":
+            worker_id = kwargs.get("worker_id")
+            logger.info(f"Executing worker {worker_id}")
+
+            # Get worker to determine type
+            worker = await agent_db.get_worker(worker_id)
+            if not worker:
+                return {"error": f"Worker {worker_id} not found"}
+
+            next_task = worker.get("next_task")
+
+            if next_task == "execute_sql_worker":
+                return await worker_tasks.execute_sql_worker(task_data)
+            else:
+                return await worker_tasks.execute_standard_worker(task_data)
+
+        elif function_name == "synthesis":
+            logger.info(f"Executing synthesis for router {router_id}")
+            result = await planner_tasks.execute_synthesis(task_data)
+
+            # Check if execution is complete
+            if isinstance(result, dict) and result.get("status") == "complete":
+                # Transition back to auto mode
+                await agent_db.update_router(
+                    router_id=router_id,
+                    status="active",
+                    mode="auto",
+                    agent_phase=None  # Clear phase when returning to auto mode
+                )
+
+                # Send completion signal with final answer
+                await websocket.send_json({
+                    "type": "execution_complete",
+                    "router_id": router_id,
+                    "final_answer": result.get("final_answer")
+                })
+
+                # Send mode/phase updates
+                await websocket.send_json({
+                    "type": "mode_updated",
+                    "mode": "auto",
+                    "router_id": router_id
+                })
+
+                await websocket.send_json({
+                    "type": "phase_updated",
+                    "agent_phase": None,
+                    "router_id": router_id
+                })
+
+                logger.info(f"Execution complete for router {router_id}, transitioned to auto mode")
+
+            return result
+
+        else:
+            logger.error(f"Unknown function requested: {function_name}")
+            return {"error": f"Unknown function: {function_name}"}
+
+    except Exception as e:
+        logger.error(f"Error in execution_response: {e}")
+        return {"error": str(e)}
+
+
 # ========== WEBSOCKET COMMUNICATION FUNCTIONS ==========
 
 
@@ -1041,127 +1166,9 @@ async def send_phase_status(phase: str, router_id: str, websocket: WebSocket):
             raise
 
 
-async def handle_complex_request(
-    router_state: Dict[str, Any],
-    websocket: WebSocket,
-    files: Optional[List[str]] = None,
-    agent_requirements: Optional[RequireAgent] = None,
-):
-    """
-    Handle complex requests requiring planner - runs asynchronously in background.
-
-    Args:
-        router_state: Router state dictionary
-        websocket: WebSocket connection
-        files: Optional list of file paths
-        agent_requirements: Optional agent requirements from assessment
-    """
-    router_id = router_state["id"]
-    message_manager = router_state["message_manager"]
-
-    logger.info(
-        f"DEBUG: handle_complex_request called with files: {files}, agent_requirements: {agent_requirements}"
-    )
-
-    # Validate that either files or agent requirements exist
-    if not files and not agent_requirements:
-        logger.error(
-            "DEBUG: Neither files nor agent requirements provided - raising ValueError"
-        )
-        raise ValueError(
-            "Either files must be provided or agent requirements must be specified"
-        )
-
-    # Determine user question and generate instructions
-    instructions = []
-    logger.info(
-        f"DEBUG: Checking agent_requirements path - agent_requirements: {agent_requirements}"
-    )
-
-    if agent_requirements:
-        # Generate non-file instructions based on agent requirements
-        if agent_requirements.web_search_required:
-            instructions.append(
-                f"# Instructions for web search:\n\n{INSTRUCTION_LIBRARY.get('non_file').get('web_search', '')}"
-            )
-        user_question = agent_requirements.context_rich_agent_request
-    else:
-        logger.info(
-            "DEBUG: Taking files-only path - calling LLM to summarise message history"
-        )
-        # Create a fresh message context for summarisation
-        messages = await message_manager.get_messages()
-        user_messages = [msg for msg in messages if msg.get("role") != "system"]
-
-        # Use specialised system instruction for summarisation
-        summarisation_instruction = (
-            "Your sole job is to summarise the conversation into a context-rich request for the downstream agent. "
-            "Use the latest message from the user as the basis and enrich the context directly associated with the question using the conversation history. "
-            "Return only the context-rich request for the agent, do not include any other information such as prefixes or suffixes, do not ask for more information from the user."
-        )
-
-        response = await router_state["llm"].a_get_response(
-            messages=user_messages,
-            model=router_state["model"],
-            temperature=router_state["temperature"],
-            system_instruction=summarisation_instruction,
-        )
-        user_question = response.content
-        logger.info(f"DEBUG: LLM summarised user question: {user_question}")
-
-    # Check if files list is not empty before processing
-    logger.info(
-        f"DEBUG: About to check files - files: {files}, bool(files): {bool(files)}"
-    )
-    if files:
-        logger.info(f"DEBUG: Files found - processing files: {files}")
-        # Determine file groups
-        file_groups = await determine_file_groups(
-            router_state=router_state, user_question=user_question, files=files
-        )
-        logger.info(f"DEBUG: File groups determined: {file_groups}")
-
-        # Process each file group sequentially
-        for i, file_group in enumerate(file_groups, 1):
-            if len(file_groups) > 1:
-                await send_status(
-                    f"Processing file group {i}/{len(file_groups)}: {', '.join(file_group)}",
-                    router_id,
-                    websocket,
-                )
-            else:
-                logger.info(
-                    f"DEBUG: Processing single file group with files: {file_group}"
-                )
-
-            # Start background task for this file group
-            await invoke_single(
-                router_state=router_state,
-                files=file_group,
-                user_question=user_question,
-                instructions=instructions,
-                websocket=websocket,
-                agent_requirements=agent_requirements,
-            )
-            logger.info(
-                f"DEBUG: File group {i} planner queued for background processing"
-            )
-
-        # All file groups processed sequentially
-        logger.info(
-            f"Queued sequential processing of all {len(file_groups)} file groups."
-        )
-    else:
-        logger.info("DEBUG: No files - using invoke_single with empty files list")
-        # No files, use invoke_single with empty files list
-        await invoke_single(
-            router_state=router_state,
-            files=[],
-            user_question=user_question,
-            instructions=instructions,
-            websocket=websocket,
-            agent_requirements=agent_requirements,
-        )
+# REMOVED: handle_complex_request, invoke_single and related functions
+# These were part of the old planner creation system using task queues
+# Now replaced with direct tool execution (execute_python, execute_sql, set_plan_and_answer)
 
 
 # ========== UTILITY FUNCTIONS ==========
@@ -1376,135 +1383,8 @@ async def determine_file_groups(
         return file_grouping_response.file_groups
 
 
-async def invoke_single(
-    router_state: Dict[str, Any],
-    files: List[str],
-    user_question: str,
-    instructions: List[str],
-    websocket: WebSocket,
-    agent_requirements: Optional[RequireAgent] = None,
-):
-    """
-    Invoke planner for single file, combined, or non-file processing.
+# invoke_single function removed - was part of old planner creation system
 
-    Args:
-        router_state: Router state dictionary
-        files: List of file paths
-        user_question: User's question
-        instructions: Processing instructions
-        websocket: WebSocket connection
-        agent_requirements: Optional agent requirements
-    """
-    router_id = router_state["id"]
-    message_manager = router_state["message_manager"]
-    agent_db = router_state["agent_db"]
-
-    logger.info(
-        f"DEBUG: invoke_single called with files: {files}, user_question: {user_question[:100]}..."
-    )
-
-    # Handle file processing if files are provided
-    if files:
-        logger.info(f"DEBUG: Processing files in invoke_single: {files}")
-        processed_files, errors, file_instructions = await process_files(files)
-        logger.info(
-            f"DEBUG: process_files returned - processed_files: {processed_files}, errors: {errors}"
-        )
-
-        if not processed_files:
-            logger.error("DEBUG: No processed files found, returning error message")
-            return "Unable to process any files. Errors encountered:\n" + "\n".join(
-                f"• {error}" for error in errors
-            )
-
-        logger.info(
-            f"DEBUG: Combining instructions - base: {len(instructions)}, file: {len(file_instructions)}"
-        )
-        # Combine instructions
-        all_instructions = instructions + file_instructions
-    else:
-        logger.info("DEBUG: No files case - using base instructions only")
-        processed_files = None
-        all_instructions = instructions
-
-    logger.info(
-        f"Conversation ID: {router_id}\nUser question: {user_question}\nInstructions: {'\n\n---\n\n'.join(all_instructions)}"
-    )
-
-    logger.info(
-        f"DEBUG: About to determine planner name - agent_requirements: {agent_requirements}"
-    )
-    # Determine planner name based on agent requirements
-    planner_name = None
-    if agent_requirements and agent_requirements.chilli_request:
-        planner_name = "Chilli"
-        logger.info("DEBUG: Set planner_name to Chilli")
-    else:
-        logger.info("DEBUG: Using default planner (no special name)")
-
-    # Send "Agents assemble!" message first and capture its ID
-    result = await message_manager.add_message(
-        role="assistant", content="Agents assemble!", need_message_id=True
-    )
-    agents_assemble_message_id = result["message_id"]
-    logger.info(
-        f"DEBUG: Agents assemble message_id from add_message: {agents_assemble_message_id} (type: {type(agents_assemble_message_id)})"
-    )
-    logger.info(
-        f"DEBUG: WebSocket parameter is: {websocket} (None: {websocket is None})"
-    )
-    await send_assistant_message(
-        "Agents assemble!",
-        router_id,
-        websocket,
-        agents_assemble_message_id,
-    )
-
-    logger.info(
-        f"DEBUG: Creating planner using function-based approach with processed_files: {processed_files}"
-    )
-
-    # Create planner using function-based task queue system
-    planner_id = uuid.uuid4().hex
-    logger.info(f"DEBUG: Generated planner_id: {planner_id}")
-
-    # Prepare files for payload - handle None case
-    if processed_files is None:
-        files = []
-    else:
-        files = [
-            f.model_dump() if hasattr(f, "model_dump") else f for f in processed_files
-        ]
-
-    # Queue initial planning task with complete payload
-    payload = {
-        "user_question": user_question,
-        "instruction": "\n\n---\n\n".join(all_instructions),
-        "files": files,
-        "planner_name": planner_name,
-        "message_id": agents_assemble_message_id,
-        "router_id": router_id,
-    }
-
-    logger.info(f"DEBUG: Queuing initial planning task for planner {planner_id}")
-    task_id = uuid.uuid4().hex
-    success = await agent_db.enqueue_task(
-        task_id=task_id,
-        entity_type="planner",
-        entity_id=planner_id,
-        function_name="execute_initial_planning",
-        payload=payload,
-    )
-
-    if not success:
-        logger.error(f"Failed to queue initial planning task for planner {planner_id}")
-        return
-
-    logger.info(
-        f"DEBUG: Successfully queued initial planning task for planner {planner_id}"
-    )
-
-    # Note: Planner execution now handled asynchronously by background processor
 
 
 async def generate_and_update_title(router_state: Dict[str, Any]):
@@ -1557,57 +1437,7 @@ async def generate_and_update_title(router_state: Dict[str, Any]):
         logger.error(f"Failed to generate LLM title for {router_state['id']}: {e}")
 
 
-async def handle_planner_completion(
-    router_state: Dict[str, Any], planner_id: str, websocket: WebSocket
-):
-    """
-    Handle completed planner - add response to message chain and send to frontend.
-
-    Args:
-        router_state: Router state dictionary
-        planner_id: ID of the completed planner
-        websocket: WebSocket connection
-    """
-    router_id = router_state["id"]
-    message_manager = router_state["message_manager"]
-    agent_db = router_state["agent_db"]
-
-    logger.info(f"Handling planner completion for planner {planner_id}")
-
-    try:
-        # Get planner data
-        planner = await agent_db.get_planner(planner_id=planner_id)
-        if not planner:
-            logger.error(f"Planner {planner_id} not found")
-            return
-
-        user_response = planner.get("user_response")
-        if not user_response:
-            logger.error(f"No user response found for completed planner {planner_id}")
-            return
-
-        # Add to router's message chain
-        await message_manager.add_message(role="assistant", content=user_response)
-
-        # Send to frontend via WebSocket (if connected)
-        if websocket:
-            await send_assistant_message(
-                content=user_response, router_id=router_id, websocket=websocket
-            )
-            logger.info("Sent planner completion response to frontend")
-        else:
-            logger.warning(
-                f"No WebSocket connection for router {router_id} - response not sent"
-            )
-
-        # Update router status back to active
-        await agent_db.update_router(router_id=router_id, status="active")
-
-        logger.info(f"Successfully handled planner completion for planner {planner_id}")
-
-    except Exception as e:
-        logger.error(f"Error handling planner completion for planner {planner_id}: {e}")
-        raise
+# handle_planner_completion function removed - was part of old planner system
 
 
 # ========== END OF ROUTER OPERATIONS MODULE ==========

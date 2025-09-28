@@ -9,6 +9,7 @@ worker execution state through the file system and database.
 import logging
 import json
 import duckdb
+from typing import Any
 from pydantic import BaseModel, Field
 from PIL import Image
 
@@ -29,10 +30,7 @@ from .file_manager import (
     generate_image_path,
     load_wip_answer_template,
 )
-from .task_utils import (
-    update_planner_next_task_and_queue,
-    update_worker_next_task_and_queue,
-)
+# Task queueing functions removed - using frontend orchestration with return actions
 from .message_manager import MessageManager
 
 logger = logging.getLogger(__name__)
@@ -104,123 +102,164 @@ async def validate_worker_result(
 async def process_image_variable(
     image: Image,
     variable_name: str,
-    worker_id: str,
-    planner_id: str,
+    router_id: str,
     db: AgentDatabase,
-    message_manager: MessageManager,
 ) -> str:
-    """Process an output image variable and save to file system
+    """Process an output image variable, save to router table, and return formatted string
 
     Returns:
-        str: The final image key name used (may be different if collision avoided)
+        str: Formatted string describing the image for display
     """
     # Encode the image
     encoded_image = encode_image(image)
 
     # Generate file path with collision avoidance
     file_path, final_image_key = generate_image_path(
-        planner_id, variable_name, check_existing=True
+        router_id, variable_name, check_existing=True
     )
 
     # Save image to file
     if save_image_to_file(file_path, encoded_image):
-        # Update worker database with file path - merge with existing paths
-        worker_data = await db.get_worker(worker_id)
+        # Update ROUTER database with file path - merge with existing paths
+        router_data = await db.get_router(router_id)
         current_img_paths = (
-            worker_data.get("output_image_filepaths", {}) if worker_data else {}
+            router_data.get("image_file_paths", {}) if router_data else {}
         )
         current_img_paths.update({final_image_key: file_path})
-        await db.update_worker(worker_id, output_image_filepaths=current_img_paths)
+        await db.update_router(router_id, image_file_paths=current_img_paths)
 
-        # Add message to database using final key name
-        content = [{"type": "text", "text": f"Image: {final_image_key}"}]
-        content.append(
-            {
-                "type": "image_url",
-                "image_url": {"url": f"data:image/png;base64,{encoded_image}"},
-            }
-        )
-        await message_manager.add_message(role="user", content=content)
-
-        return final_image_key
+        # Return formatted string describing the image
+        return f"{final_image_key}: Image(size={image.size}, mode={image.mode}) - saved"
     else:
         raise Exception(
-            f"Failed to save image '{final_image_key}' for worker {worker_id}"
+            f"Failed to save image '{final_image_key}' for router {router_id}"
         )
 
 
 async def process_variable(
     variable,
     variable_name: str,
-    worker_id: str,
-    planner_id: str,
+    router_id: str,
     db: AgentDatabase,
-    message_manager: MessageManager,
 ) -> str:
-    """Process an output variable and save to file system
+    """Process an output variable, save to router table, and return formatted string
 
     Returns:
-        str: The final variable key name used (may be different if collision avoided)
+        str: Formatted string describing the variable for display
     """
     # Always save variable to file regardless of serialisability
     file_path, final_variable_key = generate_variable_path(
-        planner_id, variable_name, check_existing=True
+        router_id, variable_name, check_existing=True
     )
 
     # Save variable to file
     if save_variable_to_file(file_path, variable):
-        # Update worker database with file path - merge with existing paths
-        worker_data = await db.get_worker(worker_id)
+        # Update ROUTER database with file path - merge with existing paths
+        router_data = await db.get_router(router_id)
         current_var_paths = (
-            worker_data.get("output_variable_filepaths", {}) if worker_data else {}
+            router_data.get("variable_file_paths", {}) if router_data else {}
         )
         current_var_paths.update({final_variable_key: file_path})
-        await db.update_worker(worker_id, output_variable_filepaths=current_var_paths)
+        await db.update_router(router_id, variable_file_paths=current_var_paths)
 
-        # Add message to database - content depends on serialisability
+        # Format variable for display - handle different types
         serialisable, stringable = is_serialisable(variable)
 
-        if serialisable:
-            # Show full variable content since it's serialisable
-            await message_manager.add_message(
-                role="assistant",
-                content=f"```python\n{final_variable_key}\n```\n\nOutput:\n```\n{variable}\n```",
-            )
-        elif stringable:
-            # Show string representation but note it's not serialisable
-            await message_manager.add_message(
-                role="assistant",
-                content=f"```python\n{final_variable_key}\n```\n\nOutput:\n```\n{str(variable)}\n```\n\n"
-                "Note: the output is not serialisable and will not be included as an output variable.",
-            )
-        # No message for else case - variable saved to file but not displayed
+        # Special handling for common types
+        try:
+            import pandas as pd
+            if isinstance(variable, pd.DataFrame):
+                # Convert DataFrame to markdown table with character limit
+                markdown_str = variable.to_markdown()
+                if len(markdown_str) > 100000:
+                    # Truncate at character limit
+                    markdown_str = markdown_str[:100000] + "\n... (truncated at 100,000 characters)"
+                return f"{final_variable_key}: DataFrame(shape={variable.shape})\n{markdown_str}"
+        except ImportError:
+            pass
 
-        return final_variable_key
+        try:
+            from pydantic import BaseModel
+            if isinstance(variable, BaseModel):
+                fields = list(type(variable).model_fields.keys())[:30]
+                if len(type(variable).model_fields) > 30:
+                    fields.append(f"... {len(type(variable).model_fields)-30} more")
+                return f"{final_variable_key}: {type(variable).__name__}(fields={fields})"
+        except ImportError:
+            pass
+
+        if serialisable:
+            # Truncate long outputs
+            value_str = str(variable)
+            if len(value_str) > 200:
+                if isinstance(variable, (list, tuple)):
+                    value_str = f"{type(variable).__name__}(len={len(variable)})"
+                elif isinstance(variable, dict):
+                    keys_preview = list(variable.keys())[:3]
+                    value_str = f"dict(keys={keys_preview}{'...' if len(variable) > 3 else ''}, total={len(variable)})"
+                else:
+                    value_str = value_str[:200] + "... (truncated)"
+            return f"{final_variable_key} = {value_str}"
+        elif stringable:
+            # Show string representation with truncation
+            value_str = str(variable)[:200]
+            if len(str(variable)) > 200:
+                value_str += "..."
+            return f"{final_variable_key}: {type(variable).__name__} = {value_str}"
+        else:
+            return f"{final_variable_key}: {type(variable).__name__} (saved)"
     else:
         raise Exception(
-            f"Failed to save variable '{final_variable_key}' for worker {worker_id}"
+            f"Failed to save variable '{final_variable_key}' for router {router_id}"
         )
+
+
+async def process_output(
+    value: Any,
+    variable_name: str,
+    router_id: str,
+    db: AgentDatabase,
+) -> str:
+    """Process an output variable and route to appropriate handler
+
+    Detects whether the value is an image or regular variable and
+    calls the appropriate process function.
+
+    Returns:
+        str: Formatted string describing the variable for display
+    """
+    # Check if it's a PIL Image
+    try:
+        from PIL import Image
+        if isinstance(value, Image.Image):
+            return await process_image_variable(value, variable_name, router_id, db)
+    except ImportError:
+        pass
+
+    # Otherwise treat as regular variable
+    return await process_variable(value, variable_name, router_id, db)
 
 
 async def worker_initialisation(task_data: dict):
     """
     Initialise worker and create FullTask from the saved Task.
 
-    This function is called when a planner creates a task and queues worker initialisation.
-    It loads the Task saved by execute_task_creation, creates a FullTask, and prepares
+    This function is called when router creates a task and frontend requests worker initialisation.
+    It loads the Task from router's current_task field, creates worker record, and prepares
     the worker for execution.
+    Now uses router_id and returns next action for frontend.
 
     Args:
         task_data: Dict containing task information and payload:
             - entity_id: worker_id (which IS the task_id from the Task)
-            - payload: dict with planner_id
+            - payload: dict with router_id
     """
     worker_id = task_data["entity_id"]
     payload = task_data.get("payload", {})
-    planner_id = payload["planner_id"]
+    router_id = payload["router_id"]
 
     logger.info(
-        f"Starting worker initialisation for worker {worker_id}, planner {planner_id}"
+        f"Starting worker initialisation for worker {worker_id}, router {router_id}"
     )
 
     db = await AgentDatabase.create()
@@ -232,33 +271,39 @@ async def worker_initialisation(task_data: dict):
         logger.info(
             f"Worker {worker_id} already exists - resuming execution, skipping initialisation"
         )
-        # Queue worker execution task (worker already initialised)
-        await update_worker_next_task_and_queue(worker_id, "execute_worker_task")
-        return
+        # Return next action for frontend to execute
+        querying_structured_data = existing_worker.get("querying_structured_data", False)
+        return {
+            "next_action": "execute_sql_worker" if querying_structured_data else "execute_standard_worker",
+            "worker_id": worker_id,
+            "router_id": router_id
+        }
 
     try:
-        # Load the Task that was saved by execute_task_creation
-        task = load_current_task(planner_id)
-        if not task:
-            logger.error(f"No current task found for planner {planner_id}")
-            return
+        # Get router data to access current task and context
+        router_data = await db.get_router(router_id)
+        if not router_data:
+            logger.error(f"Router {router_id} not found")
+            return {"error": f"Router {router_id} not found"}
 
+        # Load the Task from router's current_task field
+        from ..models import Task
+        current_task_data = router_data.get("current_task")
+        if not current_task_data:
+            logger.error(f"No current task found for router {router_id}")
+            return {"error": "No current task found"}
+
+        task = Task(**current_task_data)
         logger.info(f"Loaded task for worker {worker_id}: {task.task_description}")
 
-        # Get planner data to access variables, images, and other context
-        planner_data = await db.get_planner(planner_id)
-        if not planner_data:
-            logger.error(f"Planner {planner_id} not found")
-            return
+        # Load router context data for worker
+        planner_variables = get_planner_variables(router_id)  # These functions are ID-agnostic
+        planner_images = get_planner_images(router_id)  # These functions are ID-agnostic
 
-        # Load planner context data for worker
-        planner_variables = get_planner_variables(planner_id)
-        planner_images = get_planner_images(planner_id)
-
-        # Get tables and files from planner metadata (not variables)
-        planner_metadata = planner_data.get("agent_metadata", {})
-        tables = planner_metadata.get("tables", [])
-        files = planner_metadata.get("files", [])
+        # Get tables and files from router metadata
+        router_metadata = router_data.get("agent_metadata", {})
+        tables = router_metadata.get("tables", [])
+        files = router_metadata.get("files", [])
 
         # Extract filepaths from document files
         filepaths = (
@@ -267,18 +312,18 @@ async def worker_initialisation(task_data: dict):
             else []
         )
 
-        # Get file paths from planner for worker storage
+        # Get file paths from router for worker storage
         input_variable_filepaths = {
-            variable_key: planner_data.get("variable_file_paths", {}).get(
+            variable_key: router_data.get("variable_file_paths", {}).get(
                 variable_key, ""
             )
             for variable_key in task.variable_keys
-            if planner_data.get("variable_file_paths", {}).get(variable_key)
+            if router_data.get("variable_file_paths", {}).get(variable_key)
         }
         input_image_filepaths = {
-            image_key: planner_data.get("image_file_paths", {}).get(image_key, "")
+            image_key: router_data.get("image_file_paths", {}).get(image_key, "")
             for image_key in task.image_keys
-            if planner_data.get("image_file_paths", {}).get(image_key)
+            if router_data.get("image_file_paths", {}).get(image_key)
         }
 
         # Set querying_structured_data to False if no tables
@@ -292,13 +337,13 @@ async def worker_initialisation(task_data: dict):
         # Create worker database record with individual parameters
         await db.create_worker(
             worker_id=worker_id,
-            planner_id=planner_id,
+            router_id=router_id,
             worker_name=worker_name,
             task_status="pending",
             task_description=task.task_description,
             acceptance_criteria=task.acceptance_criteria,
             user_request=task.user_request,
-            wip_answer_template=load_wip_answer_template(planner_id) or "",
+            wip_answer_template=router_data.get("wip_answer", ""),
             task_result="",
             querying_structured_data=querying_structured_data,
             image_keys=task.image_keys,
@@ -326,8 +371,8 @@ async def worker_initialisation(task_data: dict):
         # Build complete content list for the user message
         content = []
         
-        # Add broader context
-        wip_template = load_wip_answer_template(planner_id) or ""
+        # Add broader context from router
+        wip_template = router_data.get("wip_answer", "")
         content.append({
             "type": "text",
             "text": "Below is broader level context for your task:\n\n"
@@ -400,28 +445,32 @@ async def worker_initialisation(task_data: dict):
 
         logger.info(f"Set up initial messages for worker {worker_id}")
 
-        # Queue worker execution task based on worker type
-        if querying_structured_data:
-            await update_worker_next_task_and_queue(worker_id, "execute_sql_worker")
-        else:
-            await update_worker_next_task_and_queue(
-                worker_id, "execute_standard_worker"
-            )
+        # Return next action for frontend to execute based on worker type
+        next_action = "execute_sql_worker" if querying_structured_data else "execute_standard_worker"
 
         logger.info(
-            f"Worker initialisation completed for worker {worker_id}, queued worker execution"
+            f"Worker initialisation completed for worker {worker_id}, ready for {next_action}"
         )
+
+        return {
+            "next_action": next_action,
+            "worker_id": worker_id,
+            "router_id": router_id
+        }
 
     except Exception as e:
         logger.error(f"Worker initialisation failed for worker {worker_id}: {e}")
         # Mark worker as failed if it exists
         try:
-            await db.update_worker(worker_id, status="failed")
+            await db.update_worker(worker_id, task_status="failed")
         except:
             pass
-        # Update planner to continue despite worker failure
-        await update_planner_next_task_and_queue(planner_id, "execute_synthesis")
-        raise
+        # Return error for frontend to handle
+        return {
+            "error": f"Worker initialisation failed: {str(e)}",
+            "worker_id": worker_id,
+            "router_id": router_id
+        }
 
 
 async def execute_standard_worker(task_data: dict):
@@ -434,7 +483,7 @@ async def execute_standard_worker(task_data: dict):
     Args:
         task_data: Dict containing task information:
             - entity_id: worker_id
-            - payload: optional dict (planner_id retrieved from worker database record)
+            - payload: optional dict (router_id passed for context)
     """
     worker_id = task_data["entity_id"]
 
@@ -448,8 +497,8 @@ async def execute_standard_worker(task_data: dict):
         logger.error(f"Worker {worker_id} not found in database")
         return
 
-    # Always get planner_id from worker database record for consistency
-    planner_id = worker_data["planner_id"]
+    # Always get router_id from worker database record for consistency
+    router_id = worker_data["router_id"]
 
     # Fetch system instruction from satellite table
     system_instruction = await db.get_worker_system_instruction(
@@ -462,9 +511,9 @@ async def execute_standard_worker(task_data: dict):
     # Create message manager for this worker
     message_manager = MessageManager(db, "worker", worker_id)
 
-    # Load planner variables and images for worker execution
-    planner_variables = get_planner_variables(planner_id)
-    planner_images = get_planner_images(planner_id)
+    # Load router variables and images for worker execution
+    planner_variables = get_planner_variables(router_id)
+    planner_images = get_planner_images(router_id)
 
     # Get worker messages from database
     messages = await message_manager.get_messages()
@@ -513,9 +562,11 @@ async def execute_standard_worker(task_data: dict):
 
                 # Queue retry if attempts remain
                 if current_attempt < max_retry:
-                    await update_worker_next_task_and_queue(
-                        worker_id, "execute_standard_worker"
-                    )
+                    return {
+                        "next_action": "execute_standard_worker",
+                        "worker_id": worker_id,
+                        "router_id": router_id
+                    }
                 else:
                     # Max retries reached - mark as failed and queue synthesis
                     await db.update_worker(
@@ -523,9 +574,11 @@ async def execute_standard_worker(task_data: dict):
                         task_status="failed_validation",
                         task_result="Task failed: Malicious code detected after multiple attempts.",
                     )
-                    await update_planner_next_task_and_queue(
-                        planner_id, "execute_synthesis"
-                    )
+                    return {
+                        "next_action": "synthesis",
+                        "worker_id": worker_id,
+                        "router_id": router_id
+                    }
                 return
 
             messages = await message_manager.add_message(
@@ -584,7 +637,7 @@ async def execute_standard_worker(task_data: dict):
                                     img,
                                     f"{output_var.name}_{i}",
                                     worker_id,
-                                    planner_id,
+                                    router_id,
                                     db,
                                 )
                         elif isinstance(var_value, dict):
@@ -593,7 +646,7 @@ async def execute_standard_worker(task_data: dict):
                                     img,
                                     f"{output_var.name}_{img_key}",
                                     worker_id,
-                                    planner_id,
+                                    router_id,
                                     db,
                                 )
                         elif isinstance(var_value, Image.Image):
@@ -601,7 +654,7 @@ async def execute_standard_worker(task_data: dict):
                                 var_value,
                                 output_var.name,
                                 worker_id,
-                                planner_id,
+                                router_id,
                                 db,
                                 message_manager,
                             )
@@ -614,9 +667,11 @@ async def execute_standard_worker(task_data: dict):
 
                             # Queue retry
                             if current_attempt < max_retry:
-                                await update_worker_next_task_and_queue(
-                                    worker_id, "execute_standard_worker"
-                                )
+                                return {
+                                    "next_action": "execute_standard_worker",
+                                    "worker_id": worker_id,
+                                    "router_id": router_id
+                                }
                             else:
                                 await db.update_worker(
                                     worker_id=worker_id,
@@ -624,7 +679,7 @@ async def execute_standard_worker(task_data: dict):
                                     task_result=error_message,
                                 )
                                 update_planner_next_task_and_queue(
-                                    planner_id, "execute_synthesis"
+                                    router_id, "execute_synthesis"
                                 )
                             return
                     else:
@@ -633,7 +688,7 @@ async def execute_standard_worker(task_data: dict):
                             var_value,
                             output_var.name,
                             worker_id,
-                            planner_id,
+                            router_id,
                             db,
                             message_manager,
                         )
@@ -648,7 +703,7 @@ async def execute_standard_worker(task_data: dict):
                 if validated:
                     # Queue planner synthesis on successful completion
                     await update_planner_next_task_and_queue(
-                        planner_id, "execute_synthesis"
+                        router_id, "execute_synthesis"
                     )
                     return
 
@@ -684,9 +739,11 @@ async def execute_standard_worker(task_data: dict):
                         content=f"{failure_message}\\n\\n{sandbox_result['stack_trace']}\\n\\nRequired tool is not available, please supply the task with the required tool and try again.",
                     )
                     # Queue synthesis regardless of tool failure
-                    await update_planner_next_task_and_queue(
-                        planner_id, "execute_synthesis"
-                    )
+                    return {
+                        "next_action": "synthesis",
+                        "worker_id": worker_id,
+                        "router_id": router_id
+                    }
                     return
 
                 messages = await message_manager.add_message(
@@ -723,9 +780,11 @@ async def execute_standard_worker(task_data: dict):
                         task_result=failure_message,
                     )
                     # Queue synthesis for repeated failure
-                    await update_planner_next_task_and_queue(
-                        planner_id, "execute_synthesis"
-                    )
+                    return {
+                        "next_action": "synthesis",
+                        "worker_id": worker_id,
+                        "router_id": router_id
+                    }
                     return
 
         else:
@@ -739,9 +798,11 @@ async def execute_standard_worker(task_data: dict):
             )
             if validated:
                 # Queue planner synthesis on successful completion
-                await update_planner_next_task_and_queue(
-                    planner_id, "execute_synthesis"
-                )
+                return {
+                    "next_action": "synthesis",
+                    "worker_id": worker_id,
+                    "router_id": router_id
+                }
                 return
 
         # If we reach here, validation failed - check if more retries available
@@ -749,9 +810,11 @@ async def execute_standard_worker(task_data: dict):
             logger.info(
                 f"Worker {worker_id} validation failed, queueing retry {current_attempt + 1}/{max_retry}"
             )
-            await update_worker_next_task_and_queue(
-                worker_id, "execute_standard_worker"
-            )
+            return {
+                "next_action": "execute_standard_worker",
+                "worker_id": worker_id,
+                "router_id": router_id
+            }
         else:
             # All retries exhausted - mark as failed and queue synthesis
             logger.info(
@@ -762,7 +825,11 @@ async def execute_standard_worker(task_data: dict):
                 task_status="failed_validation",
                 task_result="Task failed after multiple tries.",
             )
-            await update_planner_next_task_and_queue(planner_id, "execute_synthesis")
+            return {
+                "next_action": "synthesis",
+                "worker_id": worker_id,
+                "router_id": router_id
+            }
 
     except Exception as e:
         logger.error(f"Standard worker execution failed for worker {worker_id}: {e}")
@@ -771,9 +838,13 @@ async def execute_standard_worker(task_data: dict):
             task_status="failed",
             task_result=f"Worker execution failed: {str(e)}",
         )
-        # Always queue synthesis even on unexpected errors
-        await update_planner_next_task_and_queue(planner_id, "execute_synthesis")
-        raise
+        # Always return synthesis even on unexpected errors
+        return {
+            "next_action": "synthesis",
+            "worker_id": worker_id,
+            "router_id": router_id,
+            "error": str(e)
+        }
 
 
 async def execute_sql_worker(task_data: dict):
@@ -786,7 +857,7 @@ async def execute_sql_worker(task_data: dict):
     Args:
         task_data: Dict containing task information:
             - entity_id: worker_id
-            - payload: optional dict (planner_id retrieved from worker database record)
+            - payload: optional dict (router_id passed for context)
     """
 
     worker_id = task_data["entity_id"]
@@ -801,8 +872,8 @@ async def execute_sql_worker(task_data: dict):
         logger.error(f"Worker {worker_id} not found in database")
         return
 
-    # Always get planner_id from worker database record for consistency
-    planner_id = worker_data["planner_id"]
+    # Always get router_id from worker database record for consistency
+    router_id = worker_data["router_id"]
 
     # Fetch system instruction from satellite table
     system_instruction = await db.get_worker_system_instruction(
@@ -865,7 +936,7 @@ async def execute_sql_worker(task_data: dict):
                 if validated:
                     # Queue planner synthesis on successful completion
                     await update_planner_next_task_and_queue(
-                        planner_id, "execute_synthesis"
+                        router_id, "execute_synthesis"
                     )
                     return
 
@@ -890,7 +961,11 @@ async def execute_sql_worker(task_data: dict):
                 role="assistant", content=error_message
             )
             # Queue synthesis for SQL generation failure
-            await update_planner_next_task_and_queue(planner_id, "execute_synthesis")
+            return {
+                "next_action": "synthesis",
+                "worker_id": worker_id,
+                "router_id": router_id
+            }
             return
 
         # If we reach here, validation failed - check if more retries available
@@ -898,7 +973,11 @@ async def execute_sql_worker(task_data: dict):
             logger.info(
                 f"SQL Worker {worker_id} validation failed, queueing retry {current_attempt + 1}/{max_retry}"
             )
-            await update_worker_next_task_and_queue(worker_id, "execute_sql_worker")
+            return {
+                "next_action": "execute_sql_worker",
+                "worker_id": worker_id,
+                "router_id": router_id
+            }
         else:
             # All retries exhausted - mark as failed and queue synthesis
             logger.info(
@@ -909,7 +988,11 @@ async def execute_sql_worker(task_data: dict):
                 task_status="failed_validation",
                 task_result="SQL task failed after multiple tries.",
             )
-            await update_planner_next_task_and_queue(planner_id, "execute_synthesis")
+            return {
+                "next_action": "synthesis",
+                "worker_id": worker_id,
+                "router_id": router_id
+            }
 
     except Exception as e:
         logger.error(f"SQL worker execution failed for worker {worker_id}: {e}")
@@ -918,9 +1001,13 @@ async def execute_sql_worker(task_data: dict):
             task_status="failed",
             task_result=f"SQL worker execution failed: {str(e)}",
         )
-        # Always queue synthesis even on unexpected errors
-        await update_planner_next_task_and_queue(planner_id, "execute_synthesis")
-        raise
+        # Always return synthesis even on unexpected errors
+        return {
+            "next_action": "synthesis",
+            "worker_id": worker_id,
+            "router_id": router_id,
+            "error": str(e)
+        }
     finally:
         # Clean up DuckDB connection
         if "duck_conn" in locals():

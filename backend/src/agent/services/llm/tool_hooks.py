@@ -48,6 +48,10 @@ class ToolHooks:
         # Register hooks for set_plan_and_answer tool
         self._pre_hooks["agent_tools__set_plan_and_answer"] = self._inject_router_id
         self._post_hooks["agent_tools__set_plan_and_answer"] = self._handle_plan_completion
+
+        # Register hooks for execution tools
+        self._pre_hooks["agent_tools__execute_python"] = self._inject_router_id
+        self._pre_hooks["agent_tools__execute_sql"] = self._inject_router_id
     
     async def apply_pre_hook(
         self, 
