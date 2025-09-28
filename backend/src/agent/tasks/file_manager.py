@@ -160,12 +160,12 @@ def load_image_from_file(file_path: str) -> Optional[str]:
 
 
 async def save_planner_variable(
-    planner_id: str, key: str, value: Any, check_existing: bool = False
+    router_id: str, key: str, value: Any, check_existing: bool = False
 ) -> tuple[str, str]:
-    """Save a variable and update database with file path
+    """Save a variable and update router database with file path
 
     Args:
-        planner_id: The planner ID
+        router_id: The router ID
         key: The variable key name
         value: The variable value to save
         check_existing: If True, avoid overwriting existing files
@@ -173,21 +173,21 @@ async def save_planner_variable(
     Returns:
         tuple: (file_path, final_key_used)
     """
-    file_path, final_key = generate_variable_path(planner_id, key, check_existing)
+    file_path, final_key = generate_variable_path(router_id, key, check_existing)
 
     if save_variable_to_file(file_path, value):
-        # Update database with file path using the final key
+        # Update router database with file path using the final key
         db = await AgentDatabase.create()
-        planner = await db.get_planner(planner_id)
-        if planner:
-            variable_paths = planner.get("variable_file_paths", {})
+        router = await db.get_router(router_id)
+        if router:
+            variable_paths = router.get("variable_file_paths", {})
             variable_paths[final_key] = file_path
-            await db.update_planner(planner_id, variable_file_paths=variable_paths)
+            await db.update_router(router_id, variable_file_paths=variable_paths)
 
         return file_path, final_key
     else:
         raise Exception(
-            f"Failed to save variable '{final_key}' for planner {planner_id}"
+            f"Failed to save variable '{final_key}' for router {router_id}"
         )
 
 
@@ -229,16 +229,16 @@ def clean_image_name(raw_name: str, existing_names: set) -> str:
 
 
 async def save_planner_image(
-    planner_id: str,
+    router_id: str,
     raw_image_name: str,
     encoded_image: str,
     check_existing: bool = False,
 ) -> tuple[str, str]:
     """
-    Save an image with cleaned name and update database with file path.
+    Save an image with cleaned name and update router database with file path.
 
     Args:
-        planner_id: The planner ID
+        router_id: The router ID
         raw_image_name: Raw image name (usually filename without extension)
         encoded_image: Base64 encoded image data
         check_existing: If True, avoid overwriting existing files using hex suffix
@@ -246,10 +246,10 @@ async def save_planner_image(
     Returns:
         tuple: (file_path, final_image_name_used)
     """
-    # Get current image names from database to avoid duplicates
+    # Get current image names from router database to avoid duplicates
     db = await AgentDatabase.create()
-    planner = await db.get_planner(planner_id)
-    existing_image_paths = planner.get("image_file_paths", {}) if planner else {}
+    router = await db.get_router(router_id)
+    existing_image_paths = router.get("image_file_paths", {}) if router else {}
     existing_names = set(existing_image_paths.keys())
 
     # Clean the image name first
@@ -257,20 +257,20 @@ async def save_planner_image(
 
     # Generate file path with collision avoidance if requested
     file_path, final_image_name = generate_image_path(
-        planner_id, cleaned_image_name, check_existing
+        router_id, cleaned_image_name, check_existing
     )
 
     if save_image_to_file(file_path, encoded_image):
-        # Update database with file path using final name
-        if planner:
+        # Update router database with file path using final name
+        if router:
             image_paths = existing_image_paths.copy()
             image_paths[final_image_name] = file_path
-            await db.update_planner(planner_id, image_file_paths=image_paths)
+            await db.update_router(router_id, image_file_paths=image_paths)
 
         return file_path, final_image_name
     else:
         raise Exception(
-            f"Failed to save image '{final_image_name}' for planner {planner_id}"
+            f"Failed to save image '{final_image_name}' for router {router_id}"
         )
 
 
@@ -310,16 +310,20 @@ async def get_planner_image(planner_id: str, key: str) -> Optional[str]:
     return load_image_from_file(image_paths[key])
 
 
-async def get_planner_variables(planner_id: str) -> Dict[str, Any]:
-    """Load all variables for a planner"""
-    db = await AgentDatabase.create()
-    planner = await db.get_planner(planner_id)
+async def get_planner_variables(router_id: str) -> Dict[str, Any]:
+    """Load all variables from router table
 
-    if not planner:
-        logger.warning(f"Planner {planner_id} not found")
+    Despite the name, this now loads from router.variable_file_paths
+    to create a unified variable space across planner and all workers.
+    """
+    db = await AgentDatabase.create()
+    router = await db.get_router(router_id)
+
+    if not router:
+        logger.warning(f"Router {router_id} not found")
         return {}
 
-    variable_paths = planner.get("variable_file_paths", {})
+    variable_paths = router.get("variable_file_paths", {})
     variables = {}
 
     for key, file_path in variable_paths.items():
@@ -332,16 +336,20 @@ async def get_planner_variables(planner_id: str) -> Dict[str, Any]:
     return variables
 
 
-async def get_planner_images(planner_id: str) -> Dict[str, str]:
-    """Load all images for a planner"""
-    db = await AgentDatabase.create()
-    planner = await db.get_planner(planner_id)
+async def get_planner_images(router_id: str) -> Dict[str, str]:
+    """Load all images from router table
 
-    if not planner:
-        logger.warning(f"Planner {planner_id} not found")
+    Despite the name, this now loads from router.image_file_paths
+    to create a unified variable space across planner and all workers.
+    """
+    db = await AgentDatabase.create()
+    router = await db.get_router(router_id)
+
+    if not router:
+        logger.warning(f"Router {router_id} not found")
         return {}
 
-    image_paths = planner.get("image_file_paths", {})
+    image_paths = router.get("image_file_paths", {})
     images = {}
 
     for key, file_path in image_paths.items():

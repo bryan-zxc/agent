@@ -13,6 +13,8 @@ from fastmcp import FastMCP
 from ..services.llm_service import LLM
 from .image_utils import encode_image, decode_image, get_img_breakdown, is_image
 from ..models.agent_database import AgentDatabase
+from .sandbox import CodeSandbox
+import duckdb
 
 logger = logging.getLogger(__name__)
 
@@ -83,20 +85,30 @@ async def google_search(query: str) -> str:
         # Debug: Check environment and settings
         import os
         from ..config.settings import settings
-        
+
         gemini_key_from_env = os.getenv("GEMINI_API_KEY")
-        gemini_key_from_settings = getattr(settings, 'gemini_api_key', None)
-        
-        logger.info(f"[GOOGLE_SEARCH DEBUG] Environment GEMINI_API_KEY length: {len(gemini_key_from_env) if gemini_key_from_env else 0}")
-        logger.info(f"[GOOGLE_SEARCH DEBUG] Settings gemini_api_key length: {len(gemini_key_from_settings) if gemini_key_from_settings else 0}")
-        logger.info(f"[GOOGLE_SEARCH DEBUG] Settings gemini_api_key first 10 chars: {gemini_key_from_settings[:10] if gemini_key_from_settings else 'None'}")
-        
+        gemini_key_from_settings = getattr(settings, "gemini_api_key", None)
+
+        logger.info(
+            f"[GOOGLE_SEARCH DEBUG] Environment GEMINI_API_KEY length: {len(gemini_key_from_env) if gemini_key_from_env else 0}"
+        )
+        logger.info(
+            f"[GOOGLE_SEARCH DEBUG] Settings gemini_api_key length: {len(gemini_key_from_settings) if gemini_key_from_settings else 0}"
+        )
+        logger.info(
+            f"[GOOGLE_SEARCH DEBUG] Settings gemini_api_key first 10 chars: {gemini_key_from_settings[:10] if gemini_key_from_settings else 'None'}"
+        )
+
         # Use the existing LLM service which has search_web method
         llm = LLM(caller="tools")
-        
-        logger.info(f"[GOOGLE_SEARCH DEBUG] LLM providers initialized: {list(llm.providers.keys())}")
-        logger.info(f"[GOOGLE_SEARCH DEBUG] Google provider exists: {'google' in llm.providers}")
-        
+
+        logger.info(
+            f"[GOOGLE_SEARCH DEBUG] LLM providers initialized: {list(llm.providers.keys())}"
+        )
+        logger.info(
+            f"[GOOGLE_SEARCH DEBUG] Google provider exists: {'google' in llm.providers}"
+        )
+
         result = llm.search_web(query)
         return result
     except Exception as e:
@@ -425,28 +437,28 @@ def search_doc(question: str, criteria, doc):
                 and p.page_number <= criteria.page_end
             ):
                 # Exclude image data to reduce token usage in initial search
-                content.append({
-                    "type": "text",
-                    "text": f"{p.model_dump_json(exclude="images", indent=2)}"
-                })
+                content.append(
+                    {
+                        "type": "text",
+                        "text": f"{p.model_dump_json(exclude="images", indent=2)}",
+                    }
+                )
     else:
         # Search entire document if no page range specified
-        content.append({
-            "type": "text",
-            "text": f"{get_doc_json(doc, include_image=False)}"
-        })
+        content.append(
+            {"type": "text", "text": f"{get_doc_json(doc, include_image=False)}"}
+        )
 
     # Phase 2: Add search instructions and user question
-    content.append({
-        "type": "text",
-        "text": "Based completely on the above context, extract all the facts useful for providing a comprehensive answer to the user's question. "
-        "The facts will be presented as question answer pairs."
-    })
-    content.append({
-        "type": "text",
-        "text": question
-    })
-    
+    content.append(
+        {
+            "type": "text",
+            "text": "Based completely on the above context, extract all the facts useful for providing a comprehensive answer to the user's question. "
+            "The facts will be presented as question answer pairs.",
+        }
+    )
+    content.append({"type": "text", "text": question})
+
     # Build final messages list
     messages = [{"role": "user", "content": content}]
     llm = LLM(caller="tools")
@@ -650,7 +662,7 @@ async def set_plan_and_answer(
     from ..models.tasks import InitialExecutionPlan
     from ..utils.execution_plan_converter import (
         initial_plan_to_execution_plan_model,
-        execution_plan_model_to_markdown
+        execution_plan_model_to_markdown,
     )
 
     # Validate router_id was injected by hook
@@ -678,7 +690,7 @@ async def set_plan_and_answer(
             execution_plan=execution_plan_markdown,
             execution_plan_model=execution_plan_model.model_dump(),
             answer_template=answer_template,
-            execution_status="idle" if todos else "complete"  # No tasks means complete
+            execution_status="idle" if todos else "complete",  # No tasks means complete
         )
 
         if not success:
@@ -693,7 +705,7 @@ async def set_plan_and_answer(
         else:
             # Format todos with checkbox style
             todos_formatted = "\n".join([f"- [ ] {todo}" for todo in todos])
-            
+
             return f"""# Execution Plan
 
 ## Plan
@@ -712,6 +724,327 @@ async def set_plan_and_answer(
 
 # Set the docstring for the function (for documentation/IDE support)
 set_plan_and_answer.__doc__ = SET_PLAN_AND_ANSWER_DOC
+
+
+# Define docstring for execute_python
+EXECUTE_PYTHON_DOC = """Execute Python code in a sandboxed environment.
+
+Variables prefixed with 'output_' from previous executions are automatically available.
+You do not need to re-declare them, just use them directly.
+In general you should just print the output into stdout, however in the situations such as when the output is an image, dataframe, or other objects that should be programmatically accessed, you can save it into a variable prefixed with 'output_'.
+All variables prefixed with 'output_' will be automatically accessible in future executions.
+
+Parameters:
+----------
+code : str
+    Python code to execute. Can reference any previously saved variables.
+    Variables you want to persist should be prefixed with 'output_'.
+    Example:
+        df = pd.read_csv('data.csv')  # Temporary variable
+        output_processed = df.dropna()  # Will be saved automatically
+        output_stats = df.describe()    # Will be saved automatically
+
+Returns:
+-------
+str
+    Markdown-formatted execution result showing:
+    - The executed code
+    - Stdout output
+    - All available variables for future use with type info (on success)
+    - Error and stack trace (on failure)
+"""
+
+
+@mcp.tool(description=EXECUTE_PYTHON_DOC)
+async def execute_python(
+    code: str,
+    router_id: Optional[str] = None,
+) -> str:
+    import sys
+    import io
+    import traceback
+    from ..models.agent_database import AgentDatabase
+    from ..tasks.worker_tasks import process_output
+    from ..tasks.file_manager import get_planner_variables
+
+    try:
+        # Prepare globals with common imports pre-loaded
+        globals_dict = {
+            "__builtins__": __builtins__,
+        }
+
+        # Pre-import common libraries if available
+        common_imports = """
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from PIL import Image
+import json
+import re
+import datetime
+import math
+import random
+import os
+import sys
+"""
+        try:
+            exec(common_imports, globals_dict)
+        except ImportError as e:
+            logger.debug(f"Some common imports not available: {e}")
+
+        # Load previously saved variables from router
+        locals_dict = {}
+        try:
+            saved_vars = await get_planner_variables(router_id)
+            locals_dict.update(saved_vars)
+            if saved_vars:
+                logger.info(
+                    f"Loaded {len(saved_vars)} variables from previous executions"
+                )
+        except Exception as e:
+            logger.warning(f"Could not load previous variables: {e}")
+
+        # Create sandbox and execute
+        sandbox = CodeSandbox(globals_dict=globals_dict, locals_dict=locals_dict)
+        result = sandbox.execute(code)
+
+        if result["success"]:
+            # Process and save output_ variables to router
+            output_descriptions = []
+            db = await AgentDatabase.create()
+
+            for var_name, var_value in result["variables"].items():
+                if var_name.startswith("output_"):
+                    try:
+                        # Process the output (saves to router and returns formatted string)
+                        description = await process_output(
+                            var_value, var_name, router_id, db
+                        )
+                        output_descriptions.append(description)
+                    except Exception as e:
+                        logger.error(f"Failed to process output {var_name}: {e}")
+                        output_descriptions.append(f"{var_name}: Failed to save - {str(e)}")
+
+            # Build markdown response for success
+            response_parts = [
+                "## Executed Python Code",
+                "```python",
+                code,
+                "```",
+                "",
+                "## Stdout",
+                "```",
+                result["output"].rstrip() if result["output"] else "(no output)",
+                "```",
+                ""
+            ]
+
+            if output_descriptions:
+                response_parts.extend([
+                    "## Available Variables",
+                    "The following variables are now available for future use:",
+                    "```"
+                ])
+                response_parts.extend(output_descriptions)
+                response_parts.append("```")
+                logger.info(f"Processed {len(output_descriptions)} output variables")
+            else:
+                response_parts.extend([
+                    "## Available Variables",
+                    "No output_ variables were created."
+                ])
+
+            return "\n".join(response_parts)
+
+        else:
+            # Build markdown response for error
+            response_parts = [
+                "## Executed Python Code",
+                "```python",
+                code,
+                "```",
+                "",
+                "## Error",
+                "```",
+                result.get("error", "Unknown error"),
+                "```",
+                "",
+                "## Stack Trace",
+                "```",
+                result.get("stack_trace", "No stack trace available"),
+                "```",
+            ]
+
+            return "\n".join(response_parts)
+
+    except Exception as e:
+        logger.error(f"Execute Python error: {e}")
+        # Build markdown response for exception
+        response_parts = [
+            "## Executed Python Code",
+            "```python",
+            code,
+            "```",
+            "",
+            "## Error",
+            "```",
+            str(e),
+            "```",
+            "",
+            "## Stack Trace",
+            "```",
+            traceback.format_exc(),
+            "```",
+        ]
+
+        return "\n".join(response_parts)
+
+
+# Set the docstring for the function
+execute_python.__doc__ = EXECUTE_PYTHON_DOC
+
+
+# Define docstring for execute_sql
+EXECUTE_SQL_DOC = """Execute SQL query using DuckDB on available DataFrames.
+
+Any pandas DataFrames from previous executions are automatically registered as tables.
+Results are for display only and are not saved.
+
+Parameters:
+----------
+query : str
+    SQL query to execute. DataFrame variables are automatically available as tables.
+    Example:
+        SELECT * FROM output_sales_data WHERE amount > 1000
+        (assuming output_sales_data is a DataFrame from a previous execution)
+
+Returns:
+-------
+str
+    Markdown-formatted result containing:
+    - The executed query
+    - Result as formatted table (limited to 100 rows for display)
+    - Row count information
+    - Error message if query failed
+"""
+
+
+@mcp.tool(description=EXECUTE_SQL_DOC)
+async def execute_sql(query: str, router_id: Optional[str] = None) -> str:
+    """
+    Execute DuckDB SQL query on available DataFrames.
+    DataFrames are automatically registered as tables.
+    """
+    import traceback
+    from ..tasks.file_manager import get_planner_variables
+
+    try:
+        # Create in-memory DuckDB connection
+        conn = duckdb.connect(":memory:")
+
+        # Load and register DataFrames as tables from router
+        registered_tables = []
+        try:
+            saved_vars = await get_planner_variables(router_id)
+
+            # Register each DataFrame as a table
+            for var_name, var_value in saved_vars.items():
+                try:
+                    import pandas as pd
+
+                    if isinstance(var_value, pd.DataFrame):
+                        conn.register(var_name, var_value)
+                        registered_tables.append(var_name)
+                        logger.debug(f"Registered DataFrame '{var_name}' as SQL table")
+                except ImportError:
+                    pass
+
+            if registered_tables:
+                logger.info(f"Available tables: {', '.join(registered_tables)}")
+
+        except Exception as e:
+            logger.warning(f"Could not load DataFrames: {e}")
+
+        # Execute the query
+        try:
+            result = conn.execute(query)
+
+            # Get column names and rows
+            columns = (
+                [desc[0] for desc in result.description] if result.description else []
+            )
+            rows = result.fetchall()
+            row_count = len(rows)
+
+            # Format as markdown table
+            if rows:
+                # Create header
+                header = "| " + " | ".join(columns) + " |"
+                separator = "| " + " | ".join(["---"] * len(columns)) + " |"
+
+                # Format rows (limit to 100 for display)
+                display_rows = []
+                for row in rows[:100]:
+                    formatted_row = "| " + " | ".join(str(val) for val in row) + " |"
+                    display_rows.append(formatted_row)
+
+                output = "\n".join([header, separator] + display_rows)
+
+                if row_count > 100:
+                    output += (
+                        f"\n\n... and {row_count - 100} more rows (showing first 100)"
+                    )
+            else:
+                output = "Query executed successfully but returned no results."
+
+            # Build markdown response
+            response_parts = [
+                "## SQL Query",
+                "```sql",
+                query,
+                "```",
+                "",
+                f"## Results ({row_count} rows)",
+                output
+            ]
+
+            return "\n".join(response_parts)
+
+        except Exception as e:
+            # Build error response
+            return f"""## SQL Query
+```sql
+{query}
+```
+
+## Error
+```
+{str(e)}
+```"""
+
+        finally:
+            conn.close()
+
+    except Exception as e:
+        logger.error(f"Execute SQL error: {e}")
+        return f"""## SQL Query
+```sql
+{query}
+```
+
+## Error
+```
+{str(e)}
+```
+
+## Stack Trace
+```
+{traceback.format_exc()}
+```"""
+
+
+# Set the docstring for the function
+execute_sql.__doc__ = EXECUTE_SQL_DOC
 
 
 # Run as MCP server when called directly
