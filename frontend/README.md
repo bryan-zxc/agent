@@ -1,6 +1,6 @@
 # Frontend - Agent Chat Interface
 
-Next.js 15 application with shadcn/ui components providing a modern, accessible real-time chat interface for the AI agent system.
+Next.js 15 application with shadcn/ui components providing a modern, accessible real-time chat interface for the AI agent system with frontend-orchestrated execution.
 
 ## Structure
 
@@ -12,14 +12,13 @@ frontend/
 │   │   ├── layout.tsx    # Root layout with fonts
 │   │   └── globals.css   # Global styles with CSS variables
 │   ├── components/        # Modular React components
-│   │   ├── ChatInterface.tsx    # Main orchestrator (70 lines)
+│   │   ├── ChatInterface.tsx    # Main orchestrator
 │   │   ├── ChatHeader.tsx       # Header with connection status
 │   │   ├── MessageList.tsx      # Message display and scrolling
 │   │   ├── MessageInput.tsx     # Auto-resizing input with shortcuts
 │   │   ├── FileAttachment.tsx   # File upload with drag-and-drop
 │   │   ├── ErrorBoundary.tsx    # Error handling and recovery
-│   │   ├── ModeToggle.tsx       # Mode selector (auto/rapid/agent)
-│   │   └── PhaseToggle.tsx      # Phase selector for agent mode
+│   │   └── ModeToggle.tsx       # Mode selector (auto/agent)
 │   ├── hooks/            # Custom React hooks
 │   │   └── useWebSocket.ts    # WebSocket connection hook
 │   ├── lib/              # Utility functions
@@ -27,22 +26,36 @@ frontend/
 │   └── stores/           # Zustand state management
 │       └── chatStore.ts      # Chat state and actions
 ├── components.json       # shadcn/ui configuration
-├── package.json          # Node.js dependencies with shadcn/ui
+├── package.json          # Node.js dependencies
 ├── tailwind.config.ts    # Tailwind with design tokens
 ├── tsconfig.json         # TypeScript configuration
 └── Dockerfile           # Container configuration
 ```
+
+## Architecture Overview
+
+### Frontend-Orchestrated Execution
+The frontend controls the entire execution flow:
+1. Sends messages to backend via WebSocket
+2. Receives status updates and tool requests
+3. Orchestrates MCP tool execution
+4. Displays real-time progress and results
+
+### Key Changes from Previous Architecture
+- No planner entities or planner display components
+- No background task queue polling
+- Direct synchronous execution through MCP tools
+- Simplified state management without planner tracking
 
 ## Features
 
 ### Real-time Chat Interface
 - **WebSocket communication** - Instant messaging with automatic reconnection
 - **File upload support** - Drag-and-drop or click to upload images, PDFs, CSVs
-- **Status indicators** - Real-time agent processing status with animations
+- **Status indicators** - Real-time agent processing status
 - **Message history** - Persistent router display with timestamps
-- **Auto-scroll** - Automatically scrolls to latest messages with smooth behavior
-- **Mode selection** - Choose between auto, rapid, and agent processing modes
-- **Phase toggle** - Switch between plamarination and execution phases in agent mode
+- **Auto-scroll** - Automatically scrolls to latest messages
+- **Mode selection** - Choose between auto and agent processing modes
 
 ### Modern User Experience
 - **Mobile-first responsive design** - Progressive enhancement from mobile to desktop
@@ -57,28 +70,23 @@ frontend/
 ### Design System
 - **shadcn/ui components** - Modern, accessible component library
 - **CSS variables** - Consistent theming with dark/light mode support
-- **Design tokens** - Systematic color, spacing, and typography scales
-- **Component modularity** - 6 focused components vs monolithic approach
-- **Shading-based UI** - Uses background colors (bg-muted, bg-primary) instead of borders
+- **Design tokens** - Systematic colour, spacing, and typography scales
+- **Component modularity** - Focused components vs monolithic approach
+- **Shading-based UI** - Uses background colours instead of borders
 
-### Modes and Phases
-The interface supports three processing modes with intelligent routing:
+### Processing Modes
+The interface supports two primary processing modes:
 
-#### Processing Modes
-- **Auto Mode** (Default) - Intelligently routes between simple and complex processing
-- **Rapid Mode** - Fast, lightweight responses without deep analysis
-- **Agent Mode** - Advanced processing with explicit planning and execution phases
+#### Auto Mode (Default)
+- Intelligently routes between simple and complex processing
+- Simple queries get immediate responses
+- Complex queries trigger agent mode with MCP tools
 
-#### Agent Mode Phases
-When in agent mode, users can toggle between:
-- **Plamarination Phase** - Research, analysis, and planning before execution
-  - Automatically continues research cycles without user intervention
-  - Frontend receives `continue_plamarination_signal` and responds automatically
-  - User sees all intermediate results but doesn't need to manually continue
-  - Only waits for user input when clarification is needed
-- **Execution Phase** - Direct task execution without planning overhead
-
-The phase toggle only appears when agent mode is active. Phase defaults to null and is automatically set to "plamarination" when entering agent mode.
+#### Agent Mode
+- Advanced processing with MCP tool execution
+- Frontend orchestrates tool calls
+- Real-time status updates during execution
+- Direct synchronous processing
 
 ## Development Setup
 
@@ -92,10 +100,10 @@ The phase toggle only appears when agent mode is active. Phase defaults to null 
    ```bash
    npm install
    ```
-   
+
    This installs:
    - Next.js 15 with App Router
-   - shadcn/ui dependencies (@radix-ui/react-slot, class-variance-authority, clsx, tailwind-merge)
+   - shadcn/ui dependencies (@radix-ui components)
    - Lucide React icons
    - Zustand for state management
 
@@ -123,304 +131,142 @@ npm start
 
 ## Component Architecture
 
-### ChatInterface.tsx (Main Orchestrator - 70 lines)
+### ChatInterface.tsx (Main Orchestrator)
 Coordinates all components and handles:
 - File upload processing and API calls
 - WebSocket integration via useWebSocket hook
 - Error boundary wrapping
 - Component composition and data flow
+- MCP tool orchestration
 
-### ChatHeader.tsx (Header Component - 29 lines)
+### ChatHeader.tsx (Header Component)
 Header with connection status display:
-- Connection indicator (green/red dot with animation)
+- Connection indicator (green/red dot)
 - Live connection status text
 - Proper ARIA labels and semantic header role
-- Responsive design with consistent spacing
 
-### MessageList.tsx (Message Display - 79 lines)
+### MessageList.tsx (Message Display)
 Message display and router management:
 - Auto-scrolling to latest messages
-- Message bubbles with proper alignment (user/assistant)
-- Timestamp display with proper time formatting
+- Message bubbles with proper alignment
+- Timestamp display
 - File attachment indicators
 - Status indicators with loading animations
-- Semantic article structure for each message
 
-### MessageInput.tsx (Input Component - 99 lines)
+### MessageInput.tsx (Input Component)
 Advanced input handling:
-- Auto-resizing textarea that grows with content
-- Keyboard shortcuts (Enter to send, Shift+Enter for new line)
-- File attachment integration
-- Send button with loading states
-- Form validation and error handling
-- Accessibility labels and proper form structure
+- Auto-resizing textarea
+- File attachment display
+- Keyboard shortcuts (Enter to send)
+- Disabled state during processing
 
-### FileAttachment.tsx (File Upload - 78 lines)
-File upload and management:
-- Drag-and-drop file selection
-- Multiple file support with preview
-- File type validation (images, PDFs, CSVs)
-- Individual file removal capability
-- Accessible file input with proper labeling
-- File size and type display
+### FileAttachment.tsx (File Handler)
+File upload management:
+- Drag-and-drop support
+- File type validation
+- Preview of selected files
+- Remove file capability
 
-### ErrorBoundary.tsx (Error Handling - 69 lines)
-Comprehensive error handling:
-- Catches and displays React component errors
-- User-friendly error messages
-- Reset functionality to recover from errors
-- Development error details (stack traces)
-- Accessible error display with proper ARIA roles
-
-### useWebSocket.ts Hook (Custom Hook)
-WebSocket connection management:
-- Automatic connection lifecycle management
-- Message sending and receiving
-- Connection status tracking with live updates
-- Automatic reconnection on disconnect
-- Error handling and status updates
-
-### chatStore.ts (Zustand State)
-Global state management:
-- Chat messages array with proper typing
-- Agent status and processing state
-- Connection status tracking
-- Model and temperature settings
-- TypeScript interfaces for type safety
+### ModeToggle.tsx (Mode Selector)
+Processing mode selection:
+- Toggle between auto and agent modes
+- Visual mode indicators
+- Status-aware disabling
 
 ## State Management
 
-### Chat Store Structure
+### Zustand Store (chatStore.ts)
+Centralised state management for:
+- Messages array
+- Router ID
+- Connection status
+- Processing status
+- Selected files
+- Current mode
+
+### WebSocket Hook (useWebSocket.ts)
+Manages WebSocket lifecycle:
+- Automatic connection on mount
+- Reconnection logic
+- Message handling
+- Status updates
+- Tool execution coordination
+
+## WebSocket Protocol
+
+### Message Types
 ```typescript
-interface ChatStore {
-  messages: ChatMessage[];
-  status: AgentStatus;
-  isConnected: boolean;
-  temperature: number;
-  
-  // Actions
-  addMessage: (message: ChatMessage) => void;
-  updateStatus: (status: AgentStatus) => void;
-  setConnected: (connected: boolean) => void;
-  // ... other actions
-}
-```
-
-### Message Flow
-1. User types message and selects files
-2. Files uploaded to backend via HTTP POST
-3. Message sent via WebSocket with file paths
-4. Agent responses received and displayed
-5. Status updates shown during processing
-
-## Design System
-
-### shadcn/ui + Tailwind CSS
-- **Component library**: shadcn/ui for consistent, accessible components
-- **Design tokens**: CSS variables for systematic theming
-- **Utility-first**: Tailwind CSS for rapid styling
-- **Mobile-first**: Progressive enhancement from mobile to desktop
-- **Accessibility**: WCAG-compliant components with proper ARIA support
-
-### CSS Variable System
-```css
-:root {
-  --background: 0 0% 100%;           /* Base background */
-  --foreground: 222.2 84% 4.9%;      /* Text color */
-  --primary: 221.2 83.2% 53.3%;      /* Primary brand color */
-  --secondary: 210 40% 96%;          /* Secondary backgrounds */
-  --muted: 210 40% 96%;              /* Muted content */
-  --border: 214.3 31.8% 91.4%;      /* Border colors */
-  /* ... additional design tokens */
-}
-```
-
-### Component Styling Patterns
-- **User messages**: Primary color background, right-aligned with proper contrast
-- **Agent messages**: Card background with border, left-aligned with semantic structure
-- **Status indicators**: Animated spinner with accessible loading states
-- **File attachments**: Secondary background tags with removal buttons
-- **Interactive elements**: Focus rings, hover states, disabled states
-- **Responsive breakpoints**: sm, md, lg classes for progressive enhancement
-
-### Accessibility Features
-- **Semantic HTML**: Proper header, main, footer, article structure
-- **ARIA labels**: Screen reader support for all interactive elements
-- **Focus management**: Visible focus rings and logical tab order
-- **Color contrast**: WCAG AA compliant color combinations
-- **Keyboard navigation**: Full keyboard accessibility
-
-## API Integration
-
-### WebSocket Messages
-
-#### Sending Messages
-Sends JSON to `ws://localhost:8000/chat`:
-```typescript
+// User message
 {
   type: "message",
-  message: string;
-  files: string[];
-  temperature: number;
-  mode?: string;  // Current mode (auto/rapid/agent)
-  router_id?: string;  // For continuing existing conversation
+  message: string,
+  files?: string[],
+  router_id?: string
 }
-```
 
-#### Receiving Messages
-Frontend handles these message types from backend:
-
-**Assistant Response**
-```typescript
-{
-  type: "response",
-  message: string;
-  message_id?: number;  // Database message ID
-  router_id: string;
-}
-```
-
-**Status Update**
-```typescript
+// Status update
 {
   type: "status",
-  message: string;  // "Thinking...", "Processing...", etc.
-  router_id?: string;
+  status: "thinking" | "executing" | "active",
+  router_id: string
 }
-```
 
-**Continuation Signal** (Plamarination Auto-continuation)
-```typescript
+// Tool execution request
 {
-  type: "continue_plamarination_signal",
-  router_id: string;
+  type: "tool_call",
+  tool: string,
+  arguments: object,
+  router_id: string
 }
-// Frontend automatically responds with:
-{
-  type: "continue_plamarination",
-  router_id: string;
-}
-```
 
-**Mode/Phase Updates**
-```typescript
+// Mode update
 {
   type: "mode_updated",
-  mode: "auto" | "rapid" | "agent";
-}
-{
-  type: "phase_updated",
-  agent_phase: "plamarination" | "execution";
+  mode: "auto" | "agent",
+  router_id: string
 }
 ```
 
-**Approval Request** (Plamarination Complete)
-```typescript
-{
-  type: "approval_request",
-  request_id: string;
-  plan: string;
-  template: string;
-  findings: string;
-  router_id: string;
-}
-```
+## Testing
 
-### File Upload
-HTTP POST to `/upload` endpoint:
-```typescript
-const formData = new FormData();
-formData.append('file', file);
-fetch('/upload', { method: 'POST', body: formData });
-```
-
-## Configuration
-
-### Environment Variables
-- `NEXT_PUBLIC_API_URL` - Backend HTTP URL (default: http://localhost:8000)
-- `NEXT_PUBLIC_WS_URL` - Backend WebSocket URL (default: ws://localhost:8000)
-- `NODE_ENV` - Environment (development/production)
-
-### TypeScript Configuration
-- **Strict mode enabled** for type safety
-- **Path aliases** configured (@/* for src/*)
-- **Shared types** imported from ../shared/types
-
-## Development Workflow
-
-### Adding New Components
-1. Create component in `src/components/` following the pattern:
-   ```typescript
-   'use client';
-   
-   import { cn } from '@/lib/utils';
-   import { ComponentProps } from '../../../shared/types';
-   
-   export const NewComponent: React.FC<ComponentProps> = ({ className, ...props }) => {
-     return (
-       <div className={cn("base-styles", className)} {...props}>
-         {/* Component content */}
-       </div>
-     );
-   };
-   ```
-
-2. Use shadcn/ui patterns and TypeScript interfaces
-3. Implement proper accessibility (ARIA labels, semantic HTML)
-4. Follow component size guidelines (< 100 lines when possible)
-
-### Extending Chat Features
-1. Update shared types in `../../../shared/types/index.ts`
-2. Modify `chatStore.ts` for new state management
-3. Create focused components for new features (don't extend existing ones)
-4. Add error boundaries around new functionality
-5. Test accessibility and responsive design
-
-### Styling Guidelines
-- **Use shadcn/ui components** as foundation, extend with Tailwind utilities
-- **CSS variables**: Prefer design tokens over hardcoded colors
-- **Mobile-first**: Start with mobile styles, enhance for larger screens
-- **Accessibility**: Always include focus states, ARIA labels, semantic HTML
-- **Component patterns**: Use `cn()` helper for conditional classes
-
-## Docker Development
-
-Build and run with Docker:
+Run the test suite:
 ```bash
-docker build -t agent-frontend .
-docker run -p 3000:3000 agent-frontend
+npm test
 ```
 
-Or use docker-compose from the root directory:
+Run linting:
 ```bash
-docker-compose up frontend
+npm run lint
 ```
 
-## Available Scripts
+## Performance Optimisations
 
-- `npm run dev` - Start development server
-- `npm run build` - Build for production
-- `npm run start` - Start production server
-- `npm run lint` - Run ESLint
-- `npm run type-check` - Run TypeScript compiler check
+- Component memoisation where appropriate
+- Virtual scrolling for long message lists (future)
+- Debounced input handling
+- Lazy loading of components
+- Image optimisation with Next.js Image
 
-## Troubleshooting
+## Accessibility
 
-### Common Issues
-1. **WebSocket connection fails** - Check backend is running on port 8000
-2. **File upload errors** - Verify CORS settings on backend
-3. **Type errors** - Ensure shared types are properly imported
-4. **Styling issues** - Check TailwindCSS configuration
+- ARIA labels on all interactive elements
+- Keyboard navigation support
+- Screen reader announcements
+- Focus management
+- Semantic HTML structure
+- Colour contrast compliance
 
-### Hot Reload
-Next.js automatically reloads on file changes. If it stops working:
-```bash
-rm -rf .next
-npm run dev
-```
+## Browser Support
 
-### Network Issues
-Check browser console for WebSocket connection errors:
-- Ensure backend WebSocket endpoint is accessible
-- Verify no firewall blocking connections
-- Check browser WebSocket support
+- Chrome 90+
+- Firefox 88+
+- Safari 14+
+- Edge 90+
+
+## Future Enhancements
+
+- Execution plan display UI (when router.execution_plan is available)
+- Message search and filtering
+- Export conversation history
+- Voice input/output
+- Mobile application

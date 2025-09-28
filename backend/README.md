@@ -1,16 +1,22 @@
 # Backend - Agent System API
 
-FastAPI-based backend server that handles WebSocket communication, file processing, and AI agent orchestration.
+FastAPI-based backend server that handles WebSocket communication, file processing, and AI agent orchestration using frontend-orchestrated synchronous execution.
 
 ## Structure
 
 ```
 backend/
-├── src/agent/              # Core agent system (existing codebase)
-│   ├── agents/            # PlannerAgent and WorkerAgents
-│   ├── core/              # Router operations and base classes
+├── src/agent/              # Core agent system
+│   ├── core/              # Router operations
+│   ├── tasks/             # Worker task execution
 │   ├── models/            # Pydantic schemas and database models
-│   ├── services/          # LLM, document, and image processing services
+│   ├── services/          # LLM, MCP, and processing services
+│   │   ├── llm/          # LLM integration and MCP tools
+│   │   │   ├── llm_service.py     # LLM API wrapper
+│   │   │   ├── mcp_manager.py     # MCP tool management
+│   │   │   ├── agent_tools.py     # Tool definitions
+│   │   │   └── tool_hooks.py      # Pre/post processing
+│   │   └── image_service.py       # Image processing
 │   ├── security/          # Security guardrails
 │   └── utils/             # Utility functions and tools
 ├── main.py                # FastAPI server entry point
@@ -28,10 +34,26 @@ backend/
 - **Router API** (`/routers/{router_id}`) - Get router history
 
 ### Agent System (src/agent/)
-- **Router Operations** - WebSocket-enabled chat interface with intelligent routing (functional architecture)
-- **PlannerAgent** - Breaks down complex tasks into subtasks (activated automatically)
-- **WorkerAgents** - Execute individual tasks (general and SQL-specialized)
-- **Database Layer** - SQLite-based router persistence with mode/phase tracking
+- **Router Operations** - WebSocket-enabled chat interface with MCP tool execution
+- **MCP Tools** - execute_python, execute_sql, set_plan_and_answer
+- **Tool Hooks** - Context injection and status management
+- **Worker Execution** - Synchronous task execution
+- **Database Layer** - SQLite-based router persistence with execution plans
+
+## Architecture Overview
+
+### Frontend-Orchestrated Execution
+The system uses frontend-orchestrated synchronous execution where:
+1. Frontend controls the execution flow via WebSocket
+2. Router handles requests directly through MCP tools
+3. No background processing or task queues
+4. All operations are synchronous and immediate
+
+### MCP Tool System
+- **execute_python** - Run Python code for analysis
+- **execute_sql** - Execute SQL queries on data
+- **set_plan_and_answer** - Store execution plans and answers
+- **Tool Hooks** - Pre/post processing for context and status
 
 ## Development Setup
 
@@ -78,7 +100,7 @@ Connect to `ws://localhost:8000/chat` and send JSON messages:
 ```json
 {
   "type": "message",
-  "message": "Analyze this sales data",
+  "message": "Analyse this sales data",
   "files": ["uploads/sales_data.csv"],
   "router_id": "uuid"  // Optional - for continuing existing conversation
 }
@@ -110,7 +132,7 @@ Connect to `ws://localhost:8000/chat` and send JSON messages:
 ```json
 {
   "type": "status",
-  "message": "Thinking...",
+  "status": "thinking|executing|active",
   "router_id": "uuid"
 }
 ```
@@ -125,44 +147,31 @@ Connect to `ws://localhost:8000/chat` and send JSON messages:
 }
 ```
 
-**Plamarination Continuation Signal** (Auto-continuation)
-```json
-{
-  "type": "continue_plamarination_signal",
-  "router_id": "uuid"
-}
-```
-Frontend automatically responds with:
-```json
-{
-  "type": "continue_plamarination",
-  "router_id": "uuid"
-}
-```
-
-**Approval Request** (Plamarination complete)
-```json
-{
-  "type": "approval_request",
-  "request_id": "req_uuid",
-  "plan": "Execution plan details",
-  "template": "Template to be used",
-  "findings": "Research findings",
-  "router_id": "uuid"
-}
-```
-
-**Mode/Phase Updates**
+**Mode Updates**
 ```json
 {
   "type": "mode_updated",
-  "mode": "auto|rapid|agent"
+  "mode": "auto|agent",
+  "router_id": "uuid"
 }
 ```
+
+**Phase Updates**
 ```json
 {
   "type": "phase_updated",
-  "agent_phase": "plamarination|execution"
+  "agent_phase": "planning|executing|null",
+  "router_id": "uuid"
+}
+```
+
+**Tool Execution**
+```json
+{
+  "type": "tool_call",
+  "tool": "execute_python",
+  "arguments": {...},
+  "router_id": "uuid"
 }
 ```
 
@@ -172,239 +181,123 @@ Frontend automatically responds with:
   "type": "error",
   "message": "Error details"
 }
+```
 
 ### HTTP Endpoints
 
 - `POST /upload` - Upload files for analysis
 - `GET /health` - Health check
 - `GET /routers/{router_id}` - Get specific router history
+- `GET /usage` - Get LLM usage statistics
 
 ## Agent Flow
 
-### Modes and Phases Architecture
-The system operates with three primary modes and two agent-specific phases:
+### Processing Modes
 
-#### Processing Modes
 1. **Auto Mode** (Default)
-   - Intelligent routing based on request complexity
-   - Simple requests → Direct response via simple chat
-   - Complex requests → Automatically triggers agent mode with plamarination phase
+   - Simple requests → Direct LLM response
+   - Complex requests → Triggers agent mode with MCP tools
    - Files attached → Typically triggers agent mode
 
-2. **Rapid Mode**
-   - Fast, lightweight responses without agent processing
-   - Always uses simple chat, bypassing all agent assessment
-   - No file processing capabilities
-   - Warns users when questions may need deeper analysis
+2. **Agent Mode**
+   - Frontend orchestrates tool execution
+   - Uses MCP tools for processing
+   - Synchronous execution with real-time updates
 
-3. **Agent Mode**
-   - Advanced processing with explicit planning and execution phases
-   - Always involves deeper analysis and tool usage
-   - Supports complex multi-step operations
-   - Two distinct phases: Plamarination and Execution
+### Execution Flow
 
-#### Agent Mode Phases
-When in agent mode, the system operates in one of two phases:
-
-**Plamarination Phase** (Default for agent mode):
-- Thoroughly analyses the request and any attached files
-- Researches using available tools (file reading, web search, etc.)
-- Builds comprehensive context
-- Generates a structured execution plan
-- Presents plan for user approval
-
-**Automatic Continuation in Plamarination**:
-The plamarination phase uses an intelligent continuation mechanism:
-1. After each research step, GPT-5-mini determines if more research is needed
-2. If continuing: Backend sends `continue_plamarination_signal`
-3. Frontend automatically sends `continue_plamarination` request
-4. Research continues without user intervention
-5. If user input needed: System waits for response (no signal sent)
-
-This creates seamless research cycles where:
-- Tool calls always trigger continuation (research incomplete by definition)
-- Text responses may continue research OR wait for user input
-- User sees all intermediate results but doesn't need to manually continue
-
-**Execution Phase**:
-- Skips plamarination entirely
-- Immediately proceeds to handle_complex_request
-- Executes task with available tools
-- Returns results directly
-
-### Message Routing Logic
-The `handle_message` function routes based on **status first**, then mode and phase:
-
-1. **Check router status** (prevents double-triggering):
-   - `plamarinating` → Return immediately (no trigger)
-   - `plamarinating_awaiting_user` → Process user input, continue planning
-   - `awaiting_approval` → Handle approval/rejection
-   - `executing` → Execution in progress
-   - `active` → Check mode for new request routing
-
-2. **When status is active, check router mode**:
-   - `rapid` → Always simple chat
-   - `agent` → Invalid state (raises error)
-   - `auto` → Assess complexity
-
-### Processing Pipeline
-1. **WebSocket Connection** - Frontend connects with router ID
-2. **Message Handling** - Router receives and stores user message
-3. **Route Decision** - Simple chat OR complex analysis
-4. **Processing** - Direct LLM response OR PlannerAgent → WorkerAgents
-5. **Response** - Store and send result via WebSocket
-
-### WebSocket Message Formats
-
-#### Mode Change
-```json
-{
-  "type": "update_mode",
-  "router_id": "uuid",
-  "mode": "auto|rapid|agent"
-}
+```
+User Message
+    ↓
+Router Assessment
+    ↓
+Simple Chat OR Agent Mode
+    ↓
+[Agent Mode]
+    ↓
+Frontend Orchestration
+    ↓
+MCP Tool Execution
+    ↓
+Result Processing
+    ↓
+Response to User
 ```
 
-#### Phase Change (Agent Mode Only)
-```json
-{
-  "type": "update_phase",
-  "router_id": "uuid",
-  "agent_phase": "plamarination|execution"
-}
-```
+### Status Flow
 
-#### Status Updates
-```json
-{
-  "type": "status",
-  "router_id": "uuid",
-  "status": "active|plamarinating|executing|awaiting_approval|..."
-}
-```
+- `idle` - No active conversation
+- `active` - Processing message
+- `thinking` - Generating response
+- `executing` - Running MCP tools
+- `plamarinating_awaiting_user` - Plan awaiting approval (future feature)
 
-#### Execution Flow Messages
+## Database Schema
 
-##### Start Execution (After Approval)
-```json
-{
-  "type": "start_execution",
-  "next_action": "task_creation",
-  "router_id": "uuid"
-}
-```
+### Core Tables
 
-##### Execution Complete
-```json
-{
-  "type": "execution_complete",
-  "router_id": "uuid",
-  "final_answer": "Completed answer content..."
-}
-```
+- **routers** - Conversation state and execution plans
+- **router_messages** - Message history
+- **workers** - Worker task state
+- **worker_messages** - Worker execution logs
 
-### Agent Execution Flow
+### Deprecated Tables (Commented Out)
+- ~~task_queue~~ - No longer used
+- ~~planners~~ - Router handles plans directly
+- ~~planner_messages~~ - Unified into router messages
 
-The agent system follows a strict phase-based execution model with user approval boundaries:
+## Testing
 
-#### 1. Plamarination Phase
-- **Activation**: User switches to agent mode
-- **Phase**: `agent_phase = "plamarination"`
-- **Process**: System researches and creates execution plan
-- **Completion**: Calls `set_plan_and_answer` tool
-- **Status**: `plamarinating_awaiting_user`
-
-#### 2. Approval Boundary (Critical)
-- **User Action**: Sends `approval_response` message
-- **Decision**:
-  - `approved: true` → Phase transition to execution
-  - `approved: false` → Continue plamarination with feedback
-
-#### 3. Execution Phase
-- **Transition**: System updates `agent_phase = "execution"`
-- **Start Signal**: Frontend receives `start_execution` with `next_action: "task_creation"`
-- **Frontend Loop**:
-  ```
-  while (action != "complete") {
-    response = await execute_function(action)
-    action = response.next_action or response.status
-  }
-  ```
-- **Functions Called**:
-  - `task_creation` → Creates workers
-  - `worker_init` → Initialises worker
-  - `worker_execute` → Runs worker task
-  - `synthesis` → Merges results
-
-#### 4. Completion
-- **Signal**: `synthesis` returns `{"status": "complete", "final_answer": "..."}`
-- **Transition**: System returns to `mode: "auto"`, `agent_phase: null`
-- **Frontend**: Receives `execution_complete` message with final answer
-
-**Important**: The system respects user control - execution NEVER starts without explicit approval.
-
-### Database Schema
-The Router table includes:
-- `mode`: String(10) - "auto", "rapid", or "agent"
-- `agent_phase`: String(20) - "plamarination" or "execution" (NULL by default, only set when agent mode is active)
-- `status`: String(50) - Current processing status
-
-## Configuration
-
-### Environment Variables
-- `PYTHONPATH` - Python module path (should include `src/`)
-- `ENVIRONMENT` - Runtime environment (development/production)
-
-### Dependencies (pyproject.toml)
-- **FastAPI** - Web framework and WebSocket support
-- **Anthropic/OpenAI** - LLM service clients
-- **PyMuPDF** - PDF processing
-- **Pillow** - Image processing
-- **SQLAlchemy** - Database ORM
-- **Pydantic** - Data validation and serialization
-
-## Development Notes
-
-### Adding New Endpoints
-1. Add route handlers to `main.py`
-2. Define Pydantic models for request/response
-3. Update CORS settings if needed
-
-### Extending Agent Capabilities
-1. Modify trigger detection in `router_operations.py`
-2. Add new instruction templates
-3. Create specialized `WorkerAgent` subclasses
-
-### Database Integration
-- **SQLite**: Default database with router persistence
-- **Tables**: Routers, RouterMessage, PlannerMessage, WorkerMessage
-- **Location**: `/Users/bryanye/agent/db/agent_messages.db` (configurable)
-- **Migration**: Can be upgraded to PostgreSQL for production scalability
-
-## Docker Development
-
-Build and run with Docker:
+Run the test suite:
 ```bash
-docker build -t agent-backend .
-docker run -p 8000:8000 agent-backend
+uv run pytest tests/
 ```
 
-Or use docker-compose from the root directory:
-```bash
-docker-compose up backend
-```
+Key test areas:
+- Router operations
+- MCP tool execution
+- WebSocket communication
+- Database operations
+- Worker task execution
 
-## Troubleshooting
+## Environment Variables
 
-### Common Issues
-1. **Import errors** - Ensure `PYTHONPATH` includes `src/` directory
-2. **Port conflicts** - Change port in `main.py` if 8000 is occupied
-3. **WebSocket connections** - Check CORS settings for frontend origin
-4. **File upload errors** - Verify `uploads/` directory permissions
+Required environment variables:
+- `ENVIRONMENT` - development|production
+- `OPENAI_API_KEY` - OpenAI API key
+- `ANTHROPIC_API_KEY` - Anthropic API key (optional)
+- `GROQ_API_KEY` - Groq API key (optional)
 
-### Logs
-Server logs are written to stdout. In production, configure proper logging:
-```python
-import logging
-logging.basicConfig(level=logging.INFO)
-```
+Optional MCP server configuration:
+- `GITHUB_PERSONAL_ACCESS_TOKEN` - For GitHub MCP server
+- `MCP_CONFIG_PATH` - Path to MCP config file
+
+## Migration Notes
+
+### From Background Processor to Frontend Orchestration
+- Task queue removed completely
+- Planner entities no longer created
+- Router stores execution plans directly
+- All execution is synchronous
+- Frontend controls execution flow
+
+### Database Changes
+- Router table has `execution_plan` field
+- TaskQueue table deprecated
+- Planner tables commented out
+- Message tables consolidated
+
+## Performance
+
+- Simple chat: <100ms response time
+- Tool execution: 1-5 seconds per tool
+- Complex workflows: 10-30 seconds total
+- WebSocket: Real-time bidirectional updates
+
+## Security
+
+- Input validation on all endpoints
+- File upload restrictions
+- MCP tool sandboxing
+- Database query parameterisation
+- WebSocket rate limiting
