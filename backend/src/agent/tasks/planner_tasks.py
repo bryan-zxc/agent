@@ -9,6 +9,7 @@ its state through the file system and database.
 import uuid
 import logging
 import duckdb
+import json
 from pathlib import Path
 from typing import Optional, List, Union
 from PIL import Image
@@ -804,9 +805,7 @@ async def execute_task_creation(task_data: dict):
 
         # Save task to router's current_task field
         await db.update_router(
-            router_id,
-            current_task=task.model_dump(),
-            execution_status="task_created"
+            router_id, current_task=task.model_dump(), execution_status="task_created"
         )
 
         # Generate worker_id for this task
@@ -821,7 +820,7 @@ async def execute_task_creation(task_data: dict):
             "next_action": "worker_initialisation",
             "worker_id": worker_id,
             "router_id": router_id,
-            "task": task.model_dump()
+            "task": task.model_dump(),
         }
 
     except Exception as e:
@@ -1060,7 +1059,7 @@ async def execute_synthesis(task_data: dict):
                     await db.update_router(
                         router_id,
                         answer_template=updated_template,
-                        wip_answer=updated_wip_template
+                        wip_answer=updated_wip_template,
                     )
 
                     logger.info(f"Updated answer template for router {router_id}")
@@ -1194,17 +1193,19 @@ async def execute_synthesis(task_data: dict):
                         f"No more todos available for router {router_id} - execution complete"
                     )
                     # Save final execution plan to router
-                    execution_plan_markdown = execution_plan_model_to_markdown(final_model)
+                    execution_plan_markdown = execution_plan_model_to_markdown(
+                        final_model
+                    )
                     await db.update_router(
                         router_id,
                         execution_plan=execution_plan_markdown,
                         execution_plan_model=final_model.model_dump(),
-                        execution_status="complete"
+                        execution_status="complete",
                     )
                     return {
                         "status": "complete",
                         "router_id": router_id,
-                        "final_answer": updated_wip_template
+                        "final_answer": updated_wip_template,
                     }
 
                 # Save updated execution plan (only if not completed)
@@ -1213,7 +1214,7 @@ async def execute_synthesis(task_data: dict):
                     router_id,
                     execution_plan=execution_plan_markdown,
                     execution_plan_model=final_model.model_dump(),
-                    execution_status="ready_for_task"
+                    execution_status="ready_for_task",
                 )
 
                 logger.info(f"Execution plan updated for router {router_id}")
@@ -1235,12 +1236,19 @@ async def execute_synthesis(task_data: dict):
                             variable = load_variable_from_file(file_path)
                             if variable is not None:
                                 # Save to router's variable collection
-                                variable_file_paths = router_data.get("variable_file_paths", {})
+                                variable_file_paths = router_data.get(
+                                    "variable_file_paths", {}
+                                )
                                 # Generate path and save file
-                                new_path, _ = generate_variable_path(router_id, key, check_existing=True)
+                                new_path, _ = generate_variable_path(
+                                    router_id, key, check_existing=True
+                                )
                                 if save_variable_to_file(new_path, variable):
                                     variable_file_paths[key] = new_path
-                                    await db.update_router(router_id, variable_file_paths=variable_file_paths)
+                                    await db.update_router(
+                                        router_id,
+                                        variable_file_paths=variable_file_paths,
+                                    )
                                     logger.info(
                                         f"Merged worker variable '{key}' into router {router_id}"
                                     )
@@ -1262,12 +1270,18 @@ async def execute_synthesis(task_data: dict):
                             image = load_image_from_file(file_path)
                             if image is not None:
                                 # Save to router's image collection
-                                image_file_paths = router_data.get("image_file_paths", {})
+                                image_file_paths = router_data.get(
+                                    "image_file_paths", {}
+                                )
                                 # Generate path and save file
-                                new_path, final_name = generate_image_path(router_id, key, check_existing=True)
+                                new_path, final_name = generate_image_path(
+                                    router_id, key, check_existing=True
+                                )
                                 if save_image_to_file(new_path, image):
                                     image_file_paths[final_name] = new_path
-                                    await db.update_router(router_id, image_file_paths=image_file_paths)
+                                    await db.update_router(
+                                        router_id, image_file_paths=image_file_paths
+                                    )
                                     logger.info(
                                         f"Merged worker image '{key}' into router {router_id}"
                                     )
@@ -1290,10 +1304,7 @@ async def execute_synthesis(task_data: dict):
         logger.info(f"Synthesis completed for router {router_id}")
 
         # Return next action for frontend to execute
-        return {
-            "next_action": "task_creation",
-            "router_id": router_id
-        }
+        return {"next_action": "task_creation", "router_id": router_id}
 
     except Exception as e:
         logger.error(f"Synthesis failed for router {router_id}: {e}")
