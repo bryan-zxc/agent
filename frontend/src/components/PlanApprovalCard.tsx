@@ -12,13 +12,13 @@ export interface ApprovalData {
   plan: string;
   template?: string;
   findings?: string;
-  requestId: string;
+  routerId: string;
 }
 
 interface PlanApprovalCardProps {
   data: ApprovalData;
-  onApprove: (requestId: string) => void;
-  onRevise: (requestId: string, feedback: string) => void;
+  onApprove: (routerId: string) => void;
+  onRevise: (routerId: string, feedback: string) => void;
   className?: string;
 }
 
@@ -36,7 +36,7 @@ export const PlanApprovalCard: React.FC<PlanApprovalCardProps> = ({
     if (isSubmitting) return;
     setIsSubmitting(true);
     try {
-      await onApprove(data.requestId);
+      await onApprove(data.routerId);
     } finally {
       setIsSubmitting(false);
     }
@@ -46,7 +46,7 @@ export const PlanApprovalCard: React.FC<PlanApprovalCardProps> = ({
     if (isSubmitting || !reviseFeedback.trim()) return;
     setIsSubmitting(true);
     try {
-      await onRevise(data.requestId, reviseFeedback.trim());
+      await onRevise(data.routerId, reviseFeedback.trim());
       setReviseFeedback('');
       setIsReviseFeedbackOpen(false);
     } finally {

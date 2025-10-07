@@ -176,7 +176,6 @@ export const useWebSocket = (url?: string) => {
             case 'approval_request':
               // Handle plamarination approval requests
               const approvalRequest: ApprovalRequest = {
-                request_id: data.request_id,
                 plan: data.plan,
                 template: data.template,
                 findings: data.findings,
@@ -184,7 +183,7 @@ export const useWebSocket = (url?: string) => {
               };
               store.setPendingApproval(approvalRequest);
               store.setPlamarinationStatus('waiting_approval');
-              console.log('Approval request received:', approvalRequest.request_id);
+              console.log('Approval request received for router:', data.router_id);
               break;
               
             case 'approval_response':
@@ -412,15 +411,15 @@ export const useWebSocket = (url?: string) => {
     }
   }, []);
 
-  const sendApprovalResponse = useCallback((requestId: string, approved: boolean, feedback?: string) => {
+  const sendApprovalResponse = useCallback((routerId: string, approved: boolean, feedback?: string) => {
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
       const payload = {
         type: 'approval_response',
-        request_id: requestId,
+        router_id: routerId,
         approved,
         feedback,
       };
-      
+
       console.log('Sending approval response via WebSocket:', payload);
       ws.current.send(JSON.stringify(payload));
     } else {

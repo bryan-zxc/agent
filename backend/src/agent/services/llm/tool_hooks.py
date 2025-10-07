@@ -163,7 +163,7 @@ class ToolHooks:
             # Detect based on content structure, not status text
             if result.startswith("# Execution Plan"):
                 # Has todos - needs approval for execution
-                status = "plamarinating_awaiting_user"
+                status = "awaiting_approval"
                 # Keep current mode and phase (stay in agent mode)
                 logger.info(f"Execution plan stored for router {router_id}, awaiting approval")
             elif result.startswith("# Answer"):
@@ -195,7 +195,10 @@ class ToolHooks:
                             router_id=router_id,
                             status=status
                         )
-                    
+
+                        # Fetch router data to get plan and template for approval_request
+                        router_data = await agent_db.get_router(router_id)
+
                     # Send WebSocket updates
                     if websocket:
                         # Always send status update
@@ -205,7 +208,7 @@ class ToolHooks:
                             "status": status
                         })
                         logger.info(f"Sent status update '{status}' for router {router_id}")
-                        
+
                         # Send mode and phase updates when transitioning to auto
                         if mode == "auto":
                             await websocket.send_json({
@@ -214,13 +217,24 @@ class ToolHooks:
                                 "router_id": router_id
                             })
                             logger.info(f"Sent mode update 'auto' for router {router_id}")
-                            
+
                             await websocket.send_json({
                                 "type": "phase_updated",
                                 "agent_phase": agent_phase,
                                 "router_id": router_id
                             })
                             logger.info(f"Sent phase update 'null' for router {router_id}")
+
+                        # Send approval_request when plan needs approval
+                        elif status == "awaiting_approval" and 'router_data' in locals():
+                            await websocket.send_json({
+                                "type": "approval_request",
+                                "plan": router_data.get("execution_plan", ""),
+                                "template": router_data.get("answer_template", ""),
+                                "findings": "",  # Optional field
+                                "router_id": router_id
+                            })
+                            logger.info(f"Sent approval_request for router {router_id}")
                     
                 except Exception as e:
                     logger.error(f"Failed to update router state: {e}")

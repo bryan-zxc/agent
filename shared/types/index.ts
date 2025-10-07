@@ -37,7 +37,6 @@ export interface ConversationHistory {
 }
 
 export interface ApprovalRequest {
-  request_id: string;
   plan: string;
   template?: string;
   findings?: string;
@@ -45,9 +44,9 @@ export interface ApprovalRequest {
 }
 
 export interface ApprovalResponse {
-  request_id: string;
   approved: boolean;
   feedback?: string;
+  router_id: string;
 }
 
 export type PlamarinationStatus = 'planning' | 'waiting_approval' | 'revising' | 'approved' | null;

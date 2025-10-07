@@ -162,17 +162,17 @@ export const ChatInterface: React.FC = () => {
     }
   };
 
-  const handleApprovalApprove = async (requestId: string) => {
+  const handleApprovalApprove = async (routerId: string) => {
     try {
-      await sendApprovalResponse(requestId, true);
+      await sendApprovalResponse(routerId, true);
     } catch (error) {
       console.error('Error approving plan:', error);
     }
   };
 
-  const handleApprovalRevise = async (requestId: string, feedback: string) => {
+  const handleApprovalRevise = async (routerId: string, feedback: string) => {
     try {
-      await sendApprovalResponse(requestId, false, feedback);
+      await sendApprovalResponse(routerId, false, feedback);
     } catch (error) {
       console.error('Error requesting plan revision:', error);
     }
@@ -226,7 +226,7 @@ export const ChatInterface: React.FC = () => {
                       plan: pendingApproval.plan,
                       template: pendingApproval.template,
                       findings: pendingApproval.findings,
-                      requestId: pendingApproval.request_id,
+                      routerId: pendingApproval.router_id,
                     }}
                     onApprove={handleApprovalApprove}
                     onRevise={handleApprovalRevise}
@@ -333,7 +333,7 @@ export const ChatInterface: React.FC = () => {
                     plan: pendingApproval.plan,
                     template: pendingApproval.template,
                     findings: pendingApproval.findings,
-                    requestId: pendingApproval.request_id,
+                    routerId: pendingApproval.router_id,
                   }}
                   onApprove={handleApprovalApprove}
                   onRevise={handleApprovalRevise}
