@@ -62,13 +62,10 @@ class AgentSettings(BaseSettings):
     postgres_password: str = Field(
         description="PostgreSQL password - REQUIRED"
     )
-    postgres_db: str = Field(
-        default="agent_main", description="Main PostgreSQL database name"
-    )
 
     # Project Configuration
     project_name: str = Field(
-        default="general", description="Project name for database isolation"
+        default="general", description="Project database name (auto-created on startup)"
     )
 
     # File Storage Configuration

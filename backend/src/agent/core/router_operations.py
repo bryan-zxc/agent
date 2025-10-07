@@ -665,7 +665,7 @@ async def handle_simple_chat(router_state: Dict[str, Any]) -> str:
         temperature=router_state["temperature"],
         system_instruction=RAPID_SYSTEM_INSTRUCTION,
     )
-    return response.content
+    return response
 
 
 async def assess_agent_requirements(router_state: Dict[str, Any]) -> RequireAgent:

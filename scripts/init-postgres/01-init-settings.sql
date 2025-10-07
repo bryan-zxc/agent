@@ -26,10 +26,10 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Switch back to the main database to set up the function there too
-\c agent_main
+-- Switch back to postgres (admin database) to create project database
+\c postgres
 
--- Create the same function in the main database
+-- Create the same function in postgres database for programmatic use
 CREATE OR REPLACE FUNCTION create_project_database(project_name TEXT)
 RETURNS VOID AS $$
 BEGIN
@@ -47,8 +47,21 @@ $$ LANGUAGE plpgsql;
 -- Grant execute permission to the agent user
 GRANT EXECUTE ON FUNCTION create_project_database(TEXT) TO agent_user;
 
--- Project databases will be created on-demand by the application
--- using the project_name from settings
+-- Note: CREATE DATABASE cannot be executed from a function during init
+-- Instead, we create the default project database directly here
+
+-- Create the default "general" project database if it doesn't exist
+-- This uses a DO block to check existence, then creates outside the block
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'general') THEN
+        -- Cannot CREATE DATABASE here, must be done outside
+        RAISE NOTICE 'Database general will be created next';
+    END IF;
+END $$;
+
+-- Actually create the database (must be outside any block/function)
+CREATE DATABASE general WITH TEMPLATE = template_agent ENCODING = 'UTF8' LC_COLLATE = 'en_US.utf8' LC_CTYPE = 'en_US.utf8';
 
 -- Optimised settings for small, low-latency workloads
 ALTER SYSTEM SET random_page_cost = 1.1;

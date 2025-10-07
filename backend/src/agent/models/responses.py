@@ -9,15 +9,21 @@ class RequireAgent(BaseModel):
         description="Is it a complex question that requires multiple steps to answer? "
     )
     chilli_request: bool = Field(description="If help from Chilli is required")
+    tool_required: bool = Field(
+        description="Does the request require using any tools to complete? This includes: "
+        "FILE OPERATIONS (creating, editing, reading, writing, moving files or directories via filesystem tools like write_file, edit_file, read_text_file, create_directory, move_file, search_files), "
+        "WEB SEARCH (finding current information beyond knowledge cutoff via google_search), "
+        "PDF EXTRACTION (extracting facts from PDF documents via get_facts_from_pdf), "
+        "IMAGE ANALYSIS (reading charts, tables, diagrams from images via read_image), "
+        "CODE EXECUTION (running Python code or SQL queries via execute_python, execute_sql), "
+        "PLANNING (storing execution plans and answer templates via set_plan_and_answer). "
+        "Return true if the user's request requires ANY of these tool capabilities."
+    )
     context_rich_agent_request: str = Field(
         "",
         description="If any of the above is true, summarise the conversation into a context-rich request for the agent. "
         "Otherwise, leave this field empty. ",
     )
-    # Temporarily not supporting this yet
-    # action_needed: bool = Field(
-    #     description="Does the question require an action to be taken, such as setting reminder, sending email, etc.? "
-    # )
 
 
 class TaskResponse(BaseModel):

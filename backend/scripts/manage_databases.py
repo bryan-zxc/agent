@@ -177,7 +177,7 @@ async def list_project_databases():
                     FROM pg_database
                     WHERE datname NOT IN (
                         'postgres', 'template0', 'template1',
-                        'template_agent', 'agent_main'
+                        'template_agent'
                     )
                     ORDER BY datname
                 """)

@@ -9,7 +9,7 @@ services:
       - .env.local
     environment:
       - POSTGRES_USER=${POSTGRES_USER:-agent_user}
-      - POSTGRES_DB=${POSTGRES_DB:-agent_main}
+      - POSTGRES_DB=postgres  # Admin database only, not for application use
       - POSTGRES_INITDB_ARGS=--encoding=UTF8 --lc-collate=en_US.utf8 --lc-ctype=en_US.utf8
       # POSTGRES_PASSWORD is loaded from env_file (.env.local)
     volumes:
@@ -18,7 +18,7 @@ services:
     networks:
       - agent_network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agent_user} -d ${POSTGRES_DB:-agent_main}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agent_user} -d postgres"]
       interval: 10s
       timeout: 5s
       retries: 5

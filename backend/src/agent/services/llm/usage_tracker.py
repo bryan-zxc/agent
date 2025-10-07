@@ -21,20 +21,23 @@ _async_session = None
 def get_async_session():
     """Get or create async session factory for usage tracking."""
     global _engine, _async_session
-    
+
     if _async_session is None:
-        database_url = f"sqlite+aiosqlite:///{settings.database_path}"
+        # Import here to avoid circular dependency
+        from ...database.connection import DatabaseConfig
+
+        db_config = DatabaseConfig()
+        database_url = db_config.get_database_url()
         _engine = create_async_engine(
             database_url,
-            echo=False,
-            connect_args={"check_same_thread": False}
+            echo=False
         )
         _async_session = async_sessionmaker(
             bind=_engine,
             class_=AsyncSession,
             expire_on_commit=False
         )
-    
+
     return _async_session()
 
 

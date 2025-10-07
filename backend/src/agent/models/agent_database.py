@@ -338,12 +338,10 @@ class AgentDatabase:
 
         # Build database URL from settings if not provided
         if database_url is None:
-            # Build PostgreSQL connection string from settings
-            database_url = (
-                f"postgresql+asyncpg://{settings.postgres_user}:"
-                f"{settings.postgres_password}@{settings.postgres_host}:"
-                f"{settings.postgres_port}/{settings.postgres_db}"
-            )
+            # Always use project-specific database for isolation
+            from ..database.connection import DatabaseConfig
+            config = DatabaseConfig()
+            database_url = config.get_database_url()  # Uses settings.project_name
 
         # Store database URL for schema operations
         self.database_url = database_url

@@ -336,7 +336,11 @@ class LLM:
             tool_name = tool_call["name"]
             tool_args = tool_call["arguments"]
             tool_names.append(tool_name)  # Collect tool name
-            
+
+            # Log real tool call execution
+            args_preview = str(tool_args)[:150]
+            logger.info(f"[TOOL CALL] Executing: {tool_name} with args: {args_preview}{'...' if len(str(tool_args)) > 150 else ''}")
+
             # Send status update via websocket
             if websocket:
                 try:
@@ -367,7 +371,11 @@ class LLM:
                 result = await tool_hooks.apply_post_hook(
                     tool_name, result, payload, websocket
                 )
-                
+
+                # Log successful tool execution result
+                result_preview = str(result)[:150] if result else "None"
+                logger.info(f"[TOOL RESULT] {tool_name} completed - Result: {result_preview}{'...' if len(str(result)) > 150 else ''}")
+
                 # Send completion status
                 if websocket:
                     try:
