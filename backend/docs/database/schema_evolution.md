@@ -9,34 +9,43 @@ The Agent State Database implements a hybrid Data Vault approach designed for gr
 ### 1. Hybrid Architecture Benefits
 - **Fixed Columns**: Stable, frequently-queried attributes with optimal performance
 - **JSON Metadata**: Flexible extensibility without schema changes
-- **Version Tracking**: Granular control over schema transitions
-- **Backward Compatibility**: Multiple schema versions coexist during transitions
+- **Global Version Tracking**: Single SchemaVersion table tracks database-level schema version
+- **Backward Compatibility**: Migrations designed to be non-breaking
 
 ### 2. Data Vault Concepts Applied
-- **Hubs**: Business keys remain immutable (router_id, planner_id, worker_id)
+- **Hubs**: Business keys remain immutable (router_id, worker_id)
 - **Satellites**: Descriptive data with temporal tracking via updated_at
-- **Links**: Explicit relationship management (router_planner_links)
 - **Flexibility**: JSON fields serve as lightweight satellite alternatives
 
 ## Schema Versioning Framework
 
 ### Version Management
 ```python
-# Current version tracking
-AGENT_DATABASE_SCHEMA_VERSION = 1
+# Global schema version tracked in settings
+settings.database_schema_version = 1
 
-# Version checking on startup
-def check_schema_version():
-    current_version = get_database_schema_version()
-    if current_version < AGENT_DATABASE_SCHEMA_VERSION:
-        perform_migration(current_version, AGENT_DATABASE_SCHEMA_VERSION)
+# Automatic version checking on startup (if enabled)
+if settings.database_auto_migrate:
+    await db._check_and_migrate_schema_async()
 ```
 
 ### Version Storage
-Each table includes:
-- `schema_version INTEGER DEFAULT 1` - Per-record version tracking
-- Global version in `settings.AGENT_DATABASE_SCHEMA_VERSION`
-- Migration history tracked in `schema_versions` table
+The `SchemaVersion` table provides global database version tracking:
+
+```python
+class SchemaVersion(Base):
+    __tablename__ = "schema_version"
+
+    version = Column(Integer, primary_key=True)
+    applied_at = Column(DateTime(timezone=True), nullable=False)
+    description = Column(Text)
+```
+
+**Benefits:**
+- Single source of truth for database schema version
+- Migration history with timestamps and descriptions
+- No per-record overhead (unlike deprecated schema_version columns)
+- Standard industry practice for schema management
 
 ## Evolution Patterns
 

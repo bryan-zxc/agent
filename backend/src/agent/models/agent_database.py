@@ -49,19 +49,6 @@ DB_TYPE = get_database_type()
 json_column_type = JSONB if DB_TYPE == "postgresql" else JSON
 
 
-# Planner tables removed - planners are no longer created
-# class PlannerMessage(Base):
-#     __tablename__ = "planner_messages"
-#
-#     id = Column(Integer, primary_key=True, autoincrement=True)
-#     agent_id = Column(String(32), nullable=False, index=True)  # UUID hex string
-#     role = Column(String(20), nullable=False)  # 'user', 'assistant'
-#     # content column REMOVED - now stored in PlannerMessageContent
-#     created_at = Column(
-#         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
-#     )
-
-
 class WorkerMessage(Base):
     __tablename__ = "worker_messages"
 
@@ -94,20 +81,6 @@ class RouterMessage(Base):
 
 
 # Satellite Tables for Message Content
-
-
-# class PlannerMessageContent(Base):
-#     __tablename__ = "planner_message_content"
-#
-#     id = Column(Integer, primary_key=True, autoincrement=True)
-#     message_id = Column(Integer, ForeignKey("planner_messages.id"), nullable=False)
-#     content = Column(json_column_type, nullable=False)  # Single dictionary expected
-#     display_text = Column(Text, nullable=False)  # For frontend rendering
-#     created_at = Column(
-#         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
-#     )
-#
-#     __table_args__ = (Index("idx_planner_content_lookup", "message_id"),)
 
 
 class WorkerMessageContent(Base):
@@ -186,7 +159,6 @@ class Router(Base):
     agent_metadata = Column(
         json_column_type, default=lambda: {}
     )  # Future extensibility
-    schema_version = Column(Integer, default=1)  # Schema evolution tracking
     created_at = Column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -195,45 +167,6 @@ class Router(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
-
-
-# class Planner(Base):
-#     __tablename__ = "planners"
-#
-#     planner_id = Column(String(32), primary_key=True)  # UUID hex string
-#     planner_name = Column(String(255))  # Human readable planner name
-#     user_question = Column(Text, nullable=False)  # Original user request
-#     instruction = Column(Text)  # Processing instructions
-#     execution_plan = Column(Text)  # Markdown formatted execution plan
-#     model = Column(String(100))  # LLM model used
-#     temperature = Column(Float)  # LLM temperature setting
-#     failed_task_limit = Column(Integer)  # Max failed tasks allowed
-#     status = Column(
-#         String(50), nullable=False, index=True
-#     )  # planning, executing, completed, failed - ADDED INDEX
-#     user_response = Column(Text)  # Final response generated for user when completed
-#
-#     # New fields for function-based task queue system
-#     next_task = Column(String(100))  # Next function name to execute for resumability
-#     variable_file_paths = Column(
-#         json_column_type, default=lambda: {}
-#     )  # File paths for variables {key: file_path}
-#     image_file_paths = Column(
-#         json_column_type, default=lambda: {}
-#     )  # File paths for images {key: file_path}
-#
-#     agent_metadata = Column(
-#         json_column_type, default=lambda: {}
-#     )  # Future extensibility
-#     schema_version = Column(Integer, default=1)  # Schema evolution tracking
-#     created_at = Column(
-#         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
-#     )
-#     updated_at = Column(
-#         DateTime(timezone=True),
-#         default=lambda: datetime.now(timezone.utc),
-#         onupdate=lambda: datetime.now(timezone.utc),
-#     )
 
 
 class Worker(Base):
@@ -279,7 +212,6 @@ class Worker(Base):
     agent_metadata = Column(
         json_column_type, default=lambda: {}
     )  # Future extensibility
-    schema_version = Column(Integer, default=1)  # Schema evolution tracking
     created_at = Column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -318,34 +250,6 @@ class RouterSystemInstructions(Base):
     )
 
 
-# class PlannerSystemInstructions(Base):
-#     """System instructions for planner agents"""
-#
-#     __tablename__ = "planner_system_instructions"
-#
-#     instruction_id = Column(Integer, primary_key=True, autoincrement=True)
-#     planner_id = Column(
-#         String(32), ForeignKey("planners.planner_id"), nullable=False, index=True
-#     )
-#     system_instruction_type = Column(
-#         String(50), nullable=False, default="default"
-#     )  # default, custom, etc.
-#     system_instruction = Column(Text, nullable=False)
-#     created_at = Column(
-#         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
-#     )
-#     updated_at = Column(
-#         DateTime(timezone=True),
-#         default=lambda: datetime.now(timezone.utc),
-#         onupdate=lambda: datetime.now(timezone.utc),
-#     )
-#
-#     __table_args__ = (
-#         UniqueConstraint("planner_id", "system_instruction_type"),
-#         Index("idx_planner_instruction_type", "planner_id", "system_instruction_type"),
-#     )
-
-
 class WorkerSystemInstructions(Base):
     """System instructions for worker agents"""
 
@@ -372,57 +276,6 @@ class WorkerSystemInstructions(Base):
         UniqueConstraint("worker_id", "system_instruction_type"),
         Index("idx_worker_instruction_type", "worker_id", "system_instruction_type"),
     )
-
-
-class RouterPlannerLink(Base):
-    """Legacy table - kept for migration purposes, will be deprecated"""
-
-    __tablename__ = "router_planner_links"
-
-    link_id = Column(Integer, primary_key=True, autoincrement=True)
-    router_id = Column(String(32), ForeignKey("routers.router_id"), nullable=False)
-    planner_id = Column(String(32), ForeignKey("planners.planner_id"), nullable=False)
-    relationship_type = Column(
-        String(50), nullable=False
-    )  # initiated, continued, forked
-    created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
-    )
-
-    __table_args__ = (UniqueConstraint("router_id", "planner_id"),)
-
-
-class RouterMessagePlannerLink(Base):
-    """Links router messages to their associated planners - Schema Version 2"""
-
-    __tablename__ = "router_message_planner_links"
-
-    link_id = Column(Integer, primary_key=True, autoincrement=True)
-    router_id = Column(String(32), ForeignKey("routers.router_id"), nullable=False)
-    message_id = Column(
-        Integer, ForeignKey("router_messages.id"), nullable=False, index=True
-    )
-    planner_id = Column(
-        String(32), ForeignKey("planners.planner_id"), nullable=False, index=True
-    )  # ADDED INDEX
-    relationship_type = Column(
-        String(50), nullable=False
-    )  # initiated, continued, forked
-    created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
-    )
-
-    __table_args__ = (
-        UniqueConstraint("message_id", "planner_id"),  # One planner per message
-        Index("idx_router_message", "router_id", "message_id"),  # Fast lookups
-    )
-
-
-# TaskQueue table removed - was part of old background processor architecture
-# class TaskQueue(Base):
-#     """Task queue for async execution of planner and worker functions"""
-#     __tablename__ = "task_queue"
-#     ... removed ...
 
 
 class FileMetadata(Base):
@@ -465,6 +318,26 @@ class LLMUsage(Base):
 
     # Indexes for performance
     __table_args__ = (Index("idx_llm_usage_caller_timestamp", "caller", "timestamp"),)
+
+
+class SchemaVersion(Base):
+    """Global database schema version tracking.
+
+    This table tracks the current schema version of the entire database,
+    providing a single source of truth for migration management.
+    Unlike per-record schema_version columns, this represents the
+    structural version of the database schema itself.
+    """
+
+    __tablename__ = "schema_version"
+
+    version = Column(Integer, primary_key=True)
+    applied_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    description = Column(Text)
 
 
 class AgentDatabase:
@@ -592,6 +465,90 @@ class AgentDatabase:
             await self._check_and_migrate_schema_async()
         else:
             logger.info(f"Database initialised. Auto-migration disabled.")
+
+    async def _check_and_migrate_schema_async(self) -> None:
+        """Check current schema version and perform migrations if needed."""
+        try:
+            current_version = await self._get_database_schema_version_async()
+            target_version = settings.database_schema_version
+
+            if current_version == target_version:
+                logger.info(
+                    f"Database schema is up to date (version {current_version})"
+                )
+                return
+
+            if current_version < target_version:
+                logger.info(
+                    f"Migrating database schema from version {current_version} to {target_version}"
+                )
+                await self._migrate_schema_async(current_version, target_version)
+            else:
+                logger.warning(
+                    f"Database schema version {current_version} is newer than expected {target_version}"
+                )
+
+        except Exception as e:
+            logger.error(f"Schema version check failed: {e}")
+            # Continue with current schema - don't block startup on migration errors
+
+    async def _get_database_schema_version_async(self) -> int:
+        """Get the current database schema version from SchemaVersion table.
+
+        Returns:
+            int: Current schema version, or 0 if SchemaVersion table doesn't exist (fresh database)
+        """
+        async with self.AsyncSessionLocal() as session:
+            try:
+                # Try to query the SchemaVersion table
+                result = await session.execute(
+                    select(SchemaVersion.version).order_by(
+                        SchemaVersion.version.desc()
+                    )
+                )
+                version_row = result.first()
+                if version_row:
+                    return version_row[0]
+                else:
+                    # Table exists but empty - fresh database
+                    return 0
+            except Exception:
+                # SchemaVersion table doesn't exist - fresh database
+                return 0
+
+    async def _migrate_schema_async(self, from_version: int, to_version: int) -> None:
+        """Perform schema migration from one version to another.
+
+        Args:
+            from_version: Current schema version
+            to_version: Target schema version
+        """
+        logger.info(
+            f"Performing schema migration from v{from_version} to v{to_version}"
+        )
+
+        async with self.AsyncSessionLocal() as session:
+            try:
+                if from_version == 0 and to_version == 1:
+                    # Fresh database - create initial SchemaVersion record
+                    schema_record = SchemaVersion(
+                        version=1,
+                        description="Initial schema with Router, Worker, and message tables",
+                    )
+                    session.add(schema_record)
+                    await session.commit()
+                    logger.info(
+                        "Schema migration completed: Fresh database initialised to v1"
+                    )
+                else:
+                    # Future migrations would go here
+                    logger.warning(
+                        f"Migration from v{from_version} to v{to_version} not implemented"
+                    )
+            except Exception as e:
+                logger.error(f"Migration failed: {e}")
+                await session.rollback()
+                raise
 
     async def _configure_async_sqlite_optimisations(self):
         """Configure SQLite pragmas for async connections (SQLite only)"""
@@ -1012,7 +969,6 @@ class AgentDatabase:
                     "title": router.title,
                     "preview": router.preview,
                     "agent_metadata": router.agent_metadata,
-                    "schema_version": router.schema_version,
                     "created_at": router.created_at,
                     "updated_at": router.updated_at,
                 }
