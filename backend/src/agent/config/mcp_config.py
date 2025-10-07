@@ -136,7 +136,7 @@ class MCPConfig(BaseModel):
                     "POSTGRES_PASSWORD": settings.postgres_password or "",
                     "POSTGRES_HOST": settings.postgres_host or "",
                     "POSTGRES_PORT": str(settings.postgres_port) if settings.postgres_port else "",
-                    "POSTGRES_DB": settings.postgres_db or "",
+                    "PROJECT_NAME": settings.project_name or "",  # Database name is project_name
                     "POSTGRES_USER": settings.postgres_user or "",
                 },
                 description="Native agent tools for web search and PDF processing",

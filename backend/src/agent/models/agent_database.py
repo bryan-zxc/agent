@@ -1016,6 +1016,108 @@ class AgentDatabase:
             # Return True even if no record found (for orphaned files)
             return True
 
+    async def get_file_by_hash(self, content_hash: str) -> Optional[Dict]:
+        """Get file metadata by content hash for duplicate detection.
+
+        Args:
+            content_hash: SHA-256 hash of file content
+
+        Returns:
+            Dictionary with file metadata if found, None otherwise
+        """
+        async with self.AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(FileMetadata).where(FileMetadata.content_hash == content_hash)
+            )
+            file_record = result.scalars().first()
+
+            if file_record:
+                return {
+                    "file_id": file_record.file_id,
+                    "original_filename": file_record.original_filename,
+                    "file_path": file_record.file_path,
+                    "file_size": file_record.file_size,
+                    "mime_type": file_record.mime_type,
+                    "upload_timestamp": file_record.upload_timestamp,
+                    "reference_count": file_record.reference_count,
+                }
+            return None
+
+    async def get_file_by_id(self, file_id: str) -> Optional[Dict]:
+        """Get file metadata by file ID.
+
+        Args:
+            file_id: Unique file identifier
+
+        Returns:
+            Dictionary with file metadata if found, None otherwise
+        """
+        async with self.AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(FileMetadata).where(FileMetadata.file_id == file_id)
+            )
+            file_record = result.scalars().first()
+
+            if file_record:
+                return {
+                    "file_id": file_record.file_id,
+                    "original_filename": file_record.original_filename,
+                    "file_path": file_record.file_path,
+                    "file_size": file_record.file_size,
+                    "mime_type": file_record.mime_type,
+                    "upload_timestamp": file_record.upload_timestamp,
+                    "reference_count": file_record.reference_count,
+                }
+            return None
+
+    async def create_file_metadata(
+        self,
+        file_id: str,
+        content_hash: str,
+        original_filename: str,
+        file_path: str,
+        file_size: int,
+        mime_type: Optional[str] = None,
+    ) -> None:
+        """Create new file metadata record.
+
+        Args:
+            file_id: Unique file identifier
+            content_hash: SHA-256 hash of file content
+            original_filename: Original filename from user
+            file_path: Actual storage path
+            file_size: File size in bytes
+            mime_type: MIME type (optional)
+        """
+        async with self.AsyncSessionLocal() as session:
+            file_metadata = FileMetadata(
+                file_id=file_id,
+                content_hash=content_hash,
+                original_filename=original_filename,
+                file_path=file_path,
+                file_size=file_size,
+                mime_type=mime_type,
+                reference_count=1,
+            )
+            session.add(file_metadata)
+            await session.commit()
+
+    async def increment_file_reference(self, file_id: str) -> None:
+        """Increment reference count for a file when it's reused.
+
+        Args:
+            file_id: Unique file identifier
+        """
+        async with self.AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(FileMetadata).where(FileMetadata.file_id == file_id)
+            )
+            file_record = result.scalars().first()
+
+            if file_record:
+                file_record.reference_count += 1
+                await session.commit()
+
     async def get_worker_system_instruction(
         self, worker_id: str, instruction_type: str = "default"
     ) -> Optional[str]:
