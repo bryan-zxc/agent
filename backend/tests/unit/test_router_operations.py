@@ -627,10 +627,9 @@ class TestRouterOperations(unittest.IsolatedAsyncioTestCase):
         )
         mock_llm.a_get_response.return_value = mock_grouping
 
-        # Create mock agent_db
+        # Create mock agent_db (no longer needs system instruction mock)
         mock_agent_db = AsyncMock()
-        mock_agent_db.get_router_system_instruction.return_value = "Default router instruction"
-        
+
         # Create router state
         router_state = {
             "id": self.router_id,

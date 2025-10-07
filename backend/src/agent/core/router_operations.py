@@ -52,7 +52,7 @@ Your role consists of two distinct phases:
 
 1. RESEARCH PHASE (Execute immediately during plamarination):
    - Read and analyse every uploaded file NOW
-   - Extract all data and insights from documents NOW  
+   - Extract all data and insights from documents NOW
    - Search the web for any required context NOW
    - Ask the user for clarifications NOW
    All information gathering happens immediately in this phase.
@@ -115,6 +115,16 @@ Your final plan will then contain only:
 - "Create a report using the competitor analysis data already collected"
 
 """
+
+RAPID_SYSTEM_INSTRUCTION = (
+    "Your name is Bandit Heeler, your main role is to have a conversation with the user and for complex requests activate agents. "
+    "Now you maybe forced to be operating on rapid mode, in which case you will need to answer more complex questions yourself without agents. "
+    "In such situations where you sense the question is complex, or requiring information that you don't have, remember to warn the user that your answers is not validated against any files or external sources, and may be incorrect. "
+    "If they want a proper answer, they should either switch to auto or agent mode (note web searches, amongst other things) all need to be performed under agent mode). "
+    "IMPORTANT: under rapid mode you CANNOT activate agent yourself, so you should ask the user to switch the toggle themselves, but be careful of the wording and don't make it sound like you can activate agent yourself. "
+    "The toggle for mode switching is located just above the send button. "
+    "By the way, you are a fictional character from the show Bluey."
+)
 
 
 class PlamarinationContinuation(BaseModel):
@@ -322,22 +332,6 @@ async def activate_conversation(
     )
     router_state["message_manager"] = message_manager
     router_state["mode"] = mode
-
-    # Store system instruction in satellite table
-    system_instruction = (
-        "Your name is Bandit Heeler, your main role is to have a conversation with the user and for complex requests activate agents. "
-        "Now you maybe forced to be operating on rapid mode, in which case you will need to answer more complex questions yourself without agents. "
-        "In such situations where you sense the question is complex, or requiring information that you don't have, remember to warn the user that your answers is not validated against any files or external sources, and may be incorrect. "
-        "If they want a proper answer, they should either switch to auto or agent mode (note web searches, amongst other things) all need to be performed under agent mode). "
-        "IMPORTANT: under rapid mode you CANNOT activate agent yourself, so you should ask the user to switch the toggle themselves, but be careful of the wording and don't make it sound like you can activate agent yourself. "
-        "The toggle for mode switching is located just above the send button. "
-        "By the way, you are a fictional character from the show Bluey."
-    )
-    await agent_db.set_router_system_instruction(
-        router_id=router_id,
-        system_instruction=system_instruction,
-        instruction_type="default",
-    )
 
     # Process the initial message
     message_data = {"message": user_message, "files": files or []}
@@ -659,13 +653,6 @@ async def handle_simple_chat(router_state: Dict[str, Any]) -> str:
     router_mode = router_state.get("mode", "auto")
     messages = await message_manager.get_messages()
 
-    # Fetch system instruction from database
-    agent_db = router_state["agent_db"]
-    router_id = router_state["id"]
-    system_instruction = await agent_db.get_router_system_instruction(
-        router_id=router_id, instruction_type="default"
-    )
-
     response = await router_state["llm"].a_get_response(
         messages=messages
         + [
@@ -676,7 +663,7 @@ async def handle_simple_chat(router_state: Dict[str, Any]) -> str:
         ],
         model=router_state["model"],
         temperature=router_state["temperature"],
-        system_instruction=system_instruction,
+        system_instruction=RAPID_SYSTEM_INSTRUCTION,
     )
     return response.content
 
@@ -694,13 +681,6 @@ async def assess_agent_requirements(router_state: Dict[str, Any]) -> RequireAgen
     message_manager = router_state["message_manager"]
     messages = await message_manager.get_messages()
 
-    # Fetch system instruction from database
-    agent_db = router_state["agent_db"]
-    router_id = router_state["id"]
-    system_instruction = await agent_db.get_router_system_instruction(
-        router_id=router_id, instruction_type="default"
-    )
-
     assessment_messages = messages + [
         {
             "role": "user",
@@ -713,7 +693,7 @@ async def assess_agent_requirements(router_state: Dict[str, Any]) -> RequireAgen
         model=router_state["model"],
         temperature=0.0,
         response_format=RequireAgent,
-        system_instruction=system_instruction,
+        system_instruction=RAPID_SYSTEM_INSTRUCTION,
     )
 
     return response
@@ -1348,13 +1328,6 @@ async def determine_file_groups(
         return [files]  # Single group with all files
     else:
         # Use LLM to determine file groupings
-        # Fetch router's system instruction for context
-        agent_db = router_state["agent_db"]
-        router_id = router_state["id"]
-        base_system_instruction = await agent_db.get_router_system_instruction(
-            router_id=router_id, instruction_type="default"
-        )
-
         file_grouping_response = await router_state["llm"].a_get_response(
             messages=[
                 {
@@ -1378,7 +1351,7 @@ async def determine_file_groups(
             model=router_state["model"],
             temperature=0.0,
             response_format=FileGrouping,
-            system_instruction=base_system_instruction,
+            system_instruction=RAPID_SYSTEM_INSTRUCTION,
         )
         return file_grouping_response.file_groups
 
@@ -1415,16 +1388,11 @@ async def generate_and_update_title(router_state: Dict[str, Any]):
             }
         ]
 
-        # Fetch router's system instruction
-        system_instruction = await agent_db.get_router_system_instruction(
-            router_id=router_id, instruction_type="default"
-        )
-
         response = await router_state["llm"].a_get_response(
             messages=title_messages,
             model=router_state["model"],
             temperature=router_state["temperature"],
-            system_instruction=system_instruction,
+            system_instruction=RAPID_SYSTEM_INSTRUCTION,
         )
         llm_title = response.content.strip()
 

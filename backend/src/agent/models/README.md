@@ -187,18 +187,6 @@ Database models and service for agent message persistence and state management.
   - `created_at`: Link creation timestamp
 - **Purpose**: Enables multiple execution plans per router and historical access
 
-**`RouterSystemInstructions`** *(System Instruction Migration)*
-- Satellite table for storing router system instructions
-- **Fields:**
-  - `instruction_id`: Auto-incrementing primary key
-  - `router_id`: Foreign key to Router table (indexed)
-  - `system_instruction_type`: Instruction type (default: "default")
-  - `system_instruction`: The actual system instruction text
-  - `created_at`: Instruction creation timestamp
-  - `updated_at`: Last update timestamp
-- **Constraints:** Unique on (router_id, system_instruction_type)
-- **Purpose**: Stores system instructions separately from message chains
-
 **`PlannerSystemInstructions`** *(System Instruction Migration)*
 - Satellite table for storing planner system instructions
 - **Fields:**
@@ -241,12 +229,11 @@ Database models and service for agent message persistence and state management.
   - `enqueue_task()`: Add task to execution queue
   - `get_pending_tasks()`: Retrieve queued tasks
 - **System Instruction Methods:**
-  - `set_router_system_instruction(router_id, system_instruction, instruction_type)`: Store router instructions
-  - `get_router_system_instruction(router_id, instruction_type)`: Retrieve router instructions
   - `set_planner_system_instruction(planner_id, system_instruction, instruction_type)`: Store planner instructions
   - `get_planner_system_instruction(planner_id, instruction_type)`: Retrieve planner instructions
   - `set_worker_system_instruction(worker_id, system_instruction, instruction_type)`: Store worker instructions
   - `get_worker_system_instruction(worker_id, instruction_type)`: Retrieve worker instructions
+  - **Note:** Router system instructions are calculated dynamically based on phase (plamarination vs execution) and defined as constants in `router_operations.py`, not stored in the database
 - **Planner Linking Methods (Schema V2):**
   - `link_message_planner(router_id, message_id, planner_id)`: Associate planner with specific message
   - `get_planner_by_message(message_id)`: Retrieve planner info for a specific message (async)

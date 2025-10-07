@@ -222,34 +222,6 @@ class Worker(Base):
     )
 
 
-class RouterSystemInstructions(Base):
-    """System instructions for router agents"""
-
-    __tablename__ = "router_system_instructions"
-
-    instruction_id = Column(Integer, primary_key=True, autoincrement=True)
-    router_id = Column(
-        String(32), ForeignKey("routers.router_id"), nullable=False, index=True
-    )
-    system_instruction_type = Column(
-        String(50), nullable=False, default="default"
-    )  # default, custom, etc.
-    system_instruction = Column(Text, nullable=False)
-    created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
-    )
-    updated_at = Column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
-        onupdate=lambda: datetime.now(timezone.utc),
-    )
-
-    __table_args__ = (
-        UniqueConstraint("router_id", "system_instruction_type"),
-        Index("idx_router_instruction_type", "router_id", "system_instruction_type"),
-    )
-
-
 class WorkerSystemInstructions(Base):
     """System instructions for worker agents"""
 

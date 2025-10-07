@@ -23,8 +23,9 @@ Unified interface for multiple large language model providers.
 **`LLM`**
 - Central service orchestrating multiple LLM providers
 - **System Instructions**: Native system instruction support for all providers
-  - Instructions are stored in satellite tables (RouterSystemInstructions, PlannerSystemInstructions, WorkerSystemInstructions)
-  - Retrieved from database and passed via `system_instruction` parameter
+  - Router instructions are defined as constants in `router_operations.py` (phase-dependent)
+  - Planner/Worker instructions are stored in satellite tables (PlannerSystemInstructions, WorkerSystemInstructions)
+  - Retrieved from database or constants and passed via `system_instruction` parameter
   - No longer embedded in message chains for better separation of concerns
 - **MCP Integration**: Full Model Context Protocol support for external tools
 - **Key Features:**
