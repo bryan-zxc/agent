@@ -92,15 +92,15 @@ Unified interface for multiple large language model providers.
 
 #### Configuration
 
-**`MODEL_MAPPING`** (backend/src/agent/config/llm_config.py)
-- Maps friendly names to actual model identifiers
+**`PROVIDER_MODELS`** (backend/src/agent/config/llm_config.py)
+- Single source of truth mapping friendly names to (provider, actual_model_name) tuples
 - Supported models:
-  - `sonnet-4`: Claude Sonnet 4
+  - `sonnet-4.5`: Claude Sonnet 4.5 (released 29 Sept 2025)
   - `gpt-5-mini`: GPT-5 Mini
   - `gemini-2.5-pro`: Gemini 2.5 Pro
 
-**`PRICING`** (backend/src/agent/config/llm_config.py)
-- Per-1000-token pricing for input and output
+**`PROVIDER_PRICING`** (backend/src/agent/config/llm_config.py)
+- Per-1M-token pricing for input and output
 - Used for cost calculation and budget tracking
 
 #### Features

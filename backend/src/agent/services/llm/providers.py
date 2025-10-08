@@ -28,14 +28,12 @@ FAIL_STRUCTURE_RESPONSE_RETRIES = 2
 class OpenAIProvider(BaseLLMProvider):
     """OpenAI provider implementation for GPT models."""
 
-    MODELS = {
-        "gpt-5-mini": "gpt-5-mini-2025-08-07",
-    }
+    provider_name = "openai"
 
     PRICING = {
         "gpt-5-mini-2025-08-07": {"input": 0.25, "output": 2.0},
     }
-    
+
     # Track if we've shown the temperature deprecation warning
     _temperature_warning_shown = False
 
@@ -43,14 +41,6 @@ class OpenAIProvider(BaseLLMProvider):
         """Set up OpenAI client."""
         self.client = OpenAI(api_key=self.api_key)
         self.usage_tracker = UsageTracker(caller=self.caller)
-
-    def supports_model(self, model: str) -> bool:
-        """Check if OpenAI supports this model."""
-        return model in self.MODELS or model.startswith("gpt")
-
-    def get_actual_model_name(self, model: str) -> str:
-        """Get actual OpenAI model name."""
-        return self.MODELS.get(model, model)
     
     def _warn_temperature_deprecated(self, temperature: float) -> None:
         """Warn once if temperature is being used with gpt-5 models."""
@@ -392,30 +382,16 @@ class OpenAIProvider(BaseLLMProvider):
 class AnthropicProvider(BaseLLMProvider):
     """Anthropic provider implementation for Claude models."""
 
-    MODELS = {
-        "sonnet-4": "claude-sonnet-4-20250514",
-    }
+    provider_name = "anthropic"
 
     PRICING = {
-        "claude-sonnet-4-20250514": {"input": 3.0, "output": 15.0},
+        "claude-sonnet-4-5-20250929": {"input": 3.0, "output": 15.0},
     }
 
     def _setup_client(self) -> None:
         """Set up Anthropic client."""
         self.client = Anthropic(api_key=self.api_key)
         self.usage_tracker = UsageTracker(caller=self.caller)
-
-    def supports_model(self, model: str) -> bool:
-        """Check if Anthropic supports this model."""
-        return (
-            model in self.MODELS
-            or model.startswith("claude")
-            or model.startswith("sonnet")
-        )
-
-    def get_actual_model_name(self, model: str) -> str:
-        """Get actual Anthropic model name."""
-        return self.MODELS.get(model, model)
 
 
     def text_response(
@@ -813,9 +789,7 @@ class AnthropicProvider(BaseLLMProvider):
 class GoogleProvider(BaseLLMProvider):
     """Google provider implementation for Gemini models."""
 
-    MODELS = {
-        "gemini-2.5-pro": "gemini-2.5-pro",
-    }
+    provider_name = "google"
 
     PRICING = {
         "gemini-2.5-pro": {
@@ -844,13 +818,6 @@ class GoogleProvider(BaseLLMProvider):
         )
         self.usage_tracker = UsageTracker(caller=self.caller)
 
-    def supports_model(self, model: str) -> bool:
-        """Check if Google supports this model."""
-        return model in self.MODELS or model.startswith("gemini")
-
-    def get_actual_model_name(self, model: str) -> str:
-        """Get actual Google model name."""
-        return self.MODELS.get(model, model)
 
     def _convert_messages(self, messages: List[Dict]) -> List:
         """Convert OpenAI format messages to Gemini format."""

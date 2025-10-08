@@ -8,6 +8,11 @@ from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional, Union, Type
 from pydantic import BaseModel
 
+from ...config.llm_config import (
+    get_actual_model_name as config_get_actual_model_name,
+    PROVIDER_MODELS
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -37,6 +42,9 @@ def delay_exp(e: Exception, x: int) -> None:
 class BaseLLMProvider(ABC):
     """Abstract base class for LLM providers."""
 
+    # Each provider must define its provider_name
+    provider_name: str = None
+
     def __init__(self, api_key: str, caller: str = "general"):
         """
         Initialise the provider with API credentials.
@@ -54,7 +62,6 @@ class BaseLLMProvider(ABC):
         """Set up the provider-specific client."""
         pass
 
-    @abstractmethod
     def supports_model(self, model: str) -> bool:
         """
         Check if this provider supports the given model.
@@ -65,12 +72,14 @@ class BaseLLMProvider(ABC):
         Returns:
             True if the provider supports this model
         """
-        pass
+        if model in PROVIDER_MODELS:
+            provider, _ = PROVIDER_MODELS[model]
+            return provider == self.provider_name
+        return False
 
-    @abstractmethod
     def get_actual_model_name(self, model: str) -> str:
         """
-        Get the actual model name for API calls.
+        Get the actual model name for API calls from central config.
 
         Args:
             model: Friendly model name
@@ -78,7 +87,7 @@ class BaseLLMProvider(ABC):
         Returns:
             Actual model identifier for API
         """
-        pass
+        return config_get_actual_model_name(model)
 
     @abstractmethod
     def text_response(

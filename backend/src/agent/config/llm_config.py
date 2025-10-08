@@ -10,7 +10,7 @@ from typing import Dict, Any
 # Maps friendly names to (provider, actual_model_name) tuples
 PROVIDER_MODELS = {
     "gpt-5-mini": ("openai", "gpt-5-mini-2025-08-07"),
-    "sonnet-4": ("anthropic", "claude-sonnet-4-20250514"),
+    "sonnet-4.5": ("anthropic", "claude-sonnet-4-5-20250929"),
     "gemini-2.5-pro": ("google", "gemini-2.5-pro"),
 }
 
@@ -24,7 +24,7 @@ PROVIDER_PRICING = {
         }
     },
     "anthropic": {
-        "claude-sonnet-4-20250514": {
+        "claude-sonnet-4-5-20250929": {
             "input": 3.0,
             "output": 15.0,
         }

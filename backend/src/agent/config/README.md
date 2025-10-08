@@ -90,7 +90,7 @@ Application settings management using Pydantic BaseSettings.
 **Model Configuration**
 - `router_model`: Model used by RouterAgent (gpt-5-mini - the only accepted OpenAI model)
 - `planner_model`: Model used by PlannerAgent (gemini-2.5-pro)
-- `worker_model`: Model used by WorkerAgent (sonnet-4)
+- `worker_model`: Model used by WorkerAgent (sonnet-4.5)
 
 **Database Configuration**
 - `database_path`: Path to SQLite database file
