@@ -86,7 +86,7 @@ Research Completion Checklist - Verify all are TRUE before proceeding:
 Continue researching until ALL items are verified TRUE.
 
 Steps to execute:
-1. Identify all information sources mentioned or needed
+1. Identify all information sources mentioned or needed - if you don't seem to have information about the source, immediately use the list_directory tool to see if you can find the file in the workspace.
 2. Execute immediate retrieval of ALL information from these sources one step at a time. In any one step only perform one action, such as reading a single file, searching the web about one question, or asking the user about a single question. Note, don't ever ask the user too many questions at once, guide them question by question to share their answer.
 3. Continue gathering until you have concrete data for every aspect
 4. Verify completeness using the Research Completion Checklist
@@ -164,7 +164,7 @@ def detect_hallucinated_tool_calls(content: str) -> tuple[bool, List[str]]:
     import re
 
     # Pattern to match the official tool result format
-    pattern = r'Tool (.+?) was called and returned:'
+    pattern = r"Tool (.+?) was called and returned:"
     matches = re.findall(pattern, content)
 
     if matches:
@@ -777,7 +777,9 @@ async def plamarination_response(router_state: Dict[str, Any], websocket: WebSoc
 
             # Check for hallucinated tool calls (only possible when response is string)
             if isinstance(response, str):
-                is_hallucinated, hallucinated_tools = detect_hallucinated_tool_calls(content)
+                is_hallucinated, hallucinated_tools = detect_hallucinated_tool_calls(
+                    content
+                )
 
                 if is_hallucinated:
                     # Hallucination detected - store and retry
@@ -804,7 +806,9 @@ async def plamarination_response(router_state: Dict[str, Any], websocket: WebSoc
 
                     # Continue to next attempt or abort
                     if attempt < MAX_HALLUCINATION_RETRIES - 1:
-                        logger.info(f"Router {router_id} retrying after hallucination correction")
+                        logger.info(
+                            f"Router {router_id} retrying after hallucination correction"
+                        )
                         continue
                     else:
                         # Final attempt still hallucinated - send visible error
@@ -825,16 +829,17 @@ async def plamarination_response(router_state: Dict[str, Any], websocket: WebSoc
                         )
 
                         # Send error to frontend (no message_id needed)
-                        await websocket.send_json({
-                            "type": "response",
-                            "message": error_message,
-                            "router_id": router_id
-                        })
+                        await websocket.send_json(
+                            {
+                                "type": "response",
+                                "message": error_message,
+                                "router_id": router_id,
+                            }
+                        )
 
                         # Stay in plamarination, await user response
                         await agent_db.update_router(
-                            router_id=router_id,
-                            status="plamarinating_awaiting_user"
+                            router_id=router_id, status="plamarinating_awaiting_user"
                         )
 
                         # Exit - user can respond to retry
