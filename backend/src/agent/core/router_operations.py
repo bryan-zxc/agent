@@ -98,6 +98,10 @@ Important operational notes:
 - The execution phase has no user interaction, so gather all clarifications NOW
 - Execute research tasks one at a time for thoroughness
 - If the user asks you to write a summary of research to file during plamarination, this is acceptable as it documents your immediate findings
+- Tool calls can be made and undergo special processing, you will not ever see standard tool calls in your message chain. 
+  You will only see pure text prefixed by 'Tool [tool name] was called and returned:' - this indicates a tool was called with the result of running the tool.
+  If you want a tool to be called, you MUST make a directly tool call, and a response with the above prefix will automatically be added.
+  DO NOT mimic a tool call and create that message yourself, it will be rejected.
 
 ---
 
@@ -139,6 +143,35 @@ class PlamarinationContinuation(BaseModel):
 
 
 # ========== STANDALONE FUNCTIONS (REFACTORED FROM RouterAgent) ==========
+
+
+def detect_hallucinated_tool_calls(content: str) -> tuple[bool, List[str]]:
+    """
+    Detect if content contains hallucinated tool call syntax.
+
+    The official tool result format is: "Tool {name} was called and returned:\n{result}"
+    This should ONLY appear when tools are actually called (response is dict with tool_calls).
+    If it appears in a string response, it's a hallucination.
+
+    Args:
+        content: The response content to check
+
+    Returns:
+        Tuple of (is_hallucinated, tool_names):
+        - is_hallucinated: True if hallucination detected
+        - tool_names: List of detected tool names from the pattern
+    """
+    import re
+
+    # Pattern to match the official tool result format
+    pattern = r'Tool (.+?) was called and returned:'
+    matches = re.findall(pattern, content)
+
+    if matches:
+        logger.warning(f"Detected hallucinated tool calls: {matches}")
+        return True, matches
+
+    return False, []
 
 
 async def create_router(router_id: Optional[str] = None) -> Dict[str, Any]:
@@ -443,19 +476,19 @@ async def handle_message(
 
         # Add as another user message
         result = await message_manager.add_message(
-            role="user",
-            content=file_notification,
-            need_message_id=True
+            role="user", content=file_notification, need_message_id=True
         )
 
         # Send to frontend for display
-        await websocket.send_json({
-            "type": "response",
-            "message": file_notification,
-            "message_id": result["message_id"],
-            "router_id": router_id,
-            "role": "user"  # Indicate this is a user message
-        })
+        await websocket.send_json(
+            {
+                "type": "response",
+                "message": file_notification,
+                "message_id": result["message_id"],
+                "router_id": router_id,
+                "role": "user",  # Indicate this is a user message
+            }
+        )
 
     try:
         # CRITICAL: Check status first to handle ongoing operations
@@ -496,7 +529,7 @@ async def handle_message(
                     await agent_db.update_router(
                         router_id=router_id,
                         status="executing",
-                        agent_phase="execution"  # Critical phase transition
+                        agent_phase="execution",  # Critical phase transition
                     )
 
                     # Send status update
@@ -507,18 +540,22 @@ async def handle_message(
                     )
 
                     # Send phase transition notification
-                    await websocket.send_json({
-                        "type": "phase_updated",
-                        "agent_phase": "execution",
-                        "router_id": router_id
-                    })
+                    await websocket.send_json(
+                        {
+                            "type": "phase_updated",
+                            "agent_phase": "execution",
+                            "router_id": router_id,
+                        }
+                    )
 
                     # Send start execution signal with first action
-                    await websocket.send_json({
-                        "type": "start_execution",
-                        "next_action": "task_creation",
-                        "router_id": router_id
-                    })
+                    await websocket.send_json(
+                        {
+                            "type": "start_execution",
+                            "next_action": "task_creation",
+                            "router_id": router_id,
+                        }
+                    )
 
                     logger.info(f"Sent start_execution signal for router {router_id}")
                 else:
@@ -718,21 +755,93 @@ async def plamarination_response(router_state: Dict[str, Any], websocket: WebSoc
     messages = await message_manager.get_messages()
 
     try:
-        # Get response (dict if tools called, string if not)
-        response = await llm.a_get_response(
-            messages=messages,
-            model=settings.planner_model,
-            temperature=0,  # Deterministic for plamarination
-            use_tools=True,
-            enable_web_search=True,  # Enable native web search for research phase
-            tool_filter=plamarination_tool_filter,
-            system_instruction=PLAMARINATION_INSTRUCTION,
-            websocket=websocket,
-            payload={"router_id": router_id},  # For hook context
-        )
+        # Retry loop for hallucination detection (max 3 attempts)
+        MAX_HALLUCINATION_RETRIES = 3
 
-        # Extract content
-        content = response["content"] if isinstance(response, dict) else response
+        for attempt in range(MAX_HALLUCINATION_RETRIES):
+            # Get response (dict if tools called, string if not)
+            response = await llm.a_get_response(
+                messages=messages,
+                model=settings.planner_model,
+                temperature=0,  # Deterministic for plamarination
+                use_tools=True,
+                enable_web_search=True,  # Enable native web search for research phase
+                tool_filter=plamarination_tool_filter,
+                system_instruction=PLAMARINATION_INSTRUCTION,
+                websocket=websocket,
+                payload={"router_id": router_id},  # For hook context
+            )
+
+            # Extract content
+            content = response["content"] if isinstance(response, dict) else response
+
+            # Check for hallucinated tool calls (only possible when response is string)
+            if isinstance(response, str):
+                is_hallucinated, hallucinated_tools = detect_hallucinated_tool_calls(content)
+
+                if is_hallucinated:
+                    # Hallucination detected - store and retry
+                    logger.warning(
+                        f"Router {router_id} hallucinated tool calls (attempt {attempt + 1}/{MAX_HALLUCINATION_RETRIES}): {hallucinated_tools}"
+                    )
+
+                    # Store hallucinated response as assistant message (DB only, not WebSocket)
+                    await message_manager.add_message(role="assistant", content=content)
+
+                    # Create corrective user message
+                    corrective_message = (
+                        f"The previous response mimicked tool call syntax without actually calling tools.\n"
+                        f"Detected mimicked tools: {', '.join(hallucinated_tools)}\n\n"
+                        f"Tool calls must be made using proper function calling. If you need to call a tool, "
+                        f"use the tool calling mechanism. If providing a text response, do not mimic tool result formatting.\n\n"
+                        f"Please provide a proper response now."
+                    )
+
+                    # Store corrective message and get updated messages (returns messages directly)
+                    messages = await message_manager.add_message(
+                        role="user", content=corrective_message
+                    )
+
+                    # Continue to next attempt or abort
+                    if attempt < MAX_HALLUCINATION_RETRIES - 1:
+                        logger.info(f"Router {router_id} retrying after hallucination correction")
+                        continue
+                    else:
+                        # Final attempt still hallucinated - send visible error
+                        logger.error(
+                            f"Router {router_id} continued hallucinating after {MAX_HALLUCINATION_RETRIES} attempts"
+                        )
+
+                        # Create error message for user
+                        error_message = (
+                            "I encountered an error processing your request. "
+                            "I attempted to mimic tool responses instead of properly calling tools. "
+                            "Please try rephrasing your request."
+                        )
+
+                        # Store error as assistant message (for chat history)
+                        await message_manager.add_message(
+                            role="assistant", content=error_message
+                        )
+
+                        # Send error to frontend (no message_id needed)
+                        await websocket.send_json({
+                            "type": "response",
+                            "message": error_message,
+                            "router_id": router_id
+                        })
+
+                        # Stay in plamarination, await user response
+                        await agent_db.update_router(
+                            router_id=router_id,
+                            status="plamarinating_awaiting_user"
+                        )
+
+                        # Exit - user can respond to retry
+                        return
+
+            # No hallucination or dict response - break out of retry loop
+            break
 
         # Store message and get display texts
         result = await message_manager.add_message(
@@ -835,10 +944,7 @@ async def plamarination_response(router_state: Dict[str, Any], websocket: WebSoc
 
 
 async def execution_response(
-    router_state: Dict[str, Any],
-    function_name: str,
-    websocket: WebSocket,
-    **kwargs
+    router_state: Dict[str, Any], function_name: str, websocket: WebSocket, **kwargs
 ) -> Dict[str, Any]:
     """
     Thin orchestration layer for executing planner/worker functions.
@@ -862,8 +968,10 @@ async def execution_response(
     try:
         # Build task_data expected by existing functions
         task_data = {
-            "entity_id": kwargs.get("worker_id", router_id),  # worker_id for workers, router_id for planner
-            "payload": kwargs  # Pass all kwargs as payload
+            "entity_id": kwargs.get(
+                "worker_id", router_id
+            ),  # worker_id for workers, router_id for planner
+            "payload": kwargs,  # Pass all kwargs as payload
         }
 
         # Call the requested function and return its result directly
@@ -903,30 +1011,34 @@ async def execution_response(
                     router_id=router_id,
                     status="active",
                     mode="auto",
-                    agent_phase=None  # Clear phase when returning to auto mode
+                    agent_phase=None,  # Clear phase when returning to auto mode
                 )
 
                 # Send completion signal with final answer
-                await websocket.send_json({
-                    "type": "execution_complete",
-                    "router_id": router_id,
-                    "final_answer": result.get("final_answer")
-                })
+                await websocket.send_json(
+                    {
+                        "type": "execution_complete",
+                        "router_id": router_id,
+                        "final_answer": result.get("final_answer"),
+                    }
+                )
 
                 # Send mode/phase updates
-                await websocket.send_json({
-                    "type": "mode_updated",
-                    "mode": "auto",
-                    "router_id": router_id
-                })
+                await websocket.send_json(
+                    {"type": "mode_updated", "mode": "auto", "router_id": router_id}
+                )
 
-                await websocket.send_json({
-                    "type": "phase_updated",
-                    "agent_phase": None,
-                    "router_id": router_id
-                })
+                await websocket.send_json(
+                    {
+                        "type": "phase_updated",
+                        "agent_phase": None,
+                        "router_id": router_id,
+                    }
+                )
 
-                logger.info(f"Execution complete for router {router_id}, transitioned to auto mode")
+                logger.info(
+                    f"Execution complete for router {router_id}, transitioned to auto mode"
+                )
 
             return result
 
@@ -1357,7 +1469,6 @@ async def determine_file_groups(
 
 
 # invoke_single function removed - was part of old planner creation system
-
 
 
 async def generate_and_update_title(router_state: Dict[str, Any]):
