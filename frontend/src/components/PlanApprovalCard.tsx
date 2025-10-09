@@ -1,17 +1,17 @@
 'use client';
 
 import React, { useState } from 'react';
-import { CheckCircle2, XCircle, FileText, Layout, Search } from 'lucide-react';
+import { CheckCircle2, XCircle, FileText, Layout } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Textarea } from './ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { cn } from '@/lib/utils';
+import { RichMarkdownRenderer } from './RichMarkdownRenderer';
 
 export interface ApprovalData {
   plan: string;
   template?: string;
-  findings?: string;
   routerId: string;
 }
 
@@ -93,20 +93,12 @@ export const PlanApprovalCard: React.FC<PlanApprovalCardProps> = ({
                 Template
               </TabsTrigger>
             )}
-            {data.findings && (
-              <TabsTrigger value="findings" className="flex-1">
-                <Search className="h-4 w-4 mr-1.5" />
-                Findings
-              </TabsTrigger>
-            )}
           </TabsList>
           
           {/* Plan content with shaded container */}
           <TabsContent value="plan" className="mt-4">
             <div className="bg-muted/30 rounded-lg p-4 max-h-96 overflow-y-auto">
-              <pre className="whitespace-pre-wrap text-sm text-foreground/90 font-mono">
-                {data.plan}
-              </pre>
+              <RichMarkdownRenderer content={data.plan} />
             </div>
           </TabsContent>
           
@@ -114,20 +106,7 @@ export const PlanApprovalCard: React.FC<PlanApprovalCardProps> = ({
           {data.template && (
             <TabsContent value="template" className="mt-4">
               <div className="bg-muted/30 rounded-lg p-4 max-h-96 overflow-y-auto">
-                <pre className="whitespace-pre-wrap text-sm text-foreground/90 font-mono">
-                  {data.template}
-                </pre>
-              </div>
-            </TabsContent>
-          )}
-          
-          {/* Findings content with shaded container */}
-          {data.findings && (
-            <TabsContent value="findings" className="mt-4">
-              <div className="bg-muted/30 rounded-lg p-4 max-h-96 overflow-y-auto">
-                <pre className="whitespace-pre-wrap text-sm text-foreground/90 font-mono">
-                  {data.findings}
-                </pre>
+                <RichMarkdownRenderer content={data.template} />
               </div>
             </TabsContent>
           )}

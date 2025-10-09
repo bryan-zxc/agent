@@ -178,7 +178,6 @@ export const useWebSocket = (url?: string) => {
               const approvalRequest: ApprovalRequest = {
                 plan: data.plan,
                 template: data.template,
-                findings: data.findings,
                 router_id: data.router_id,
               };
               store.setPendingApproval(approvalRequest);

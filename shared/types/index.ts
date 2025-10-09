@@ -39,7 +39,6 @@ export interface ConversationHistory {
 export interface ApprovalRequest {
   plan: string;
   template?: string;
-  findings?: string;
   router_id: string;
 }
 

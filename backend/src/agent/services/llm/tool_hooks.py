@@ -242,7 +242,6 @@ class ToolHooks:
                                         "type": "approval_request",
                                         "plan": router_data.get("execution_plan", ""),
                                         "template": router_data.get("answer_template", ""),
-                                        "findings": "",  # Optional field
                                         "router_id": router_id
                                     })
                                     logger.info(f"✓ Sent approval_request for router {router_id}")

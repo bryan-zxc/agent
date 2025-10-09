@@ -245,7 +245,6 @@ export const ChatInterface: React.FC = () => {
                     data={{
                       plan: pendingApproval.plan,
                       template: pendingApproval.template,
-                      findings: pendingApproval.findings,
                       routerId: pendingApproval.router_id,
                     }}
                     onApprove={handleApprovalApprove}
