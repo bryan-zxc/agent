@@ -187,21 +187,9 @@ export const useWebSocket = (url?: string) => {
               break;
               
             case 'approval_response':
-              // Clear pending approval when response is processed
-              if (data.approved) {
-                store.setPlamarinationStatus('approved');
-                console.log('Plan approved, proceeding to execution');
-              } else {
-                store.setPlamarinationStatus('revising');
-                console.log('Plan revision requested');
-              }
-              // Clear the pending approval after a brief delay to show status
-              setTimeout(() => {
-                store.setPendingApproval(null);
-                if (data.approved) {
-                  store.setPlamarinationStatus(null); // Clear status when moving to execution
-                }
-              }, 2000);
+              // Deprecated: approval state is now managed by button clicks
+              // This handler is kept for backward compatibility but does nothing
+              console.log('Received approval_response (managed by UI now):', data);
               break;
               
             case 'plamarination_status':
@@ -413,11 +401,16 @@ export const useWebSocket = (url?: string) => {
 
   const sendApprovalResponse = useCallback((routerId: string, approved: boolean, feedback?: string) => {
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+      // Send as regular message with approval metadata
+      const message = approved ? 'Agree with plan, proceed to action it' : (feedback || '');
+
       const payload = {
-        type: 'approval_response',
+        type: 'message',
         router_id: routerId,
-        approved,
-        feedback,
+        message: message,
+        approval_response: {
+          approved: approved
+        }
       };
 
       console.log('Sending approval response via WebSocket:', payload);

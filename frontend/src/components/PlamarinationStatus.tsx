@@ -4,7 +4,7 @@ import React from 'react';
 import { Brain } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-export type PlamarinationStatusType = 'planning' | 'waiting_approval' | 'revising' | 'approved' | null;
+export type PlamarinationStatusType = 'planning' | 'waiting_approval' | 'approved' | null;
 
 interface PlamarinationStatusProps {
   status: PlamarinationStatusType;
@@ -27,14 +27,6 @@ const statusConfig = {
     containerColour: 'bg-amber-500/10 border-amber-200/20 dark:bg-amber-950/20 dark:border-amber-800/20',
     textColour: 'text-amber-700 dark:text-amber-300',
     animation: 'animate-bounce',
-  },
-  revising: {
-    label: 'Incorporating Feedback',
-    description: 'Revising plan based on your feedback',
-    dotColour: 'bg-orange-500',
-    containerColour: 'bg-orange-500/10 border-orange-200/20 dark:bg-orange-950/20 dark:border-orange-800/20',
-    textColour: 'text-orange-700 dark:text-orange-300',
-    animation: 'animate-pulse',
   },
   approved: {
     label: 'Plan Approved',

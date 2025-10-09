@@ -49,4 +49,4 @@ export interface ApprovalResponse {
   router_id: string;
 }
 
-export type PlamarinationStatus = 'planning' | 'waiting_approval' | 'revising' | 'approved' | null;
+export type PlamarinationStatus = 'planning' | 'waiting_approval' | 'approved' | null;

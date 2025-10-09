@@ -525,50 +525,33 @@ async def handle_message(
                         f"Plan approved for router {router_id}, transitioning to execution phase"
                     )
 
-                    # Update database with phase transition
+                    # Update database with phase transition (frontend already updated UI)
                     await agent_db.update_router(
                         router_id=router_id,
                         status="executing",
-                        agent_phase="execution",  # Critical phase transition
+                        agent_phase="execution",
                     )
 
-                    # Send status update
-                    await send_status(
-                        status="Starting execution phase",
-                        router_id=router_id,
-                        websocket=websocket,
-                    )
-
-                    # Send phase transition notification
-                    await websocket.send_json(
-                        {
-                            "type": "phase_updated",
-                            "agent_phase": "execution",
-                            "router_id": router_id,
-                        }
-                    )
-
-                    # Send start execution signal with first action
-                    await websocket.send_json(
-                        {
-                            "type": "start_execution",
-                            "next_action": "task_creation",
-                            "router_id": router_id,
-                        }
-                    )
-
-                    logger.info(f"Sent start_execution signal for router {router_id}")
+                    # Start execution immediately (like plamarination_response pattern)
+                    await execution_response(router_state, "task_creation", websocket)
                 else:
-                    # User wants revision
-                    feedback = message_data.get("feedback", "")
+                    # User wants revision - feedback already in message content
+                    feedback = message_data.get("message", "")  # Get from message field
                     logger.info(
-                        f"Plan rejected for router {router_id}, continuing plamarination"
+                        f"Plan rejected for router {router_id}, continuing plamarination with feedback"
                     )
 
+                    # Add feedback to conversation history (frontend already displayed it)
+                    if feedback and feedback.strip():
+                        await message_manager.add_message(role="user", content=feedback)
+                        logger.info(f"Added revision feedback to history for router {router_id}")
+
+                    # Update database (frontend already updated UI)
                     await agent_db.update_router(
                         router_id=router_id, status="plamarinating"
                     )
-                    # Continue plamarination with feedback
+
+                    # Continue plamarination immediately (like normal pattern)
                     await plamarination_response(router_state, websocket)
             else:
                 # Regular message during awaiting_approval - treat as revision request
@@ -760,6 +743,7 @@ async def plamarination_response(router_state: Dict[str, Any], websocket: WebSoc
 
         for attempt in range(MAX_HALLUCINATION_RETRIES):
             # Get response (dict if tools called, string if not)
+            logger.info(f"Plamarination llm call with messages: {messages}")
             response = await llm.a_get_response(
                 messages=messages,
                 model=settings.planner_model,

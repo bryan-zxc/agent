@@ -154,12 +154,13 @@ class ToolHooks:
         status based on whether execution is needed or the answer is complete.
         """
         router_id = payload.get("router_id") if payload else None
-        
+
         if isinstance(result, str):
             status = None
             mode = None
             agent_phase = None
-            
+            router_data = None  # Track router data for approval flow
+
             # Detect based on content structure, not status text
             if result.startswith("# Execution Plan"):
                 # Has todos - needs approval for execution
@@ -173,13 +174,13 @@ class ToolHooks:
                 mode = "auto"
                 agent_phase = None  # Null for auto mode
                 logger.info(f"Answer complete for router {router_id}, transitioning to auto mode")
-            
+
             # Update database and send updates if determined
             if status and router_id:
                 # Create database connection for updates
                 try:
                     agent_db = await AgentDatabase.create()
-                    
+
                     # Update database with all state values when transitioning to auto
                     if mode == "auto":
                         await agent_db.update_router(
@@ -191,13 +192,21 @@ class ToolHooks:
                         logger.info(f"Updated router {router_id} in database: status={status}, mode={mode}, agent_phase={agent_phase}")
                     else:
                         # Just update status for awaiting_approval case
+                        logger.info(f"Entering awaiting_approval flow for router {router_id}")
                         await agent_db.update_router(
                             router_id=router_id,
                             status=status
                         )
+                        logger.info(f"Updated router {router_id} status to 'awaiting_approval' in database")
 
                         # Fetch router data to get plan and template for approval_request
-                        router_data = await agent_db.get_router(router_id)
+                        try:
+                            router_data = await agent_db.get_router(router_id)
+                            logger.info(f"Successfully fetched router data for {router_id}")
+                            logger.debug(f"Router data keys: {list(router_data.keys()) if router_data else 'None'}")
+                        except Exception as fetch_error:
+                            logger.error(f"Failed to fetch router data for {router_id}: {fetch_error}")
+                            router_data = None
 
                     # Send WebSocket updates
                     if websocket:
@@ -226,18 +235,27 @@ class ToolHooks:
                             logger.info(f"Sent phase update 'null' for router {router_id}")
 
                         # Send approval_request when plan needs approval
-                        elif status == "awaiting_approval" and 'router_data' in locals():
-                            await websocket.send_json({
-                                "type": "approval_request",
-                                "plan": router_data.get("execution_plan", ""),
-                                "template": router_data.get("answer_template", ""),
-                                "findings": "",  # Optional field
-                                "router_id": router_id
-                            })
-                            logger.info(f"Sent approval_request for router {router_id}")
-                    
+                        elif status == "awaiting_approval":
+                            if router_data:
+                                try:
+                                    await websocket.send_json({
+                                        "type": "approval_request",
+                                        "plan": router_data.get("execution_plan", ""),
+                                        "template": router_data.get("answer_template", ""),
+                                        "findings": "",  # Optional field
+                                        "router_id": router_id
+                                    })
+                                    logger.info(f"✓ Sent approval_request for router {router_id}")
+                                    logger.debug(f"Approval request - plan length: {len(router_data.get('execution_plan', ''))}, template length: {len(router_data.get('answer_template', ''))}")
+                                except Exception as ws_error:
+                                    logger.error(f"Failed to send approval_request WebSocket message: {ws_error}")
+                            else:
+                                logger.error(f"Cannot send approval_request - router_data is None for router {router_id}")
+                    else:
+                        logger.warning(f"WebSocket is None - cannot send updates for router {router_id}")
+
                 except Exception as e:
-                    logger.error(f"Failed to update router state: {e}")
+                    logger.error(f"Failed to update router state: {e}", exc_info=True)
         
         return result
     

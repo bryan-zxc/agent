@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { useChatStore, RouterMode } from '../stores/chatStore';
+import { useChatStore } from '../stores/chatStore';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { ChatHeader } from './ChatHeader';
 import { MessageList } from './MessageList';
@@ -12,13 +12,13 @@ import { ErrorBoundary } from './ErrorBoundary';
 import { RightPanel } from './RightPanel';
 import { DuplicateFileDialog } from './DuplicateFileDialog';
 import { PlanApprovalCard } from './PlanApprovalCard';
-import { PlamarinationStatus } from './PlamarinationStatus';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from './ui/resizable';
 import { SidebarProvider, SidebarInset } from './ui/sidebar';
 import { fileUploadService, DuplicateFileInfo } from '../lib/fileUpload';
+import { ChatMessage } from '../../../shared/types';
 
 export const ChatInterface: React.FC = () => {
-  const { messages, status, currentRouterId, currentMode, currentPhase, phaseActive, setMode, setPhase, createNewConversation, setCurrentConversation, isConversationLocked, pendingApproval, plamarinationStatus } = useChatStore();
+  const { messages, status, currentRouterId, currentMode, currentPhase, phaseActive, setMode, setPhase, createNewConversation, isConversationLocked, pendingApproval, addMessage, setPendingApproval } = useChatStore();
   console.log('ChatInterface render - currentRouterId:', currentRouterId);
   const [conversationStarted, setConversationStarted] = useState(false);
   const [, setPendingRouterId] = useState<string | null>(null);
@@ -164,7 +164,12 @@ export const ChatInterface: React.FC = () => {
 
   const handleApprovalApprove = async (routerId: string) => {
     try {
-      await sendApprovalResponse(routerId, true);
+      // Immediately update ALL UI state for responsive UX
+      setPendingApproval(null);
+      setPhase('execution');  // Update dial to execution immediately
+
+      // Send approval to backend (backend just starts execution, no UI updates needed)
+      sendApprovalResponse(routerId, true);
     } catch (error) {
       console.error('Error approving plan:', error);
     }
@@ -172,7 +177,22 @@ export const ChatInterface: React.FC = () => {
 
   const handleApprovalRevise = async (routerId: string, feedback: string) => {
     try {
-      await sendApprovalResponse(routerId, false, feedback);
+      // Immediately add feedback as user message to chat
+      if (feedback && feedback.trim()) {
+        const userMessage: ChatMessage = {
+          id: Date.now().toString(),
+          message: feedback,
+          sender: 'user',
+          timestamp: new Date(),
+        };
+        addMessage(userMessage);
+      }
+
+      // Immediately clear modal
+      setPendingApproval(null);
+
+      // Send revision request to backend asynchronously
+      sendApprovalResponse(routerId, false, feedback);
     } catch (error) {
       console.error('Error requesting plan revision:', error);
     }
@@ -215,7 +235,7 @@ export const ChatInterface: React.FC = () => {
             </ResizablePanelGroup>
             
             {/* Approval UI Components */}
-            <PlamarinationStatus status={plamarinationStatus} />
+            {/* <PlamarinationStatus status={plamarinationStatus} /> */}
             
             {/* Plan Approval Card */}
             {pendingApproval && (
@@ -322,7 +342,7 @@ export const ChatInterface: React.FC = () => {
           </ResizablePanelGroup>
           
           {/* Approval UI Components */}
-          <PlamarinationStatus status={plamarinationStatus} />
+          {/* <PlamarinationStatus status={plamarinationStatus} /> */}
           
           {/* Plan Approval Card */}
           {pendingApproval && (
