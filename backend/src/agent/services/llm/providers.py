@@ -236,7 +236,6 @@ class OpenAIProvider(BaseLLMProvider):
         model: str,
         temperature: float,
         tools: List[Dict],
-        enable_web_search: bool = False,
         system_instruction: Optional[str] = None,
     ):
         """Execute tools using OpenAI Responses API.
@@ -250,10 +249,8 @@ class OpenAIProvider(BaseLLMProvider):
             # Warn about temperature deprecation
             self._warn_temperature_deprecated(temperature)
 
-            # Build tools list with format transformation for OpenAI
-            tools_list = []
-
             # Transform MCP tools from nested to OpenAI's flat format
+            tools_list = []
             if tools:
                 for tool in tools:
                     if tool.get("type") == "function" and "function" in tool:
@@ -267,10 +264,6 @@ class OpenAIProvider(BaseLLMProvider):
                             "parameters": func.get("parameters", {})
                         }
                         tools_list.append(openai_tool)
-
-            # Add native web search tool if enabled
-            if enable_web_search:
-                tools_list.append({"type": "web_search"})
 
             # Temperature not supported in gpt-5 models
             response = self.client.responses.create(
@@ -490,21 +483,17 @@ class AnthropicProvider(BaseLLMProvider):
         model: str,
         temperature: float,
         tools: List[Dict],
-        enable_web_search: bool = False,
         system_instruction: Optional[str] = None,
-    ) -> Optional[Dict]:
-        """Get response with tool/function calling.
+    ):
+        """Execute tools using Anthropic Messages API.
 
-        Supports native Anthropic web search when enable_web_search=True.
-        Web search and MCP tools can be used together in the same response.
+        Returns response.content list containing TextBlock and ToolUseBlock objects.
         """
         try:
             actual_model = self.get_actual_model_name(model)
 
-            # Build complete tools list (MCP tools + web search if enabled)
-            anthropic_tools = []
-            
             # Convert MCP tools to Anthropic format
+            anthropic_tools = []
             if tools:
                 for tool in tools:
                     # Handle MCP's nested structure: {"type": "function", "function": {...}}
@@ -520,17 +509,7 @@ class AnthropicProvider(BaseLLMProvider):
                             }
                         )
 
-            # Add native web search tool if enabled
-            if enable_web_search:
-                anthropic_tools.append(
-                    {
-                        "type": "web_search_20250305",
-                        "name": "web_search",
-                        "max_uses": 5,
-                    }
-                )
-
-            # Make SINGLE API call with all available tools
+            # Make API call
             kwargs = {
                 "model": actual_model,
                 "max_tokens": 4096,
@@ -545,50 +524,13 @@ class AnthropicProvider(BaseLLMProvider):
                 kwargs["system"] = system_instruction
 
             response = self.client.messages.create(**kwargs)
-            
-            # Analyze response to determine what happened
-            has_web_search = False
-            has_tool_calls = False
-            
-            if response.content:
-                for content_block in response.content:
-                    if hasattr(content_block, "type"):
-                        if content_block.type == "server_tool_use":
-                            if hasattr(content_block, "name") and content_block.name == "web_search":
-                                has_web_search = True
-                        elif content_block.type == "tool_use":
-                            has_tool_calls = True
-            
-            # Track costs with appropriate request type
-            request_type = RequestType.TOOLS if (has_web_search or has_tool_calls) else RequestType.TEXT
+
+            # Track usage
             if hasattr(response, 'usage'):
-                self.track_cost(actual_model, response.usage, request_type)
-            
-            # Process response based on what actually happened
-            if has_web_search:
-                # Process web search with citations (may also include tool_calls!)
-                return self._process_web_search_response(response)
-            else:
-                # Standard response processing for text and/or tool calls
-                content_text = None
-                tool_calls = []
-                
-                if response.content:
-                    for content_block in response.content:
-                        if hasattr(content_block, "text"):
-                            content_text = content_block.text
-                        elif hasattr(content_block, "type") and content_block.type == "tool_use":
-                            # Normalise to standard format
-                            tool_calls.append({
-                                "name": content_block.name,
-                                "arguments": content_block.input if hasattr(content_block, 'input') else {}
-                            })
-                
-                return {
-                    "content": content_text or "",
-                    "tool_calls": tool_calls if tool_calls else None,
-                    "role": "assistant",
-                }
+                self.track_cost(actual_model, response.usage, RequestType.TOOLS)
+
+            # Return response.content directly for storage
+            return response.content
 
         except Exception as e:
             logger.error(f"Anthropic tools response error: {e}")
