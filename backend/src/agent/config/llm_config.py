@@ -9,6 +9,7 @@ from typing import Dict, Any
 # Provider model mappings
 # Maps friendly names to (provider, actual_model_name) tuples
 PROVIDER_MODELS = {
+    "gpt-5": ("openai", "gpt-5-2025-08-07"),
     "gpt-5-mini": ("openai", "gpt-5-mini-2025-08-07"),
     "sonnet-4.5": ("anthropic", "claude-sonnet-4-5-20250929"),
     "gemini-2.5-pro": ("google", "gemini-2.5-pro"),
@@ -18,6 +19,10 @@ PROVIDER_MODELS = {
 # Costs are per 1M tokens in USD
 PROVIDER_PRICING = {
     "openai": {
+        "gpt-5-2025-08-07": {
+            "input": 1.25,
+            "output": 10.0,
+        },
         "gpt-5-mini-2025-08-07": {
             "input": 0.25,
             "output": 2.0,

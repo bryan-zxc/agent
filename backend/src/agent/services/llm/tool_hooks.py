@@ -169,6 +169,22 @@ class ToolHooks:
                 logger.info(f"Execution plan stored for router {router_id}, awaiting approval")
             elif result.startswith("# Answer"):
                 # No todos - answer is complete, back to conversation
+                # Extract answer content (everything after "# Answer\n\n")
+                answer_content = result.replace("# Answer\n\n", "", 1).strip()
+
+                # IMPORTANT: Send answer to user FIRST via WebSocket
+                if websocket and answer_content:
+                    try:
+                        await websocket.send_json({
+                            "type": "response",
+                            "message": answer_content,
+                            "router_id": router_id
+                        })
+                        logger.info(f"Sent answer content to user for router {router_id}")
+                    except Exception as ws_error:
+                        logger.error(f"Failed to send answer content: {ws_error}")
+
+                # THEN update status/mode/phase to complete the interaction
                 # IMPORTANT: Update all three values together as per design
                 status = "active"
                 mode = "auto"
