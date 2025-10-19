@@ -56,8 +56,12 @@ class WorkerMessage(Base):
     agent_id = Column(
         String(32), nullable=False, index=True
     )  # UUID hex string (task_id)
-    role = Column(String(20), nullable=False)  # 'user', 'assistant'
-    # content column REMOVED - now stored in WorkerMessageContent
+
+    # New columns for native API format storage
+    technical_message = Column(json_column_type, nullable=False)  # Native API format (for LLM)
+    display_message = Column(Text, nullable=True)  # Human-readable text (for UI) - NULL means don't display
+    message_from = Column(String(10), nullable=False)  # "Bandit" or "Me" - for frontend rendering
+
     created_at = Column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -70,8 +74,12 @@ class RouterMessage(Base):
     router_id = Column(
         String(32), ForeignKey("routers.router_id"), nullable=False, index=True
     )
-    role = Column(String(20), nullable=False)  # 'user', 'assistant'
-    # content column REMOVED - now stored in RouterMessageContent
+
+    # New columns for native API format storage
+    technical_message = Column(json_column_type, nullable=False)  # Native API format (for LLM)
+    display_message = Column(Text, nullable=True)  # Human-readable text (for UI) - NULL means don't display
+    message_from = Column(String(10), nullable=False)  # "Bandit" or "Me" - for frontend rendering
+
     created_at = Column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -545,151 +553,53 @@ class AgentDatabase:
 
     # Removed initialise_async() - now handled automatically in create()
 
-    async def _get_last_message(
-        self, agent_type: AgentType, agent_id: str
-    ) -> Optional[Any]:
-        """Get the most recent message for an agent.
-
-        Args:
-            agent_type: Type of agent ('planner', 'worker', 'router')
-            agent_id: Agent identifier (router_id for router type)
-
-        Returns:
-            The last message object or None if no messages exist
-        """
-        async with self.AsyncSessionLocal() as session:
-            if agent_type == "planner":
-                result = await session.execute(
-                    select(PlannerMessage)
-                    .where(PlannerMessage.agent_id == agent_id)
-                    .order_by(PlannerMessage.created_at.desc())
-                    .limit(1)
-                )
-            elif agent_type == "worker":
-                result = await session.execute(
-                    select(WorkerMessage)
-                    .where(WorkerMessage.agent_id == agent_id)
-                    .order_by(WorkerMessage.created_at.desc())
-                    .limit(1)
-                )
-            else:  # router
-                result = await session.execute(
-                    select(RouterMessage)
-                    .where(RouterMessage.router_id == agent_id)
-                    .order_by(RouterMessage.created_at.desc())
-                    .limit(1)
-                )
-
-            return result.scalar_one_or_none()
-
     async def add_message(
-        self, agent_type: AgentType, agent_id: str, role: str, content: Any
+        self,
+        agent_type: AgentType,
+        agent_id: str,
+        message_from: str,
+        technical_message: Dict[str, Any],
+        display_message: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Add a message and its content to appropriate satellite table.
-
-        If the last message has the same role, content will be appended to it
-        instead of creating a new message, ensuring alternating user/assistant pattern.
+        """Add a message using new standardised format.
 
         Args:
             agent_type: Type of agent ('planner', 'worker', 'router')
             agent_id: Agent identifier (router_id for router type)
-            role: Message role ('user', 'assistant')
-            content: Either a string or list of dictionaries
-
-        Raises:
-            ValueError: If content is not string or list of dictionaries
+            message_from: "Bandit" (from agent) or "Me" (from user)
+            technical_message: Native API format dict (JSONB)
+            display_message: Human-readable text (None if shouldn't display)
 
         Returns:
-            Dictionary containing:
-            - message_id: Message ID (either new or existing if combined)
-            - display_texts: List of newly added display texts
+            Dictionary containing message_id
         """
         async with self.AsyncSessionLocal() as session:
-            # Determine the ContentClass based on agent type
-            if agent_type == "planner":
-                ContentClass = PlannerMessageContent
-            elif agent_type == "worker":
-                ContentClass = WorkerMessageContent
+            # Create message record
+            if agent_type == "worker":
+                message = WorkerMessage(
+                    agent_id=agent_id,
+                    message_from=message_from,
+                    technical_message=technical_message,
+                    display_message=display_message
+                )
             else:  # router
-                ContentClass = RouterMessageContent
-
-            # Check if we should combine with the last message
-            last_message = await self._get_last_message(agent_type, agent_id)
-
-            # Determine the message_id to use
-            if last_message and last_message.role == role:
-                # Use existing message ID - combining with last message
-                message_id = last_message.id
-            else:
-                # Create new message record
-                if agent_type == "planner":
-                    message = PlannerMessage(agent_id=agent_id, role=role)
-                elif agent_type == "worker":
-                    message = WorkerMessage(agent_id=agent_id, role=role)
-                else:  # router
-                    message = RouterMessage(router_id=agent_id, role=role)
-
-                session.add(message)
-                await session.flush()  # Flush to get the message ID
-                message_id = message.id
-
-            # Now process content and add to satellite table
-            new_display_texts = []
-
-            if isinstance(content, str):
-                # Single text content
-                display_text = content
-                content_entry = ContentClass(
-                    message_id=message_id,
-                    content={"type": "text", "text": content},
-                    display_text=display_text,
+                message = RouterMessage(
+                    router_id=agent_id,
+                    message_from=message_from,
+                    technical_message=technical_message,
+                    display_message=display_message
                 )
-                session.add(content_entry)
-                new_display_texts.append(display_text)
-                # Log role and display text
-                logger.info(f"[{role}] {display_text}")
 
-            elif isinstance(content, list):
-                # Multiple content parts - must be list of dictionaries
-                for part in content:
-                    if not isinstance(part, dict):
-                        raise ValueError(
-                            f"List content must contain dictionaries, got {type(part)}"
-                        )
+            session.add(message)
+            await session.flush()
+            message_id = message.id
 
-                    display_text = part.get("text", "")
-                    content_entry = ContentClass(
-                        message_id=message_id, content=part, display_text=display_text
-                    )
-                    session.add(content_entry)
-                    new_display_texts.append(display_text)
-                    # Log role and display text if not empty
-                    if display_text:
-                        logger.info(f"[{role}] {display_text}")
-
-            elif isinstance(content, dict):
-                # Single dictionary content
-                display_text = content.get("text", "")
-                content_entry = ContentClass(
-                    message_id=message_id, content=content, display_text=display_text
-                )
-                session.add(content_entry)
-                new_display_texts.append(display_text)
-                # Log role and display text if not empty
-                if display_text:
-                    logger.info(f"[{role}] {display_text}")
-
-            else:
-                raise ValueError(
-                    f"Content must be string, dict, or list of dictionaries, got {type(content)}"
-                )
+            # Log for debugging
+            if display_message:
+                logger.info(f"[{message_from}] {display_message[:100]}")
 
             await session.commit()
-            # Filter out empty display texts before returning
-            return {
-                "message_id": message_id,
-                "display_texts": [text for text in new_display_texts if text],
-            }
+            return {"message_id": message_id}
 
     async def update_router(self, router_id: str, **kwargs) -> bool:
         """Update router fields with arbitrary keyword arguments"""
@@ -710,191 +620,72 @@ class AgentDatabase:
     async def get_messages(
         self, agent_type: AgentType, agent_id: str
     ) -> List[Dict[str, Any]]:
-        """Retrieve messages with content from appropriate satellite table"""
+        """Retrieve messages for LLM API calls.
+
+        Returns list of technical_message dicts in native API format.
+        """
         async with self.AsyncSessionLocal() as session:
-            # Select appropriate tables based on agent type
-            if agent_type == "planner":
-                MessageClass = PlannerMessage
-                ContentClass = PlannerMessageContent
-                query = select(MessageClass).where(MessageClass.agent_id == agent_id)
-            elif agent_type == "worker":
+            # Select appropriate table
+            if agent_type == "worker":
                 MessageClass = WorkerMessage
-                ContentClass = WorkerMessageContent
                 query = select(MessageClass).where(MessageClass.agent_id == agent_id)
             else:  # router
                 MessageClass = RouterMessage
-                ContentClass = RouterMessageContent
                 query = select(MessageClass).where(MessageClass.router_id == agent_id)
 
             # Get messages ordered by creation time
             result = await session.execute(query.order_by(MessageClass.created_at))
             messages = result.scalars().all()
 
-            # Build message list with content from satellite table
-            message_list = []
-            for msg in messages:
-                # Get content parts from satellite table
-                content_result = await session.execute(
-                    select(ContentClass)
-                    .where(ContentClass.message_id == msg.id)
-                    .order_by(
-                        ContentClass.id
-                    )  # Order by ID to maintain insertion order
-                )
-                content_parts = content_result.scalars().all()
-
-                # Reconstruct content
-                if len(content_parts) == 0:
-                    raise ValueError(
-                        f"Message {msg.id} has no content in satellite table"
-                    )
-
-                # Always return as list of content dictionaries
-                content = [part.content for part in content_parts]
-
-                message_list.append({"role": msg.role, "content": content})
-
-            return message_list
+            # Return just the technical_message dicts
+            return [msg.technical_message for msg in messages]
 
     async def get_messages_for_display(
         self, agent_type: AgentType, agent_id: str
     ) -> List[Dict[str, Any]]:
-        """
-        Retrieve messages formatted for frontend display.
-        Returns messages with display_text for each content part.
-        Empty or blank display_text entries are filtered out completely.
+        """Retrieve messages formatted for frontend display.
+
+        Returns messages with message_from ("Bandit"/"Me") and display_message.
+        Skips messages where display_message is NULL.
         """
         async with self.AsyncSessionLocal() as session:
-            # Select appropriate tables based on agent type
-            if agent_type == "planner":
-                MessageClass = PlannerMessage
-                ContentClass = PlannerMessageContent
-                query = select(MessageClass).where(MessageClass.agent_id == agent_id)
-            elif agent_type == "worker":
+            # Select appropriate table
+            if agent_type == "worker":
                 MessageClass = WorkerMessage
-                ContentClass = WorkerMessageContent
                 query = select(MessageClass).where(MessageClass.agent_id == agent_id)
             else:  # router
                 MessageClass = RouterMessage
-                ContentClass = RouterMessageContent
                 query = select(MessageClass).where(MessageClass.router_id == agent_id)
 
             # Get messages ordered by creation time
             result = await session.execute(query.order_by(MessageClass.created_at))
             messages = result.scalars().all()
 
-            # Build message list formatted for display
+            # Build display message list (skip NULL display_message)
             display_messages = []
             for msg in messages:
-                # Get content parts from satellite table
-                content_result = await session.execute(
-                    select(ContentClass)
-                    .where(ContentClass.message_id == msg.id)
-                    .order_by(
-                        ContentClass.id
-                    )  # Order by ID to maintain insertion order
-                )
-                content_parts = content_result.scalars().all()
-
-                if len(content_parts) == 0:
-                    continue  # Skip messages with no content
-
-                # Return each content part with its display_text
-                # Frontend will render each as a separate message
-                # Filter out empty or blank display_text
-                for part in content_parts:
-                    if part.display_text and part.display_text.strip():
-                        display_messages.append(
-                            {
-                                "role": msg.role,
-                                "content": part.display_text,  # Use display_text as content for frontend
-                                "message_id": msg.id,
-                            }
-                        )
+                if msg.display_message is not None:
+                    display_messages.append({
+                        "message_from": msg.message_from,  # "Bandit" or "Me"
+                        "content": msg.display_message,
+                        "message_id": msg.id
+                    })
 
             return display_messages
 
     async def clear_messages(self, agent_type: AgentType, agent_id: str) -> None:
-        """Clear all messages and their content for an agent"""
+        """Clear all messages for an agent"""
         async with self.AsyncSessionLocal() as session:
-            if agent_type == "planner":
-                # Delete content first (foreign key constraint)
-                subquery = select(PlannerMessage.id).where(
-                    PlannerMessage.agent_id == agent_id
-                )
-                await session.execute(
-                    delete(PlannerMessageContent).where(
-                        PlannerMessageContent.message_id.in_(subquery)
-                    )
-                )
-                # Then delete messages
-                await session.execute(
-                    delete(PlannerMessage).where(PlannerMessage.agent_id == agent_id)
-                )
-            elif agent_type == "worker":
-                # Delete content first
-                subquery = select(WorkerMessage.id).where(
-                    WorkerMessage.agent_id == agent_id
-                )
-                await session.execute(
-                    delete(WorkerMessageContent).where(
-                        WorkerMessageContent.message_id.in_(subquery)
-                    )
-                )
-                # Then delete messages
+            if agent_type == "worker":
                 await session.execute(
                     delete(WorkerMessage).where(WorkerMessage.agent_id == agent_id)
                 )
             else:  # router
-                # Delete content first
-                subquery = select(RouterMessage.id).where(
-                    RouterMessage.router_id == agent_id
-                )
-                await session.execute(
-                    delete(RouterMessageContent).where(
-                        RouterMessageContent.message_id.in_(subquery)
-                    )
-                )
-                # Then delete messages
                 await session.execute(
                     delete(RouterMessage).where(RouterMessage.router_id == agent_id)
                 )
 
             await session.commit()
-
-    async def get_message_display_texts(
-        self, agent_type: AgentType, message_id: int
-    ) -> List[str]:
-        """Get all display texts for a message as separate entries
-
-        Args:
-            agent_type: Type of agent ('planner', 'worker', 'router')
-            message_id: ID of the message
-
-        Returns:
-            List of display texts in the order they were created
-        """
-        async with self.AsyncSessionLocal() as session:
-            # Select appropriate content table
-            if agent_type == "planner":
-                ContentClass = PlannerMessageContent
-            elif agent_type == "worker":
-                ContentClass = WorkerMessageContent
-            else:  # router
-                ContentClass = RouterMessageContent
-
-            # Get all content parts ordered by ID
-            result = await session.execute(
-                select(ContentClass.display_text)
-                .where(ContentClass.message_id == message_id)
-                .order_by(ContentClass.id)
-            )
-            # Filter out empty display texts
-            display_texts = [row[0] for row in result if row[0]]
-
-            # Note: We don't raise an error if all display_texts are empty
-            # This can happen with non-text content like images
-            return display_texts
 
     # Agent State Operations
 

@@ -38,91 +38,55 @@ class MessageManager:
         )
 
     async def add_message(
-        self, role: str, content: Any, need_message_id: bool = False
+        self,
+        message_from: str,  # "Bandit" or "Me"
+        technical_message: Dict[str, Any],
+        display_message: Optional[str] = None,  # NULL if shouldn't be displayed
+        need_message_id: bool = False
     ) -> Union[List[Dict[str, Any]], Dict[str, Any]]:
         """
-        Add a message and return either the message list or both ID and messages.
-
-        This method persists to database and updates the in-memory cache in one operation,
-        ensuring consistency and eliminating the need for separate database queries.
+        Add a message using new standardised format.
 
         Args:
-            role: Message role ('user', 'assistant', 'system', 'developer')
-            content: Message content (can be string, list, or other JSON-serialisable content)
-            need_message_id: If True, returns dict with message_id, messages, and display_texts. If False, returns just messages.
+            message_from: "Bandit" (from agent) or "Me" (from user)
+            technical_message: Native API format dict ready for LLM
+            display_message: Human-readable text for UI (None means don't display)
+            need_message_id: If True, returns dict with message_id and messages
 
         Returns:
-            If need_message_id is False (default): Complete updated message list for immediate use with LLM calls
-            If need_message_id is True: Dict containing:
-            - message_id: Database ID of the added message
-            - messages: Complete updated message list
-            - display_texts: List of newly added display texts
+            If need_message_id is False: Complete updated message list for LLM
+            If need_message_id is True: Dict with message_id and messages
         """
         # Ensure we're synced with database first
         if not self._synced:
             await self._sync_from_db()
 
-        # Persist to database - now returns dict with message_id and display_texts
+        # Persist to database
         result = await self.db.add_message(
-            self.agent_type, self.agent_id, role, content
+            self.agent_type,
+            self.agent_id,
+            message_from=message_from,
+            technical_message=technical_message,
+            display_message=display_message
         )
-        
+
         message_id = result["message_id"]
-        display_texts = result["display_texts"]
 
         if message_id is not None:
-            # Check if we should combine with last cached message
-            if self._messages and self._messages[-1]["role"] == role:
-                # Same role - database combined it, update last cached message
-                last_content = self._messages[-1]["content"]
-                
-                # Normalize new content to list format
-                if isinstance(content, str):
-                    new_content = [{"type": "text", "text": content}]
-                elif isinstance(content, dict):
-                    new_content = [content]
-                else:  # already a list
-                    new_content = content
-                
-                # Extend the last message's content
-                if isinstance(last_content, str):
-                    # Convert to list format
-                    self._messages[-1]["content"] = [
-                        {"type": "text", "text": last_content}
-                    ] + new_content
-                elif isinstance(last_content, list):
-                    last_content.extend(new_content)
-                else:
-                    # Single dict, convert to list
-                    self._messages[-1]["content"] = [last_content] + new_content
-                
-                logger.debug(
-                    f"Combined content with existing message (ID: {message_id}) for {self.agent_type} {self.agent_id}"
-                )
-            else:
-                # Different role - add as new message to cache
-                message_dict = {"role": role, "content": content}
-                self._messages.append(message_dict)
-                
-                logger.debug(
-                    f"Added new message (ID: {message_id}) to {self.agent_type} {self.agent_id}"
-                )
-        else:
-            logger.error(
-                f"Failed to add message to database for {self.agent_type} {self.agent_id}"
+            # Add to in-memory cache (just store technical_message for LLM)
+            self._messages.append(technical_message)
+
+            logger.debug(
+                f"Added message from {message_from} (ID: {message_id}) to {self.agent_type} {self.agent_id}"
             )
 
         # Return format based on need_message_id parameter
         messages = await self.get_messages()
 
         if need_message_id:
-            return {
-                "message_id": message_id, 
-                "messages": messages,
-                "display_texts": display_texts
-            }
+            return {"message_id": message_id, "messages": messages}
         else:
-            return messages  # Default behavior - unchanged from original
+            return messages
 
     async def get_messages(self) -> List[Dict[str, Any]]:
         """

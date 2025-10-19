@@ -238,17 +238,21 @@ class OpenAIProvider(BaseLLMProvider):
         tools: List[Dict],
         enable_web_search: bool = False,
         system_instruction: Optional[str] = None,
-    ) -> Optional[Dict]:
-        """Get tools response with native web search support."""
+    ):
+        """Execute tools using OpenAI Responses API.
+
+        Returns response.output list containing ResponseReasoningItem and
+        ResponseFunctionToolCall objects.
+        """
         try:
             actual_model = self.get_actual_model_name(model)
-            
+
             # Warn about temperature deprecation
             self._warn_temperature_deprecated(temperature)
 
             # Build tools list with format transformation for OpenAI
             tools_list = []
-            
+
             # Transform MCP tools from nested to OpenAI's flat format
             if tools:
                 for tool in tools:
@@ -276,60 +280,12 @@ class OpenAIProvider(BaseLLMProvider):
                 tools=tools_list if tools_list else None,
             )
 
-            # Determine request type based on response content
-            request_type = RequestType.TEXT  # Default
-            web_search_used = False  # Track if web search was used
+            # Track usage
+            if hasattr(response, 'usage'):
+                self.track_cost(actual_model, response.usage, RequestType.TOOLS)
 
-            # Check for web search calls in output
-            if hasattr(response, "output"):
-                for output in response.output:
-                    if hasattr(output, "type") and output.type == "web_search_call":
-                        request_type = RequestType.TOOLS
-                        web_search_used = True
-                        break
-
-            # Check for function calls in output (OpenAI's new format)
-            normalised_calls = []
-            if hasattr(response, "output") and response.output:
-                for output in response.output:
-                    if hasattr(output, "type") and output.type == "function_call":
-                        # Parse arguments from JSON string
-                        args = {}
-                        if hasattr(output, "arguments") and output.arguments:
-                            try:
-                                args = json.loads(output.arguments)
-                            except json.JSONDecodeError:
-                                logger.warning(f"Failed to parse arguments for {output.name}: {output.arguments}")
-                        
-                        normalised_calls.append({
-                            "name": output.name,
-                            "arguments": args
-                        })
-                        request_type = RequestType.TOOLS
-            
-            # If we have tool calls, return them
-            if normalised_calls:
-                # Track usage before returning
-                if hasattr(response, "usage"):
-                    self.track_cost(actual_model, response.usage, RequestType.TOOLS)
-                return {
-                    "tool_calls": normalised_calls,
-                    "content": response.output_text if hasattr(response, "output_text") else None,
-                    "role": "assistant",
-                }
-
-            # Format content with web search prefix if needed
-            content = response.output_text
-            if web_search_used and content:
-                content = f"Tool web_search was called and returned:\n{content}"
-
-            # Track usage before returning (no tools case)
-            if hasattr(response, "usage"):
-                self.track_cost(actual_model, response.usage, request_type)
-            return {
-                "content": content,
-                "role": "assistant",
-            }
+            # Return response.output directly for storage
+            return response.output
 
         except Exception as e:
             logger.error(f"OpenAI tools response error: {e}")

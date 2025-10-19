@@ -71,3 +71,61 @@ def append_user_content(
         })
     
     return messages_copy
+
+
+def format_tool_call_display(tool_call: Any) -> str:
+    """
+    Format tool call for display to user.
+
+    Args:
+        tool_call: OpenAI ResponseFunctionToolCall or Anthropic ToolUseBlock
+
+    Returns:
+        Formatted display string with double newlines for markdown
+    """
+    import json
+
+    # Handle OpenAI format
+    if hasattr(tool_call, 'name') and hasattr(tool_call, 'arguments'):
+        tool_name = tool_call.name
+        args = json.loads(tool_call.arguments) if isinstance(tool_call.arguments, str) else tool_call.arguments
+    # Handle Anthropic format
+    elif hasattr(tool_call, 'name') and hasattr(tool_call, 'input'):
+        tool_name = tool_call.name
+        args = tool_call.input
+    else:
+        return "Tool call (unknown format)"
+
+    # Format parameters with double newlines for markdown display
+    params = "\n".join([f"- {k}: {v}" for k, v in args.items()])
+
+    return f"Calling tool: {tool_name}\n\nInput parameters:\n\n{params}"
+
+
+def extract_text_from_response(response: Any, provider: str) -> str:
+    """
+    Extract displayable text from LLM response.
+
+    Args:
+        response: API response object
+        provider: "openai" or "anthropic"
+
+    Returns:
+        Text content for display
+    """
+    if provider == "openai":
+        # OpenAI Responses API
+        if hasattr(response, 'output_text'):
+            return response.output_text
+        return ""
+
+    elif provider == "anthropic":
+        # Anthropic Messages API
+        text_parts = []
+        if hasattr(response, 'content'):
+            for block in response.content:
+                if hasattr(block, 'text'):
+                    text_parts.append(block.text)
+        return "\n".join(text_parts)
+
+    return ""
