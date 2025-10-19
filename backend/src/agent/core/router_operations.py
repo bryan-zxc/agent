@@ -738,172 +738,88 @@ async def plamarination_response(router_state: Dict[str, Any], websocket: WebSoc
     messages = await message_manager.get_messages()
 
     try:
-        # Retry loop for hallucination detection (max 3 attempts)
-        MAX_HALLUCINATION_RETRIES = 3
+        # Get response (list of message dicts with use_tools=True)
+        logger.info(f"Plamarination llm call with messages: {messages}")
+        response_messages = await llm.a_get_response(
+            messages=messages,
+            model=settings.planner_model,
+            temperature=0,  # Deterministic for plamarination
+            use_tools=True,
+            enable_web_search=True,  # Enable native web search for research phase
+            tool_filter=plamarination_tool_filter,
+            system_instruction=PLAMARINATION_INSTRUCTION,
+            websocket=websocket,
+            payload={"router_id": router_id},  # For hook context
+        )
 
-        for attempt in range(MAX_HALLUCINATION_RETRIES):
-            # Get response (dict if tools called, string if not)
-            logger.info(f"Plamarination llm call with messages: {messages}")
-            response = await llm.a_get_response(
-                messages=messages,
-                model=settings.planner_model,
-                temperature=0,  # Deterministic for plamarination
-                use_tools=True,
-                enable_web_search=True,  # Enable native web search for research phase
-                tool_filter=plamarination_tool_filter,
-                system_instruction=PLAMARINATION_INSTRUCTION,
-                websocket=websocket,
-                payload={"router_id": router_id},  # For hook context
+        # response_messages is a list of {technical_message, display_message, message_from}
+        # Store messages, check for tool calls, and send WebSocket updates in single loop
+        has_plan_and_answer = False
+        has_tool_calls = False
+
+        for msg_dict in response_messages:
+            # Store message
+            messages = await message_manager.add_message(
+                message_from=msg_dict["message_from"],
+                technical_message=msg_dict["technical_message"],
+                display_message=msg_dict["display_message"]
             )
 
-            # Extract content
-            content = response["content"] if isinstance(response, dict) else response
+            # Check for tool calls
+            tech_msg = msg_dict.get("technical_message", {})
+            # OpenAI format
+            if tech_msg.get("type") == "function_call":
+                has_tool_calls = True
+                if tech_msg.get("name") == "agent_tools__set_plan_and_answer":
+                    has_plan_and_answer = True
+            # Anthropic format
+            elif tech_msg.get("role") == "assistant" and isinstance(tech_msg.get("content"), list):
+                for block in tech_msg.get("content", []):
+                    if block.get("type") == "tool_use":
+                        has_tool_calls = True
+                        if block.get("name") == "agent_tools__set_plan_and_answer":
+                            has_plan_and_answer = True
 
-            # Check for hallucinated tool calls (only possible when response is string)
-            if isinstance(response, str):
-                is_hallucinated, hallucinated_tools = detect_hallucinated_tool_calls(
-                    content
-                )
+            # Send WebSocket update for display messages (skip None)
+            if msg_dict.get("display_message"):
+                await websocket.send_json({
+                    "type": "response",
+                    "message": msg_dict["display_message"],
+                    "router_id": router_id,
+                })
 
-                if is_hallucinated:
-                    # Hallucination detected - store and retry
-                    logger.warning(
-                        f"Router {router_id} hallucinated tool calls (attempt {attempt + 1}/{MAX_HALLUCINATION_RETRIES}): {hallucinated_tools}"
-                    )
+        if has_plan_and_answer:
+            # Hook handles approval flow and status update
+            # The hook will send the appropriate WebSocket messages
+            return
 
-                    # Store hallucinated response as assistant message (DB only, not WebSocket)
-                    await message_manager.add_message(role="assistant", content=content)
-
-                    # Create corrective user message
-                    corrective_message = (
-                        f"The previous response mimicked tool call syntax without actually calling tools.\n"
-                        f"Detected mimicked tools: {', '.join(hallucinated_tools)}\n\n"
-                        f"Tool calls must be made using proper function calling. If you need to call a tool, "
-                        f"use the tool calling mechanism. If providing a text response, do not mimic tool result formatting.\n\n"
-                        f"Please provide a proper response now."
-                    )
-
-                    # Store corrective message and get updated messages (returns messages directly)
-                    messages = await message_manager.add_message(
-                        role="user", content=corrective_message
-                    )
-
-                    # Continue to next attempt or abort
-                    if attempt < MAX_HALLUCINATION_RETRIES - 1:
-                        logger.info(
-                            f"Router {router_id} retrying after hallucination correction"
-                        )
-                        continue
-                    else:
-                        # Final attempt still hallucinated - send visible error
-                        logger.error(
-                            f"Router {router_id} continued hallucinating after {MAX_HALLUCINATION_RETRIES} attempts"
-                        )
-
-                        # Create error message for user
-                        error_message = (
-                            "I encountered an error processing your request. "
-                            "I attempted to mimic tool responses instead of properly calling tools. "
-                            "Please try rephrasing your request."
-                        )
-
-                        # Store error as assistant message (for chat history)
-                        await message_manager.add_message(
-                            role="assistant", content=error_message
-                        )
-
-                        # Send error to frontend (no message_id needed)
-                        await websocket.send_json(
-                            {
-                                "type": "response",
-                                "message": error_message,
-                                "router_id": router_id,
-                            }
-                        )
-
-                        # Stay in plamarination, await user response
-                        await agent_db.update_router(
-                            router_id=router_id, status="plamarinating_awaiting_user"
-                        )
-
-                        # Exit - user can respond to retry
-                        return
-
-            # No hallucination or dict response - break out of retry loop
-            break
-
-        # Store message and get display texts
-        result = await message_manager.add_message(
-            role="assistant", content=content, need_message_id=True
-        )
-        message_id = result["message_id"]
-        messages = result["messages"]
-        display_texts = result["display_texts"]
-
-        # Determine continuation based on response type
-        if isinstance(response, dict):
-            # Tools were called
-            tool_calls = response["tool_calls"]
-
-            # Check for set_plan_and_answer
-            if "agent_tools__set_plan_and_answer" in tool_calls:
-                # Hook handles approval flow and status update
-                # The hook will send the appropriate WebSocket messages
-                return
-
-            # Other tools - must continue to process results
+        # Determine continuation based on whether tools were called
+        if has_tool_calls:
+            # Tools were called - continue plamarination
             continue_plamarination = True
             status = "plamarinating"
 
-            # Send each display text as a separate WebSocket message
-            for idx, text in enumerate(display_texts):
-                await websocket.send_json(
-                    {
-                        "type": "response",
-                        "message": text,
-                        "message_id": message_id,
-                        "router_id": router_id,
-                    }
-                )
-
         else:
-            # No tools - simple text response (display_texts will have single entry)
+            # No tools - simple text response, ask if should continue
             continuation = llm.get_response(
                 messages=messages,  # Use returned messages with latest context
                 model=settings.router_model,  # GPT-5-mini for fast decision
                 temperature=0,
                 response_format=PlamarinationContinuation,
             )
-            logger.info(
-                f"Plamarination continuation: {continuation.model_dump_json(indent=2)}"
-            )
+            logger.info(f"Plamarination continuation: {continuation.model_dump_json(indent=2)}")
 
-            # Defensive check - log and raise error if structured response fails
+            # Defensive check
             if continuation is None:
                 error_msg = (
                     f"Failed to get PlamarinationContinuation from LLM for router {router_id}. "
-                    "This likely indicates a message format issue with the OpenAI API. "
-                    "Check that message content is properly formatted for structured responses."
+                    "This likely indicates a message format issue with the OpenAI API."
                 )
                 logger.error(error_msg)
                 raise ValueError(error_msg)
 
             continue_plamarination = continuation.continue_research
-            status = (
-                "plamarinating"
-                if continue_plamarination
-                else "plamarinating_awaiting_user"
-            )
-
-            # Send single message (display_texts[0] is the text response)
-            await websocket.send_json(
-                {
-                    "type": "response",
-                    "message": display_texts[0] if display_texts else content,
-                    "message_id": message_id,
-                    "router_id": router_id,
-                }
-            )
+            status = "plamarinating" if continue_plamarination else "plamarinating_awaiting_user"
 
         # Update status
         await agent_db.update_router(router_id=router_id, status=status)

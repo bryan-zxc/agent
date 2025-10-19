@@ -120,7 +120,7 @@ class OpenAIProvider(BaseLLMProvider):
     ):
         """Get text response using new Responses API.
 
-        Returns full response object (has response.output and response.output_text).
+        Returns list of message dicts [{technical_message, display_message, message_from}].
         """
         try:
             actual_model = self.get_actual_model_name(model)
@@ -141,8 +141,23 @@ class OpenAIProvider(BaseLLMProvider):
             if hasattr(response, "usage"):
                 self.track_cost(actual_model, response.usage, RequestType.TEXT)
 
-            # Return full response object
-            return response
+            # Return message list format
+            message_list = []
+            for item in response.output:
+                if item.type == "reasoning":
+                    message_list.append({
+                        "technical_message": item.model_dump(exclude_none=True),
+                        "display_message": None,
+                        "message_from": "Bandit"
+                    })
+                elif item.type == "text":
+                    message_list.append({
+                        "technical_message": item.model_dump(exclude_none=True),
+                        "display_message": response.output_text,
+                        "message_from": "Bandit"
+                    })
+
+            return message_list
 
         except Exception as e:
             logger.error(f"OpenAI text response error: {e}")
@@ -363,8 +378,11 @@ class AnthropicProvider(BaseLLMProvider):
         model: str,
         temperature: float,
         system_instruction: Optional[str] = None,
-    ) -> Optional[str]:
-        """Get text response from Anthropic."""
+    ):
+        """Get text response from Anthropic.
+
+        Returns list of message dicts [{technical_message, display_message, message_from}].
+        """
         try:
             actual_model = self.get_actual_model_name(model)
 
@@ -384,7 +402,17 @@ class AnthropicProvider(BaseLLMProvider):
             if hasattr(response, "usage"):
                 self.track_cost(actual_model, response.usage, RequestType.TEXT)
 
-            return response.content[0].text
+            # Return message list format
+            text_content = response.content[0].text if response.content else ""
+
+            return [{
+                "technical_message": {
+                    "role": "assistant",
+                    "content": text_content
+                },
+                "display_message": text_content,
+                "message_from": "Bandit"
+            }]
 
         except Exception as e:
             logger.error(f"Anthropic text response error: {e}")
